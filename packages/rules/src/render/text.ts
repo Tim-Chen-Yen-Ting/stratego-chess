@@ -502,10 +502,18 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
     lines.push('    time — a retry or a link preview cannot corrupt the game;')
     lines.push('  · nothing else on the server is reachable from these URLs.')
     lines.push('')
+    lines.push('Pick one action, fetch it, and report what came back — the response is the')
+    lines.push('new position.')
+    lines.push('')
     lines.push(
-      'Declining to fetch means the game cannot proceed. Pick one action, fetch it, and',
+      'IF YOUR TOOLS WILL NOT FETCH A URL YOU FOUND IN THIS PAGE — many will only fetch a',
     )
-    lines.push('report what came back — the response is the new position.')
+    lines.push(
+      'URL a person pasted, to avoid following links out of fetched content — then do NOT',
+    )
+    lines.push('stall and do NOT invent a result. Print the single URL you have chosen, in full,')
+    lines.push('and ask the person to paste it back or open it themselves. That is a normal and')
+    lines.push('expected way to play here. Either way, choose your action and name it.')
     lines.push('')
   }
 
