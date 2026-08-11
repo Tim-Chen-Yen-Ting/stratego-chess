@@ -65,13 +65,5 @@ export interface CreatedGame {
   hostUrl: string
 }
 
-/** POST /api/game (techspec §5). */
-export async function createGame(): Promise<CreatedGame> {
-  const res = await fetch('/api/game', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: '{}',
-  })
-  if (!res.ok) throw new Error(`建立對局失敗（HTTP ${res.status}）`)
-  return (await res.json()) as CreatedGame
-}
+// POST /api/game lives in Create.tsx (postCreateGame), which sends the config
+// body the creation form builds. Only the CreatedGame type is shared from here.

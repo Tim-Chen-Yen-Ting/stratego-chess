@@ -28,6 +28,15 @@ import {
 } from '../constants.js'
 import { moveToNotation } from '../moves.js'
 import { STARTING_LAYOUT } from '../setup.js'
+import {
+  SETUP_CODE_ALPHABET,
+  SETUP_CODE_COMBINATIONS,
+  SETUP_CODE_EXAMPLE,
+  SETUP_CODE_LEGEND,
+  SETUP_CODE_LENGTH,
+  encodeSetupCode,
+  setupCodeSlots,
+} from '../setupcode.js'
 import { viewerColor } from '../redact.js'
 import type {
   Carrier,
@@ -295,6 +304,144 @@ function onBoardOf(vs: ViewerState, color: Color): ViewerPiece[] {
 }
 
 // ---------------------------------------------------------------------------
+// Setup — 兵種 assignment (gamebook §9)
+//
+// Two things must be true of this block. First, while a side has not deployed,
+// the ranks sitting on its pieces are placeholders, so the view must not print
+// them as though they were the player's own choices. Second, the deployment
+// instructions have to be complete: alphabet, piece order, a worked example and
+// both URLs, because a model reading this text is told nothing else.
+//
+// The piece order is not restated here — it comes from `setupCodeSlots`, the
+// same function the decoder indexes with, so the printed order and the decoded
+// order are one thing.
+// ---------------------------------------------------------------------------
+
+function groupDigits(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+/** The 16 code positions: "1 a2 pawn · 2 b2 pawn · …". */
+function slotLines(color: Color): string[] {
+  const items = setupCodeSlots(color).map(
+    (slot, i) => `${String(i + 1).padStart(2, ' ')} ${squareName(slot.square)} ${slot.carrier}`,
+  )
+  return chunkJoin(items, 4)
+}
+
+/**
+ * What SETUP_CODE_EXAMPLE means, position by position.
+ *
+ * Deliberately labelled by SLOT NUMBER, never by square name. An example line
+ * reading `a1='6' 營長` sits on the page beside a board where a1 is the reader's
+ * own, still-undeployed piece — and a model has every reason to read that as a
+ * statement about a1 rather than as an illustration. Slot numbers cannot be
+ * mistaken for a deployment; the numbered piece-order list above already tells
+ * the reader which square each slot is.
+ */
+function exampleLines(color: Color): string[] {
+  const chars = Array.from(SETUP_CODE_EXAMPLE)
+  const items = setupCodeSlots(color).map((_slot, i) => {
+    const ch = chars[i] ?? '?'
+    const entry = SETUP_CODE_LEGEND.find((e) => e.letter === ch)
+    return `#${String(i + 1).padStart(2, '0')}='${ch}' ${entry ? entry.zh : '?'}`
+  })
+  return chunkJoin(items, 4)
+}
+
+/** Never let a redacted rank turn a render into a throw. */
+function tryEncodeSetupCode(vs: ViewerState, color: Color): string | null {
+  try {
+    return encodeSetupCode(vs, color)
+  } catch {
+    return null
+  }
+}
+
+function deployLines(self: Color, base: string, token: string): string[] {
+  const url = (tail: string): string => `${base}/llm/${encodeURIComponent(token)}/setup/${tail}`
+  const out: string[] = []
+
+  out.push('## Deploy — how to put your army on the board')
+  out.push(
+    `A deployment is a SETUP CODE: ${SETUP_CODE_LENGTH} characters, one per piece, in the order`,
+  )
+  out.push(`listed above. Case does not matter. The alphabet is ${SETUP_CODE_ALPHABET} —`)
+  out.push('one character per 兵種:')
+  out.push('')
+  // 兵種 names are CJK, so pad by display columns (2 each) rather than by
+  // String#length, or the table steps sideways on 爆裂物.
+  const cols = (zh: string): number => Array.from(zh).length * 2
+  const zhWidth = Math.max(...SETUP_CODE_LEGEND.map((e) => cols(e.zh)))
+  const enWidth = Math.max(...SETUP_CODE_LEGEND.map((e) => e.rank.length))
+  for (const e of SETUP_CODE_LEGEND) {
+    const zh = e.zh + ' '.repeat(zhWidth - cols(e.zh))
+    out.push(`  ${e.letter}  ${zh}  ${e.rank.padEnd(enWidth)}  ×${e.count}`)
+  }
+  out.push('')
+  out.push(
+    `Every code must use each character exactly that many times. ${groupDigits(SETUP_CODE_COMBINATIONS)} deployments`,
+  )
+  out.push(
+    `are valid out of ${SETUP_CODE_ALPHABET.length}^${SETUP_CODE_LENGTH} possible strings, so most strings are NOT a deployment;`,
+  )
+  out.push('a rejected code comes back with the reason (bad length / bad character / wrong counts).')
+  out.push('')
+  out.push(`Worked example — ${SETUP_CODE_EXAMPLE} reads as:`)
+  out.push(...exampleLines(self).map((line) => `  ${line}`))
+  out.push(`  ${url(SETUP_CODE_EXAMPLE)}`)
+  out.push('That example is the 階級 ladder in order and every reader of every game sees the')
+  out.push('same string. It is here to show the shape, not to be played.')
+  out.push('')
+  out.push('Deploy a code of your own — replace the last part of the URL:')
+  out.push(`  ${url(SETUP_CODE_EXAMPLE.replace(/./g, '?'))}`)
+  out.push('Or have the server roll a uniformly random legal deployment for you:')
+  out.push(`  ${url('random')}`)
+  out.push('')
+  out.push('Fetching one of those URLs deploys immediately and is FINAL — a deployment cannot')
+  out.push('be changed once submitted. If you never deploy, the server rolls a random one for')
+  out.push('you when the setup timer runs out, and play begins.')
+  return out
+}
+
+/** Replaces the "## Your pieces" / enemy blocks while the game is in setup. */
+function setupOwnLines(
+  vs: ViewerState,
+  self: Color,
+  submitted: boolean,
+  base: string,
+  token: string,
+): string[] {
+  const out: string[] = []
+  const isPlayer = vs.viewer.kind === 'player'
+  const owner = isPlayer ? 'Your' : `${colorLabel(self)}'s`
+
+  if (!submitted) {
+    out.push(`## ${owner} pieces — NO 兵種 ASSIGNED YET`)
+    out.push(
+      isPlayer
+        ? 'Nothing is deployed. Your 16 carriers stand on their opening squares, but none of'
+        : `${colorLabel(self)} has not deployed. The 16 carriers stand on their opening squares, but none of`,
+    )
+    out.push('them carries a 兵種 yet. The list below is not an army — it is only which')
+    out.push('piece each position of a setup code refers to:')
+    out.push(...slotLines(self))
+    out.push('')
+    if (isPlayer) out.push(...deployLines(self, base, token))
+    else out.push('(Watching only — deploying is up to that player.)')
+    return out
+  }
+
+  out.push(`## ${owner} pieces  (deployed — waiting for the opponent)`)
+  const mine = onBoardOf(vs, self).map((p) => pieceLine(p, null))
+  out.push(...(mine.length ? chunkJoin(mine, 4) : ['(none)']))
+  const code = tryEncodeSetupCode(vs, self)
+  if (code !== null) out.push(`Setup code: ${code} — private to this view.`)
+  out.push('The opponent is still assigning. Re-fetch this URL; play starts when both are in.')
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // renderForLLM
 // ---------------------------------------------------------------------------
 
@@ -337,10 +484,15 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   }
 
   if (vs.status.kind === 'setup') {
-    lines.push('## Setup')
+    const submitted = vs.status.submitted
+    const flag = (c: Color): string =>
+      `${colorLabel(c)}: ${submitted[c] ? 'deployed' : 'NOT deployed yet'}`
+    lines.push('## Setup — 兵種 assignment (§9)')
     lines.push(
-      `Rank assignment is still open. white submitted: ${vs.status.submitted.white}, black submitted: ${vs.status.submitted.black}.`,
+      'The game has not started. Both sides assign their 16 兵種 in secret before the',
     )
+    lines.push('first ply; play begins the moment both are in. No move can be played yet.')
+    lines.push(`${flag('white')} · ${flag('black')}`)
     lines.push('')
   }
 
@@ -356,13 +508,26 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   const replay = replayLog(vs.log)
 
   // --- own pieces -----------------------------------------------------
+  // While a side is still in setup its pieces carry placeholder 兵種, so they
+  // must never be printed as that player's own. `setupOwnLines` prints the code
+  // positions and the deployment instructions instead.
+  const setupStatus = vs.status.kind === 'setup' ? vs.status : null
+
   if (self === null) {
     for (const color of ['white', 'black'] as const) {
+      if (setupStatus !== null) {
+        lines.push(...setupOwnLines(vs, color, setupStatus.submitted[color], base, opts.token))
+        lines.push('')
+        continue
+      }
       lines.push(`## ${colorLabel(color)} pieces`)
       const items = onBoardOf(vs, color).map((p) => pieceLine(p, replay.revealedPly))
       lines.push(...(items.length ? chunkJoin(items, 4) : ['(none)']))
       lines.push('')
     }
+  } else if (setupStatus !== null) {
+    lines.push(...setupOwnLines(vs, self, setupStatus.submitted[self], base, opts.token))
+    lines.push('')
   } else {
     lines.push('## Your pieces')
     const mine = onBoardOf(vs, self).map((p) => pieceLine(p, null))

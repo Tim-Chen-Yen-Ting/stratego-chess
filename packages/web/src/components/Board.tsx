@@ -1,16 +1,27 @@
+import { useEffect, useRef, useState } from 'react'
+import type { DragEvent, PointerEvent as ReactPointerEvent } from 'react'
 import type { Color, PieceId, Rank, Square, ViewerPiece } from '@xiyang/rules'
-import { CARRIER_GLYPH, CARRIER_LABEL, CENTER_SQUARES, RANK_LABEL } from '../constants.js'
+import {
+  CARRIER_GLYPH,
+  CARRIER_LABEL,
+  CENTER_SQUARES,
+  RANKS_IN_ORDER,
+  RANK_LABEL,
+} from '../constants.js'
 import { isDarkSquare, squareName } from '../format.js'
 
 /**
- * Dumb 8×8 grid. It renders whatever the server sent and reports clicks.
- * It knows nothing about how pieces move: `targets` is always derived from the
- * `legalMoves` in the payload (techspec §7).
+ * Dumb 8×8 grid. It renders whatever the server sent and reports clicks and
+ * drops. It knows nothing about how pieces move: `targets` is always derived
+ * from the `legalMoves` in the payload (techspec §7). Nothing here infers,
+ * narrows or validates a 兵種 — a dropped rank is handed straight back to the
+ * caller as an opaque DataTransfer, and the pencil popover offers all eleven
+ * ranks on every annotatable piece, always (gamebook §10).
  *
- * Rank display rule: a rank is drawn whenever the payload carries one. The
- * redaction layer already decided entitlement — own pieces always, revealed
- * pieces for everyone, and everything at game end (gamebook §10). A piece with
- * `rank === null` renders no 兵種 text at all.
+ * Rank display rule: an authoritative rank is drawn whenever the payload
+ * carries one. The redaction layer already decided entitlement — own pieces
+ * always, revealed pieces for everyone, and everything at game end (gamebook
+ * §10). A piece with `rank === null` renders no 兵種 text at all.
  */
 
 export interface BoardProps {
@@ -28,10 +39,116 @@ export interface BoardProps {
   rankOverride?: Readonly<Record<PieceId, Rank>>
   /** setup only: pieces still awaiting an assignment */
   pendingIds?: ReadonlySet<PieceId>
+  /**
+   * In-game only: the viewer's own private guesses about enemy 兵種 — the
+   * 便條紙 of gamebook §10, never sent to the server. A piece may carry any
+   * number of them. Drawn in a deliberately tentative style so a guess can
+   * never be misread as a fact. The owning screen holds this state; the board
+   * only paints it.
+   */
+  pencilMarks?: Readonly<Record<PieceId, readonly Rank[]>>
+  /**
+   * In-game only: squares whose piece the viewer may scribble on. Supplied by
+   * the screen as entitlement bookkeeping (enemy, on the board, not 翻明); the
+   * board makes no such judgement itself and reads nothing into it.
+   */
+  pencilTargets?: ReadonlySet<Square>
+  /** the square whose pencil popover is open, or null */
+  pencilOpen?: Square | null
+  /** right-click or long-press on an annotatable square */
+  onPencilRequest?: (sq: Square) => void
+  onPencilClose?: () => void
+  onPencilToggle?: (pieceId: PieceId, rank: Rank) => void
+  onPencilClearPiece?: (pieceId: PieceId) => void
+  /** setup only: squares whose assigned rank may be picked up and dragged off */
+  dragSources?: ReadonlySet<Square>
+  /** setup only: squares that accept a dropped rank */
+  dropTargets?: ReadonlySet<Square>
+  /** true while a rank drag is in flight — paints `dropTargets` */
+  dragActive?: boolean
   onSquareClick?: (sq: Square) => void
+  onSquareDragStart?: (sq: Square, e: DragEvent<HTMLElement>) => void
+  onSquareDragEnd?: (sq: Square, e: DragEvent<HTMLElement>) => void
+  onSquareDrop?: (sq: Square, e: DragEvent<HTMLElement>) => void
+}
+
+/**
+ * RANK DISPLAY PRECEDENCE — three independent sources, deliberately ordered so
+ * that a tentative mark can never impersonate a fact:
+ *
+ *   1. `rankOverride` (setup draft) — when supplied the board is in setup mode
+ *      and shows ONLY what the player has drafted so far. `pencilMarks` is
+ *      ignored entirely; the two never mix, and setup has no enemy to guess at.
+ *   2. `piece.rank` (authoritative) — own 兵種, anything 系統翻明, and the
+ *      full reveal at game end. Always beats a pencil mark on the same piece:
+ *      once a fact exists the guess stops being drawn.
+ *   3. `pencilMarks` (tentative) — drawn only when 1 and 2 give nothing, i.e.
+ *      an enemy piece this viewer is not entitled to see. Rendered bracketed,
+ *      smaller, dimmer and italic (see `.rank-tag-pencil`).
+ */
+interface RankTag {
+  /** an authoritative 兵種 to draw, or null */
+  fact: Rank | null
+  /** the viewer's own guesses, already in display order. Never mixed with 1–2. */
+  marks: readonly Rank[]
+}
+
+function resolveTag(
+  piece: ViewerPiece,
+  rankOverride: Readonly<Record<PieceId, Rank>> | undefined,
+  pencilMarks: Readonly<Record<PieceId, readonly Rank[]>> | undefined,
+): RankTag {
+  if (rankOverride) return { fact: rankOverride[piece.id] ?? null, marks: [] }
+  if (piece.rank !== null) return { fact: piece.rank, marks: [] }
+  return { fact: null, marks: pencilMarks?.[piece.id] ?? [] }
+}
+
+/**
+ * A square cannot hold five names. One mark keeps the bracketed tag as before;
+ * two or three are spelled out when they fit the square; anything longer
+ * collapses to a count badge, 〔?4〕. The badge is a LAYOUT decision about the
+ * viewer's own handwriting — it counts what the player wrote, never what is
+ * left in the §2 table (gamebook §10 forbids the second).
+ */
+const PENCIL_SEPARATOR = '、'
+/**
+ * Width budget in units of one full-width character. The multi-mark tag is set
+ * at 0.155 × --sq inside a square of width --sq, so a little over six units fit
+ * on a line, and the tag is allowed to wrap onto a second line inside the
+ * square. Purely a typographic number.
+ */
+const PENCIL_TAG_BUDGET = 12
+
+function tagWidth(text: string): number {
+  let w = 0
+  for (const ch of text) w += ch.codePointAt(0)! < 0x2000 ? 0.5 : 1
+  return w
+}
+
+function pencilTagText(marks: readonly Rank[]): string {
+  if (marks.length === 0) return ''
+  if (marks.length === 1) return `〔${RANK_LABEL[marks[0]]}〕`
+  if (marks.length <= 3) {
+    const text = `〔${marks.map((r) => RANK_LABEL[r]).join(PENCIL_SEPARATOR)}〕`
+    if (tagWidth(text) <= PENCIL_TAG_BUDGET) return text
+  }
+  return `〔?${marks.length}〕`
+}
+
+/** The full list, for tooltips and screen readers, where width is not a problem. */
+function pencilFullText(marks: readonly Rank[]): string {
+  return `〔${marks.map((r) => RANK_LABEL[r]).join(PENCIL_SEPARATOR)}〕`
 }
 
 const FILE_LETTERS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+
+/** Touch equivalent of a right-click. */
+const LONG_PRESS_MS = 450
+const LONG_PRESS_SLOP_PX = 12
+
+/** board border + padding, and the rank-coordinate gutter, in px (see styles.css) */
+const BOARD_INSET_PX = 5
+const BOARD_GUTTER_PX = 18
 
 export function Board(props: BoardProps) {
   const {
@@ -43,8 +160,57 @@ export function Board(props: BoardProps) {
     lastMove = [],
     rankOverride,
     pendingIds,
+    pencilMarks,
+    pencilTargets,
+    pencilOpen = null,
+    onPencilRequest,
+    onPencilClose,
+    onPencilToggle,
+    onPencilClearPiece,
+    dragSources,
+    dropTargets,
+    dragActive = false,
     onSquareClick,
+    onSquareDragStart,
+    onSquareDragEnd,
+    onSquareDrop,
   } = props
+
+  // purely visual: which drop target the pointer is currently over
+  const [hoverSq, setHoverSq] = useState<Square | null>(null)
+
+  // long-press bookkeeping; refs because none of it is rendered
+  const pressRef = useRef<{ timer: number; x: number; y: number } | null>(null)
+  const longFiredRef = useRef(false)
+
+  function cancelPress() {
+    if (pressRef.current !== null) window.clearTimeout(pressRef.current.timer)
+    pressRef.current = null
+  }
+
+  useEffect(() => cancelPress, [])
+
+  // Dismiss the popover on Escape or on a pointer press that is neither inside
+  // it nor on a square (a square press is handled by the click logic, which may
+  // want to move the popover to another piece).
+  useEffect(() => {
+    if (pencilOpen === null || onPencilClose === undefined) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onPencilClose()
+    }
+    const onDown = (e: PointerEvent) => {
+      const target = e.target
+      if (!(target instanceof Element)) return
+      if (target.closest('.xy-pop') !== null || target.closest('.sq') !== null) return
+      onPencilClose()
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onDown, true)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onDown, true)
+    }
+  }, [pencilOpen, onPencilClose])
 
   const bySquare = new Map<Square, ViewerPiece>()
   for (const p of pieces) if (p.square !== null) bySquare.set(p.square, p)
@@ -57,8 +223,12 @@ export function Board(props: BoardProps) {
   const rows = orientation === 'white' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
   const cols = orientation === 'white' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
 
+  const canPencil = onPencilRequest !== undefined && pencilTargets !== undefined
+  const openPiece = pencilOpen === null ? undefined : bySquare.get(pencilOpen)
+
   return (
     <div className="board-wrap">
+      <style>{STYLE}</style>
       <div className="board" role="grid" aria-label="棋盤">
         {rows.map((r) => (
           <div className="board-row" role="row" key={r}>
@@ -68,6 +238,8 @@ export function Board(props: BoardProps) {
             {cols.map((c) => {
               const sq = r * 8 + c
               const piece = bySquare.get(sq)
+              const droppable = onSquareDrop !== undefined && (dropTargets?.has(sq) ?? false)
+              const pencilable = canPencil && (pencilTargets?.has(sq) ?? false)
               const classes = ['sq', isDarkSquare(sq) ? 'sq-dark' : 'sq-light']
               if (centerSet.has(sq)) classes.push('sq-center')
               if (lastSet.has(sq)) classes.push('sq-last')
@@ -76,26 +248,115 @@ export function Board(props: BoardProps) {
               if (onSquareClick && (targetSet.has(sq) || originSet.has(sq))) {
                 classes.push('sq-clickable')
               }
-              // In setup mode (rankOverride supplied) show ONLY the draft the
-              // player has actually built. piece.rank still carries the server's
-              // placeholder assignment, and falling through to it would paint a
-              // complete deployment the player never chose — while the tray still
-              // reads 16/16 remaining.
-              const shownRank = piece
-                ? rankOverride
-                  ? (rankOverride[piece.id] ?? null)
-                  : (piece.rank ?? null)
-                : null
+              if (pencilable) classes.push('sq-pencilable')
+              if (pencilOpen === sq) classes.push('sq-pencil-open')
+              if (droppable && dragActive) classes.push('sq-droppable')
+              if (droppable && dragActive && hoverSq === sq) classes.push('sq-drop-hover')
+
+              const { fact, marks } = piece
+                ? resolveTag(piece, rankOverride, pencilMarks)
+                : { fact: null, marks: [] as readonly Rank[] }
+              const pencil = fact === null && marks.length > 0
+              // a drag source needs a handler to fill the DataTransfer: Firefox
+              // cancels a dragstart that sets nothing
+              const draggable =
+                piece !== undefined &&
+                onSquareDragStart !== undefined &&
+                (dragSources?.has(sq) ?? false)
+
+              const label = describe(sq, piece, fact, marks, pendingIds)
+
               return (
                 <button
                   type="button"
                   role="gridcell"
                   key={sq}
                   className={classes.join(' ')}
-                  onClick={onSquareClick ? () => onSquareClick(sq) : undefined}
+                  onClick={
+                    onSquareClick
+                      ? () => {
+                          // swallow the click a completed long-press produces
+                          if (longFiredRef.current) {
+                            longFiredRef.current = false
+                            return
+                          }
+                          onSquareClick(sq)
+                        }
+                      : undefined
+                  }
                   disabled={!onSquareClick}
-                  title={describe(sq, piece, shownRank)}
-                  aria-label={describe(sq, piece, shownRank)}
+                  title={label}
+                  aria-label={label}
+                  onContextMenu={
+                    pencilable && onPencilRequest
+                      ? (e) => {
+                          e.preventDefault()
+                          onPencilRequest(sq)
+                        }
+                      : undefined
+                  }
+                  onPointerDown={
+                    pencilable && onPencilRequest
+                      ? (e: ReactPointerEvent<HTMLElement>) => {
+                          if (e.pointerType === 'mouse') return
+                          cancelPress()
+                          longFiredRef.current = false
+                          const x = e.clientX
+                          const y = e.clientY
+                          const timer = window.setTimeout(() => {
+                            pressRef.current = null
+                            longFiredRef.current = true
+                            onPencilRequest(sq)
+                          }, LONG_PRESS_MS)
+                          pressRef.current = { timer, x, y }
+                        }
+                      : undefined
+                  }
+                  onPointerMove={
+                    pencilable
+                      ? (e: ReactPointerEvent<HTMLElement>) => {
+                          const press = pressRef.current
+                          if (press === null) return
+                          const dx = e.clientX - press.x
+                          const dy = e.clientY - press.y
+                          if (dx * dx + dy * dy > LONG_PRESS_SLOP_PX * LONG_PRESS_SLOP_PX) {
+                            cancelPress()
+                          }
+                        }
+                      : undefined
+                  }
+                  onPointerUp={pencilable ? cancelPress : undefined}
+                  onPointerCancel={pencilable ? cancelPress : undefined}
+                  onPointerLeave={pencilable ? cancelPress : undefined}
+                  onDragOver={
+                    droppable
+                      ? (e) => {
+                          // preventDefault is what marks this square as a legal
+                          // drop; squares outside dropTargets simply never do it.
+                          e.preventDefault()
+                          e.dataTransfer.dropEffect = 'move'
+                          if (hoverSq !== sq) setHoverSq(sq)
+                        }
+                      : undefined
+                  }
+                  onDragLeave={
+                    droppable
+                      ? (e) => {
+                          const next = e.relatedTarget
+                          if (next instanceof Node && e.currentTarget.contains(next)) return
+                          setHoverSq((cur) => (cur === sq ? null : cur))
+                        }
+                      : undefined
+                  }
+                  onDrop={
+                    droppable && onSquareDrop
+                      ? (e) => {
+                          e.preventDefault()
+                          setHoverSq(null)
+                          onSquareDrop(sq, e)
+                        }
+                      : undefined
+                  }
                 >
                   {centerSet.has(sq) && <span className="center-dot" aria-hidden="true" />}
                   {piece && (
@@ -105,13 +366,40 @@ export function Board(props: BoardProps) {
                         piece.color === 'white' ? 'piece-white' : 'piece-black',
                         piece.revealed ? 'piece-revealed' : '',
                         pendingIds?.has(piece.id) ? 'piece-pending' : '',
+                        draggable ? 'piece-draggable' : '',
                       ]
                         .filter(Boolean)
                         .join(' ')}
+                      draggable={draggable || undefined}
+                      onDragStart={
+                        draggable && onSquareDragStart ? (e) => onSquareDragStart(sq, e) : undefined
+                      }
+                      onDragEnd={
+                        draggable
+                          ? (e) => {
+                              setHoverSq(null)
+                              onSquareDragEnd?.(sq, e)
+                            }
+                          : undefined
+                      }
                     >
                       <span className="glyph">{CARRIER_GLYPH[piece.carrier]}</span>
-                      <span className="rank-tag">
-                        {shownRank ? RANK_LABEL[shownRank] : pendingIds?.has(piece.id) ? '？' : ''}
+                      <span
+                        className={
+                          pencil
+                            ? marks.length > 1
+                              ? 'rank-tag rank-tag-pencil rank-tag-pencil-multi'
+                              : 'rank-tag rank-tag-pencil'
+                            : 'rank-tag'
+                        }
+                      >
+                        {fact
+                          ? RANK_LABEL[fact]
+                          : pencil
+                            ? pencilTagText(marks)
+                            : pendingIds?.has(piece.id)
+                              ? '？'
+                              : ''}
                       </span>
                     </span>
                   )}
@@ -129,15 +417,203 @@ export function Board(props: BoardProps) {
           ))}
         </div>
       </div>
+
+      {pencilOpen !== null && openPiece !== undefined && (
+        <PencilPopover
+          square={pencilOpen}
+          piece={openPiece}
+          marks={pencilMarks?.[openPiece.id] ?? []}
+          rowIdx={rows.indexOf(Math.floor(pencilOpen / 8))}
+          colIdx={cols.indexOf(pencilOpen % 8)}
+          onToggle={onPencilToggle}
+          onClearPiece={onPencilClearPiece}
+          onClose={onPencilClose}
+        />
+      )}
     </div>
   )
 }
 
-function describe(sq: Square, piece: ViewerPiece | undefined, rank: Rank | null): string {
+interface PencilPopoverProps {
+  square: Square
+  piece: ViewerPiece
+  marks: readonly Rank[]
+  rowIdx: number
+  colIdx: number
+  onToggle?: (pieceId: PieceId, rank: Rank) => void
+  onClearPiece?: (pieceId: PieceId) => void
+  onClose?: () => void
+}
+
+/**
+ * The notepad, opened on the piece itself. ALL ELEVEN RANKS, ALWAYS, on every
+ * annotatable piece — nothing is filtered, greyed, crossed out or counted, and
+ * no combination is refused. Tick 司令 on five pieces if you like; the system
+ * has no opinion (gamebook §10). That restraint is the whole point.
+ */
+function PencilPopover({
+  square,
+  piece,
+  marks,
+  rowIdx,
+  colIdx,
+  onToggle,
+  onClearPiece,
+  onClose,
+}: PencilPopoverProps) {
+  const on = new Set<Rank>(marks)
+  // Anchored to the square: horizontally at its centre, nudged inwards near the
+  // edges so it stays over the board; flipped above for the bottom rows.
+  const above = rowIdx >= 5
+  const shiftPct = 10 + (colIdx / 7) * 80
+  const left = `calc(${BOARD_INSET_PX + BOARD_GUTTER_PX}px + var(--sq) * ${colIdx + 0.5})`
+  const top = above
+    ? `calc(${BOARD_INSET_PX}px + var(--sq) * ${rowIdx} - 6px)`
+    : `calc(${BOARD_INSET_PX}px + var(--sq) * ${rowIdx + 1} + 6px)`
+
+  return (
+    <div
+      className="xy-pop"
+      role="dialog"
+      aria-label={`${squareName(square)} 的標記`}
+      style={{
+        left,
+        top,
+        transform: `translate(-${shiftPct}%, ${above ? '-100%' : '0'})`,
+      }}
+    >
+      <div className="xy-pop-head">
+        <code>{squareName(square)}</code>
+        <span className="muted small">{CARRIER_LABEL[piece.carrier]}</span>
+        <button
+          type="button"
+          className="xy-pop-close"
+          onClick={() => onClose?.()}
+          aria-label="關閉標記選單"
+          title="關閉"
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="xy-pop-grid">
+        {RANKS_IN_ORDER.map((rank) => {
+          const ticked = on.has(rank)
+          return (
+            <button
+              type="button"
+              key={rank}
+              className={ticked ? 'xy-pop-rank xy-pop-on' : 'xy-pop-rank'}
+              aria-pressed={ticked}
+              onClick={() => onToggle?.(piece.id, rank)}
+            >
+              {RANK_LABEL[rank]}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="xy-pop-foot">
+        <button
+          type="button"
+          className="xy-pop-clear"
+          disabled={marks.length === 0}
+          onClick={() => onClearPiece?.(piece.id)}
+        >
+          清除
+        </button>
+        <span className="muted small">自己的猜測，系統不驗證、不推論</span>
+      </div>
+    </div>
+  )
+}
+
+function describe(
+  sq: Square,
+  piece: ViewerPiece | undefined,
+  fact: Rank | null,
+  marks: readonly Rank[],
+  pendingIds: ReadonlySet<PieceId> | undefined,
+): string {
   const name = squareName(sq)
   if (!piece) return name
   const who = piece.color === 'white' ? '白' : '黑'
   const carrier = CARRIER_LABEL[piece.carrier]
-  const rankPart = rank ? ` ${RANK_LABEL[rank]}${piece.revealed ? '（已翻明）' : ''}` : ''
-  return `${name} ${who} ${carrier}${rankPart}`
+  if (fact !== null) {
+    return `${name} ${who} ${carrier} ${RANK_LABEL[fact]}${piece.revealed ? '（已翻明）' : ''}`
+  }
+  if (marks.length > 0) {
+    return `${name} ${who} ${carrier} ${pencilFullText(marks)}我的標記，非事實`
+  }
+  return `${name} ${who} ${carrier}${pendingIds?.has(piece.id) ? ' 未指派' : ''}`
 }
+
+/**
+ * Scoped to the board. The shared stylesheet owns the grid and the rank tags;
+ * everything the on-board notepad needs lives here under an `xy-` prefix.
+ */
+const STYLE = `
+.sq-pencilable {
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+  user-select: none;
+}
+/* a square that is also a legal destination keeps the move cursor: the move
+   flow always wins over the notepad */
+.sq-pencilable:not(.sq-clickable) {
+  cursor: context-menu;
+}
+.sq-pencil-open {
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+.xy-pop {
+  position: absolute;
+  z-index: 30;
+  width: max-content;
+  max-width: min(280px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  padding: 8px;
+}
+.xy-pop-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.xy-pop-head code { font-size: 0.85rem; }
+.xy-pop-close {
+  margin-left: auto;
+  padding: 0 6px;
+  line-height: 1.3;
+  background: transparent;
+  border: 0;
+}
+.xy-pop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+.xy-pop-rank {
+  font-size: 0.82rem;
+  padding: 4px 2px;
+  border: 1px dashed var(--line);
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.xy-pop-on {
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+  background: rgba(110, 193, 255, 0.16);
+  font-style: italic;
+}
+.xy-pop-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.xy-pop-clear { font-size: 0.8rem; padding: 3px 9px; }
+`

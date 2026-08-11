@@ -3,6 +3,7 @@
  *
  *   GET /llm/:token              current position, text/plain
  *   GET /llm/:token/rules        rules primer, text/plain
+ *   GET /llm/:token/setup/:code  deploy an army during setup (§9)
  *   GET /llm/:token/:ply/:move   play the move, return the new position
  *
  * GET-only because web chatbots can fetch but cannot POST. That makes every URL
@@ -23,15 +24,25 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 
 import {
+  decodeSetupCode,
+  encodeSetupCode,
   moveToNotation,
   parseMoveNotation,
   renderForLLM,
   renderRulesForLLM,
   squareName,
 } from '@xiyang/rules'
-import type { GameConfig, Move, ViewerState } from '@xiyang/rules'
+import type { Color, GameConfig, Move, PieceId, Rank, ViewerState } from '@xiyang/rules'
 
-import { RoomError, playMove, resolveToken, serialiseFor, type Resolved } from './rooms.js'
+import {
+  RoomError,
+  playMove,
+  randomAssignment,
+  resolveToken,
+  serialiseFor,
+  submitRankAssignment,
+  type Resolved,
+} from './rooms.js'
 
 // ------------------------------------------------------------- notation
 
@@ -119,8 +130,8 @@ function renderPosition(session: Resolved, baseUrl: string, notes: readonly stri
 
   if (state.status.kind === 'setup') {
     extra.push(
-      'the game has not started: both sides are still assigning ranks in secret. ' +
-        'If a side never submits, the server assigns the default for it when the setup ' +
+      'the game has not started: both sides are still assigning 兵種 in secret. ' +
+        'If a side never deploys, the server rolls a RANDOM army for it when the setup ' +
         'timer runs out and play begins. Re-fetch this URL to check.',
     )
   }
@@ -166,6 +177,40 @@ export function registerLlmRoutes(app: FastifyInstance, baseUrl: string): void {
     plain(reply, `${primer}\n${settingsBlock(state)}`)
   })
 
+  // Deployment (§9). Static "setup" outranks the parametric ":ply" of the move
+  // route below, so the two never collide.
+  app.get<{ Params: { token: string } }>('/llm/:token/setup', (request, reply) => {
+    const session = resolveToken(request.params.token)
+    if (session === undefined) {
+      notFound(reply)
+      return
+    }
+    // No code in the URL, so nothing is deployed — just show the instructions,
+    // which the position itself carries while this player is still in setup.
+    plain(
+      reply,
+      renderPosition(session, baseUrl, [
+        'that URL has no setup code on the end, so nothing was deployed. ' +
+          'Append your 16 characters, or the word random.',
+      ]),
+    )
+  })
+
+  app.get<{ Params: { token: string; code: string } }>(
+    '/llm/:token/setup/:code',
+    // Mutating, exactly like the move route: a HEAD from a link unfurler must
+    // not deploy an army the player never chose.
+    { exposeHeadRoute: false },
+    (request, reply) => {
+      const session = resolveToken(request.params.token)
+      if (session === undefined) {
+        notFound(reply)
+        return
+      }
+      plain(reply, attemptSetup(session, baseUrl, request.params.code))
+    },
+  )
+
   app.get<{ Params: { token: string; ply: string; move: string } }>(
     '/llm/:token/:ply/:move',
     // Fastify auto-registers HEAD for every GET. A HEAD would APPLY the move and
@@ -191,6 +236,89 @@ function notFound(reply: FastifyReply): void {
     404,
   )
 }
+
+// ------------------------------------------------------------- setup
+
+/** `/setup/random` — the one code that is a word rather than a deployment. */
+const RANDOM_CODE = 'random'
+
+/**
+ * GET /llm/:token/setup/<code|random> — deploy this player's 16 兵種 (§9).
+ *
+ * Nothing about the format is decided here: `decodeSetupCode` owns the code and
+ * `validateAssignment` (through it, and again through `submitRankAssignment`)
+ * owns legality. The random deployment is built in rooms.ts, which is where the
+ * server's entropy lives — the rules package stays deterministic.
+ *
+ * A deployment is one-way. Both refusals below matter: after setup there is no
+ * such thing as deploying, and a second deployment would let a player rewrite an
+ * army the opponent may already have been playing against.
+ */
+function attemptSetup(session: Resolved, baseUrl: string, codeParam: string): string {
+  const viewer = session.viewer
+  if (viewer.kind !== 'player') {
+    return renderPosition(session, baseUrl, [
+      'you are watching this game, not playing it, so nothing was deployed.',
+    ])
+  }
+
+  const state = serialiseFor(session.room, viewer)
+  if (state.status.kind !== 'setup') {
+    return renderPosition(session, baseUrl, [
+      state.status.kind === 'playing'
+        ? 'both armies are already deployed and play has started, so nothing was deployed. ' +
+          'Setup is over; play a move instead.'
+        : 'the game is over, so nothing was deployed.',
+    ])
+  }
+
+  if (state.status.submitted[viewer.color]) {
+    return renderPosition(session, baseUrl, [
+      'you have already deployed. A deployment is final and cannot be changed, ' +
+        'so nothing was done. Your army is listed below.',
+    ])
+  }
+
+  const wantsRandom = codeParam.trim().toLowerCase() === RANDOM_CODE
+  let assignment: Record<PieceId, Rank> = {}
+
+  if (!wantsRandom) {
+    const decoded = decodeSetupCode(codeParam, viewer.color, session.room.state)
+    if ('error' in decoded) {
+      return renderPosition(session, baseUrl, [`${decoded.error} Nothing was deployed.`])
+    }
+    assignment = decoded.assignment
+  }
+
+  try {
+    // randomAssignment belongs inside the guard too: it can raise RoomError, and
+    // escaping here would surface as a JSON 500 on a route that promises text/plain.
+    if (wantsRandom) assignment = randomAssignment(session.room.state, viewer.color)
+    submitRankAssignment(session.room, viewer.color, assignment)
+  } catch (error) {
+    const message = error instanceof RoomError ? error.message : 'that deployment was refused'
+    return renderPosition(session, baseUrl, [`${message}, so nothing was deployed.`])
+  }
+
+  return renderPosition(session, baseUrl, [deployedNote(session, viewer.color, wantsRandom)])
+}
+
+/**
+ * Echo back what was deployed. The code is read out of the REDACTED view, so
+ * this path cannot print a 兵種 the caller was not already entitled to — and the
+ * caller here is the owner of that army.
+ */
+function deployedNote(session: Resolved, color: Color, wasRandom: boolean): string {
+  const how = wasRandom ? 'deployed a random army' : 'deployed your army'
+  try {
+    const code = encodeSetupCode(serialiseFor(session.room, session.viewer), color)
+    return `${how} — your setup code is ${code}. It is final, and only this view shows it.`
+  } catch {
+    return `${how}. It is final.`
+  }
+}
+
+// ------------------------------------------------------------- moves
 
 function attemptMove(
   session: Resolved,

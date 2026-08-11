@@ -222,19 +222,40 @@ describe('entitledToRank — gamebook §10', () => {
     expect(viewOf(stateForViewer(over, BLACK), 'w-e2').rank).toBe('commander')
   })
 
-  it('hides the opponent\'s placeholder ranks during setup', () => {
+  it('hides placeholder ranks during setup — from BOTH sides, not just the opponent', () => {
     // createGame() pre-loads every piece with the default-assignment rank so
-    // that Piece.rank can stay non-nullable. Those placeholders must not be
-    // readable across the boundary either.
+    // that Piece.rank can stay non-nullable. That placeholder is deterministic
+    // and therefore publicly predictable — it is nobody's army, so it must not
+    // be readable across the boundary NOR reported back to its own side as if
+    // it were their deployment. Disclosure starts when a side submits.
     const fresh = createGame('setup')
-    const half = submitAssignment(fresh, 'white', completeAssignment('white', fresh, { 'w-e2': 'commander' }))
-    for (const s of [fresh, half]) {
-      for (const [viewer, mine] of [[WHITE, 'white'], [BLACK, 'black']] as const) {
-        const vs = stateForViewer(s, viewer)
-        for (const p of vs.pieces) {
-          expect(p.rank === null, `${p.id} for ${mine}`).toBe(p.color !== mine)
-        }
+    const half = submitAssignment(
+      fresh,
+      'white',
+      completeAssignment('white', fresh, { 'w-e2': 'commander' }),
+    )
+
+    // nobody has deployed: every rank is hidden from everyone
+    for (const [viewer, mine] of [[WHITE, 'white'], [BLACK, 'black']] as const) {
+      const vs = stateForViewer(fresh, viewer)
+      for (const p of vs.pieces) {
+        expect(p.rank === null, `${p.id} for ${mine} before any deployment`).toBe(true)
       }
+    }
+
+    // white has deployed: white sees its own, black still sees nothing at all
+    const asWhite = stateForViewer(half, WHITE)
+    for (const p of asWhite.pieces) {
+      expect(p.rank === null, `${p.id} for white after deploying`).toBe(p.color !== 'white')
+    }
+    expect(viewOf(asWhite, 'w-e2').rank).toBe('commander')
+
+    const asBlack = stateForViewer(half, BLACK)
+    for (const p of asBlack.pieces) {
+      expect(p.rank === null, `${p.id} for black, still undeployed`).toBe(true)
+    }
+
+    for (const s of [fresh, half]) {
       expect(stateForViewer(s, WHITE).legalMoves).toBeUndefined()
     }
   })

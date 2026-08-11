@@ -142,4 +142,14 @@ export interface ViewerState {
   viewer: Viewer
   /** legal moves, present only for a player whose turn it is */
   legalMoves?: Move[]
+  /**
+   * Absolute epoch-ms deadline for the setup phase, present only during setup.
+   *
+   * Not derived from GameState — the rules engine holds no wall clock, and must
+   * not, or `applyMove` stops being deterministic. The transport layer fills this
+   * in from its own timer. Without it a client can only anchor the countdown at
+   * the moment it first rendered, so anyone joining an invite late sees a full
+   * timer while the server auto-assigns early.
+   */
+  setupDeadlineMs?: number
 }

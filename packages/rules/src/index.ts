@@ -78,6 +78,20 @@ export {
 } from './setup.js'
 export type { StartingSlot } from './setup.js'
 
+// ---------- setup codes (§9) — the ONE implementation of the 16-char format ----------
+export {
+  SETUP_CODE_ALPHABET,
+  SETUP_CODE_COMBINATIONS,
+  SETUP_CODE_EXAMPLE,
+  SETUP_CODE_LEGEND,
+  SETUP_CODE_LENGTH,
+  decodeSetupCode,
+  encodeSetupCode,
+  setupCodeCountsText,
+  setupCodeSlots,
+} from './setupcode.js'
+export type { SetupCodeLegendEntry, SetupCodeResult, SetupCodeSource } from './setupcode.js'
+
 // ---------- moves (§3) ----------
 export {
   PROMOTION_CHOICES,

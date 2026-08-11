@@ -255,6 +255,8 @@ a {
 
 .board-wrap {
   display: inline-block;
+  /* the on-board pencil popover is positioned against this box */
+  position: relative;
 }
 
 .board {
@@ -355,6 +357,31 @@ a {
   box-shadow: inset 0 0 0 3px var(--accent);
 }
 
+/* ---------- setup drag and drop ---------- */
+
+/* a square that will accept the rank currently being dragged — always and only
+   one of your own 16 pieces */
+.sq-droppable {
+  box-shadow: inset 0 0 0 3px rgba(110, 193, 255, 0.55);
+  cursor: copy;
+}
+
+.sq-drop-hover {
+  box-shadow:
+    inset 0 0 0 3px var(--accent),
+    inset 0 0 0 100px rgba(110, 193, 255, 0.22);
+}
+
+/* the piece span is the drag handle, so it needs pointer events back */
+.piece-draggable {
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.piece-draggable:active {
+  cursor: grabbing;
+}
+
 .piece {
   position: relative;
   display: flex;
@@ -413,26 +440,57 @@ a {
   background: rgba(110, 193, 255, 0.28);
 }
 
-/* ---------- game layout ---------- */
+/* pencil mark = the player's own guess (gamebook §10). Deliberately weaker than
+   every authoritative tag above: no solid fill, dashed edge, italic, dimmer.
+   It must never be mistakable for a 系統翻明 rank at a glance. */
+.rank-tag-pencil {
+  font-size: calc(var(--sq) * 0.17);
+  font-weight: 500;
+  /* CJK faces often have no true italic, so the reading does not rest on it:
+     the brackets, the dashed edge, the smaller size and the unfilled
+     background are what separate a guess from a fact. */
+  font-style: italic;
+  color: var(--accent);
+  background: rgba(12, 14, 18, 0.55);
+  border: 1px dashed var(--accent);
+  border-radius: 4px;
+  opacity: 0.85;
+  padding: 0 1px;
+}
 
-.game-body,
-.setup-body {
+/* Two or three guesses on one piece, spelled out. Smaller again, and allowed to
+   wrap onto a second line so the tag stays inside its square; four or more
+   collapse to a 〔?n〕 count badge in Board.tsx. Still dashed, still bracketed,
+   still italic — a guess must not read as a fact at any length. */
+.rank-tag-pencil-multi {
+  font-size: calc(var(--sq) * 0.155);
+  max-width: calc(var(--sq) - 4px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.05;
+  text-align: center;
+}
+
+/* ---------- setup layout ---------- */
+
+/* one centred column: board on top, 兵種池 underneath. The pool is the only
+   progress readout — each chip shows what is left of that rank. */
+.setup-stack {
   display: flex;
-  gap: 20px;
-  align-items: flex-start;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
 }
 
-.game-board,
-.setup-board {
-  flex: 0 1 auto;
+.setup-pool {
+  width: 100%;
+  max-width: 620px;
 }
 
-.game-side,
-.setup-side {
-  flex: 1 1 320px;
-  min-width: 290px;
-  max-width: 480px;
+.setup-hint {
+  margin: 0 0 8px;
+  text-align: center;
+  min-height: 1.4em;
 }
 
 .controls {
@@ -459,22 +517,15 @@ a {
   color: var(--muted);
 }
 
-.revealed-list,
-.assign-list ul {
+.revealed-list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.revealed-list li,
-.assign-list li {
+.revealed-list li {
   padding: 2px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.assign-list {
-  max-height: 240px;
-  overflow: auto;
 }
 
 /* ---------- tray ---------- */
@@ -486,14 +537,25 @@ a {
   padding: 12px;
 }
 
+/* the pool doubles as a drop zone: drag a piece back here to clear its rank */
+.tray-drop-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
 .tray-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 8px;
   font-weight: 600;
 }
 
 .tray-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
   gap: 6px;
 }
 
@@ -504,13 +566,27 @@ a {
   padding: 6px 8px;
 }
 
+.tray-item-draggable {
+  cursor: grab;
+}
+
+.tray-item-draggable:active {
+  cursor: grabbing;
+}
+
 .tray-item-selected {
   border-color: var(--accent);
   background: #2a4d6e;
 }
 
+/* a spent rank: nothing left to place */
 .tray-item-empty {
-  opacity: 0.35;
+  opacity: 0.4;
+}
+
+.tray-item-empty .tray-label {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
 }
 
 .tray-order {
@@ -525,15 +601,29 @@ a {
 
 .tray-count {
   margin-left: auto;
-  color: var(--muted);
+  color: var(--fg);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tray-item-empty .tray-count {
+  color: var(--muted);
+}
+
+.tray-total {
+  color: var(--muted);
+}
+
+.tray-note {
+  margin: 10px 0 0;
 }
 
 .setup-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  justify-content: center;
   margin: 12px 0;
 }
 

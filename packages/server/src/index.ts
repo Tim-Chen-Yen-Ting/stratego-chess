@@ -141,6 +141,11 @@ export function buildApp(): ReturnType<typeof Fastify> {
       },
     },
     trustProxy: true,
+    // A 16-char setup code is well under this, but a mistyped one must still
+    // reach decodeSetupCode so the caller gets its self-correcting text/plain
+    // message. Fastify's default of 100 drops anything longer into the JSON
+    // 404 handler, which breaks the text/plain contract of the LLM routes.
+    maxParamLength: 512,
   })
 
   // A bare `POST /api/game` with a JSON content-type and no body is normal here.

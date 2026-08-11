@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { Carrier, Color, Move, Square, ViewerState } from '@xiyang/rules'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { DragEvent } from 'react'
+import type { Carrier, Color, Move, Rank, Square, ViewerState } from '@xiyang/rules'
 import { Board } from '../components/Board.js'
+import { CapturedTray } from '../components/CapturedTray.js'
 import { EventLog } from '../components/EventLog.js'
+import { PencilPanel, readDraggedRank } from '../components/PencilPanel.js'
+import { RankTable } from '../components/RankTable.js'
 import {
   CARRIER_LABEL,
   COLOR_LABEL,
@@ -9,7 +13,7 @@ import {
   RANK_LABEL,
 } from '../constants.js'
 import { colorLabel, formatClock, formatScore, resultText, squareName } from '../format.js'
-import { canAct, myLegalMoves, useStore, viewerColor } from '../store.js'
+import { canAct, myLegalMoves, pencilSeatKey, useStore, viewerColor } from '../store.js'
 
 /**
  * Game screen (techspec §7).
@@ -18,6 +22,12 @@ import { canAct, myLegalMoves, useStore, viewerColor } from '../store.js'
  * sends only to the player to move. The client computes no legality, no
  * combat forecast and no candidate-rank sets (gamebook §10) — it renders the
  * ViewerState and emits Moves.
+ *
+ * Layout: move history left, board centre, captured pieces right, with the
+ * static 兵種 reference under the history and the player's own pencil notepad
+ * under the captured tray. The board keeps its natural size — `--sq` is a vmin
+ * clamp, and the centre grid column is `min-content`, so the side columns give
+ * way first and the whole thing folds to one column when it no longer fits.
  */
 
 interface GameProps {
@@ -38,8 +48,19 @@ export function Game({ view }: GameProps) {
   const sendResign = useStore((s) => s.sendResign)
   const viewAt = useStore((s) => s.viewAt)
 
+  // 玩家標記 — client-only guesses (gamebook §10). Never sent anywhere.
+  const pencilMarks = useStore((s) => s.pencilMarks)
+  const loadPencilMarks = useStore((s) => s.loadPencilMarks)
+  const addPencilMark = useStore((s) => s.addPencilMark)
+  const togglePencilMark = useStore((s) => s.togglePencilMark)
+  const clearPencilMark = useStore((s) => s.clearPencilMark)
+  const clearPencilMarks = useStore((s) => s.clearPencilMarks)
+
   const [selected, setSelected] = useState<Square | null>(null)
   const [promotion, setPromotion] = useState<PendingPromotion | null>(null)
+  const [draggingRank, setDraggingRank] = useState<Rank | null>(null)
+  /** which enemy square has the notepad popover open on the board, if any */
+  const [pencilOpen, setPencilOpen] = useState<Square | null>(null)
 
   const me = viewerColor(view.viewer)
   const seated = canAct(view)
@@ -47,6 +68,13 @@ export function Game({ view }: GameProps) {
   const myTurn = seated && me === view.toMove && playing
 
   const moves = myLegalMoves(view)
+
+  // The notepad belongs to THIS game AND THIS seat: two tabs of one browser are
+  // two seats, and they must not share (or overwrite) one notepad.
+  const seat = pencilSeatKey(view.viewer)
+  useEffect(() => {
+    loadPencilMarks(view.id, seat)
+  }, [view.id, seat, loadPencilMarks])
 
   const movesFrom = useMemo(() => {
     const m = new Map<Square, BoardMove[]>()
@@ -70,6 +98,7 @@ export function Game({ view }: GameProps) {
   useEffect(() => {
     setSelected(null)
     setPromotion(null)
+    setPencilOpen(null)
   }, [view.ply, view.status.kind])
 
   // --- clock ---------------------------------------------------------------
@@ -94,14 +123,53 @@ export function Game({ view }: GameProps) {
     (p) => p.color !== me && p.revealed && p.rank !== null && p.square !== null,
   )
 
+  /**
+   * Squares that accept a dropped pencil mark: enemy pieces on the board that
+   * are not yet 翻明. This is entitlement bookkeeping — which pieces the player
+   * is allowed to scribble on — and says nothing about what rank they hold.
+   */
+  const pencilSquares = useMemo(() => {
+    const set = new Set<Square>()
+    if (me === null) return set
+    for (const p of view.pieces) {
+      if (p.color === me || p.square === null || p.revealed) continue
+      set.add(p.square)
+    }
+    return set
+  }, [view.pieces, me])
+
+  /**
+   * The popover only stays open while the square is still annotatable — a piece
+   * that gets captured or 翻明 takes its notepad page with it. Derived, so the
+   * state can never point at a square the board no longer offers.
+   */
+  const pencilOpenSquare = pencilOpen !== null && pencilSquares.has(pencilOpen) ? pencilOpen : null
+
+  // stable identity: the board hangs document listeners off this while open
+  const closePencil = useCallback(() => setPencilOpen(null), [])
+
   function play(move: Move) {
     setSelected(null)
     setPromotion(null)
+    setPencilOpen(null)
     sendMove(move)
   }
 
   function onSquareClick(sq: Square) {
     if (promotion) return
+
+    /*
+     * Left-click routing. With one of my pieces selected the click keeps its
+     * move meaning — an enemy square is a capture target and the move flow is
+     * never intercepted. With nothing selected there is no move in flight, so a
+     * click on an annotatable enemy piece opens the notepad instead.
+     */
+    if (selected === null && pencilSquares.has(sq)) {
+      setPencilOpen(pencilOpen === sq ? null : sq)
+      return
+    }
+    setPencilOpen(null)
+
     if (!myTurn) {
       setSelected(selected === sq ? null : sq)
       return
@@ -126,12 +194,30 @@ export function Game({ view }: GameProps) {
     else setSelected(null)
   }
 
+  /** Right-click or long-press on an enemy piece: open the notepad popover. */
+  function onPencilRequest(sq: Square) {
+    if (!pencilSquares.has(sq)) return
+    setPencilOpen(sq)
+  }
+
+  /** A rank chip dropped on an enemy piece: write the guess down, verbatim. */
+  function onSquareDrop(sq: Square, e: DragEvent<HTMLElement>) {
+    setDraggingRank(null)
+    const rank = readDraggedRank(e.dataTransfer)
+    if (rank === null) return
+    const piece = view.pieces.find((p) => p.square === sq)
+    if (piece === undefined) return
+    addPencilMark(piece.id, rank)
+  }
+
   function onResign() {
     if (window.confirm('確定認輸？此動作不可回復。')) sendResign()
   }
 
   return (
     <main className="screen screen-game">
+      <style>{STYLE}</style>
+
       <header className="topbar">
         <div className="scoreboard">
           <SidePanel
@@ -169,8 +255,15 @@ export function Game({ view }: GameProps) {
         <div className="banner">{resultText(view.status.result)}</div>
       )}
 
-      <div className="game-body">
-        <div className="game-board">
+      <div className="xy-grid">
+        {/* ---- left: the public record, then the static rules card ---- */}
+        <div className="xy-col xy-col-left">
+          <EventLog log={view.log} />
+          <RankTable />
+        </div>
+
+        {/* ---- centre: the board ---- */}
+        <div className="xy-col xy-col-board">
           <Board
             pieces={view.pieces}
             orientation={me ?? 'white'}
@@ -178,7 +271,17 @@ export function Game({ view }: GameProps) {
             targets={targets}
             origins={myTurn ? Array.from(movesFrom.keys()) : []}
             lastMove={lastMoveSquares}
+            pencilMarks={pencilMarks}
+            pencilTargets={pencilSquares}
+            pencilOpen={pencilOpenSquare}
+            onPencilRequest={onPencilRequest}
+            onPencilClose={closePencil}
+            onPencilToggle={togglePencilMark}
+            onPencilClearPiece={clearPencilMark}
+            dropTargets={draggingRank ? pencilSquares : undefined}
+            dragActive={draggingRank !== null}
             onSquareClick={onSquareClick}
+            onSquareDrop={onSquareDrop}
           />
 
           {promotion && (
@@ -245,9 +348,18 @@ export function Game({ view }: GameProps) {
                   ? '等待對手行動…'
                   : ''}
           </p>
+
+          {me !== null && (
+            <p className="muted small">
+              右鍵或長按敵方棋子可寫下猜測（未選取自己棋子時，左鍵點擊亦可）。一顆棋子可標多個兵種；系統不驗證、不推論。
+            </p>
+          )}
         </div>
 
-        <aside className="game-side">
+        {/* ---- right: what has left the board, what is known, what is guessed ---- */}
+        <div className="xy-col xy-col-right">
+          <CapturedTray pieces={view.pieces} me={me} />
+
           <section className="panel">
             <h2>已翻明的敵方兵種</h2>
             {revealedEnemy.length === 0 ? (
@@ -268,8 +380,19 @@ export function Game({ view }: GameProps) {
             </p>
           </section>
 
-          <EventLog log={view.log} />
-        </aside>
+          <PencilPanel
+            pieces={view.pieces}
+            me={me}
+            marks={pencilMarks}
+            onAdd={addPencilMark}
+            onToggle={togglePencilMark}
+            onClear={clearPencilMark}
+            onClearAll={clearPencilMarks}
+            onOpenPicker={(sq) => setPencilOpen(sq)}
+            onDragRankStart={(rank) => setDraggingRank(rank)}
+            onDragRankEnd={() => setDraggingRank(null)}
+          />
+        </div>
       </div>
     </main>
   )
@@ -301,3 +424,38 @@ function SidePanel({ color, score, clockMs, clockEnabled, toMove, isMe }: SidePa
     </div>
   )
 }
+
+/**
+ * Scoped to this screen. The shared stylesheet is owned elsewhere, so the
+ * three-column shell lives here under an `xy-` prefix.
+ */
+const STYLE = `
+.screen.screen-game { max-width: 1560px; }
+.xy-grid {
+  display: grid;
+  /* the centre column is min-content: it is exactly the board's natural width,
+     so the side columns are what give way when the viewport tightens. */
+  grid-template-columns: minmax(240px, 400px) min-content minmax(240px, 400px);
+  align-items: start;
+  justify-content: center;
+  gap: 18px;
+}
+.xy-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.xy-col > .panel { margin: 0; }
+.xy-col-board { justify-self: center; }
+.xy-col-board .controls { margin-top: 0; }
+.xy-col-board > p { margin: 0; }
+@media (max-width: 1180px) {
+  .xy-grid {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+  .xy-col { width: 100%; max-width: 620px; }
+  .xy-col-board { order: -1; }
+}
+`

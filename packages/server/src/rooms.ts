@@ -16,6 +16,8 @@
 import { randomBytes, randomInt } from 'node:crypto'
 
 import {
+  ALL_RANKS,
+  DISTRIBUTION,
   applyMove,
   createGame,
   defaultAssignment,
@@ -67,6 +69,8 @@ export interface Room {
   readonly hostColor: Color
   readonly clock: GameClock
   setupTimer: NodeJS.Timeout | null
+  /** absolute epoch-ms the setup timer fires, or null when it is not armed */
+  setupDeadline: number | null
   readonly createdAt: number
   lastActivity: number
 }
@@ -148,6 +152,7 @@ export function createRoom(config?: Partial<GameConfig>): Room {
     hostColor,
     clock,
     setupTimer: null,
+    setupDeadline: null,
     createdAt: now,
     lastActivity: now,
   }
@@ -206,7 +211,14 @@ export function roomCount(): number {
 export function serialiseFor(room: Room, viewer: Viewer): ViewerState {
   // fold in the time burned so far, so every payload carries a live clock
   room.clock.sync()
-  return stateForViewer(room.state, viewer)
+  const view = stateForViewer(room.state, viewer)
+  // The setup deadline is wall-clock state owned by this layer, not by the rules
+  // engine. Attaching it here keeps `stateForViewer` the single redaction path —
+  // this carries no 兵種 and is the same value for every viewer.
+  if (view.status.kind === 'setup' && room.setupDeadline !== null) {
+    view.setupDeadlineMs = room.setupDeadline
+  }
+  return view
 }
 
 // ---------------------------------------------------------------- setup
@@ -215,12 +227,14 @@ function armSetupTimer(room: Room): void {
   const ms = room.state.config.setupTimeoutMs
   if (!Number.isFinite(ms) || ms <= 0) return
   room.setupTimer = setTimeout(() => onSetupTimeout(room), ms)
+  room.setupDeadline = Date.now() + ms
 }
 
 function clearSetupTimer(room: Room): void {
   if (room.setupTimer !== null) {
     clearTimeout(room.setupTimer)
     room.setupTimer = null
+    room.setupDeadline = null
   }
 }
 
@@ -231,16 +245,68 @@ function pendingColors(state: GameState): Color[] {
 }
 
 /**
- * techspec §0/§5: on timeout, auto-apply `defaultAssignment()` for anyone who has
- * not submitted, then let the state machine start the game.
+ * A uniformly random legal deployment (§9 一對一 bijection onto DISTRIBUTION).
+ *
+ * The shuffle lives HERE and not in @xiyang/rules deliberately: the rules
+ * package is pure and deterministic, which is what makes it testable, and
+ * randomness is the server's business. `randomInt` is the CSPRNG — a predictable
+ * army is the same failure as a published one, and this is hidden information.
+ *
+ * Fisher-Yates over the DISTRIBUTION multiset, so every draw is a valid
+ * assignment by construction, and every valid assignment is equally likely.
  */
+export function randomAssignment(state: GameState, color: Color): Record<PieceId, Rank> {
+  const bag: Rank[] = []
+  for (const rank of ALL_RANKS) {
+    for (let n = 0; n < DISTRIBUTION[rank]; n++) bag.push(rank)
+  }
+
+  for (let i = bag.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1)
+    const a = bag[i]!
+    bag[i] = bag[j]!
+    bag[j] = a
+  }
+
+  const own = state.pieces.filter((piece) => piece.color === color)
+  if (own.length !== bag.length) {
+    throw new RoomError(`cannot deploy: ${color} has ${own.length} pieces, expected ${bag.length}`, {
+      status: 500,
+    })
+  }
+
+  const assignment: Record<PieceId, Rank> = {}
+  own.forEach((piece, i) => {
+    assignment[piece.id] = bag[i]!
+  })
+  return assignment
+}
+
+/**
+ * techspec §0/§5: on timeout, auto-deploy for anyone who has not submitted, then
+ * let the state machine start the game.
+ *
+ * The fallback is RANDOM, not `defaultAssignment()`. A deterministic fallback is
+ * a published army: every opponent can look up exactly where the timed-out
+ * player's 軍旗 and 爆裂物 sit, which destroys the hidden layer (gamebook §10)
+ * for the rest of that game. `defaultAssignment` survives only as the
+ * last-resort belt-and-braces below — a game wedged in setup forever is worse
+ * than a predictable one, and it can never actually be reached.
+ */
+function timeoutAssignment(state: GameState, color: Color): Record<PieceId, Rank> {
+  const rolled = randomAssignment(state, color)
+  return validateAssignment(rolled, color, state) === null
+    ? rolled
+    : defaultAssignment(color, state)
+}
+
 function onSetupTimeout(room: Room): void {
   room.setupTimer = null
   if (room.state.status.kind !== 'setup') return
 
   for (const color of pendingColors(room.state)) {
     if (room.state.status.kind !== 'setup') break
-    room.state = submitAssignment(room.state, color, defaultAssignment(color, room.state))
+    room.state = submitAssignment(room.state, color, timeoutAssignment(room.state, color))
   }
 
   afterSetupChange(room)

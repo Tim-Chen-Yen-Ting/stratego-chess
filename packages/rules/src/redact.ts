@@ -52,7 +52,16 @@ export function entitledToRank(s: GameState, v: Viewer, piece: Piece): boolean {
   if (v.kind === 'replay-omniscient') return true
   if (s.status.kind === 'over') return true
   if (piece.revealed) return true
-  return piece.color === viewerColor(v)
+  if (piece.color !== viewerColor(v)) return false
+  // During setup a side that has not deployed still carries the PLACEHOLDER
+  // assignment, which is deterministic and therefore publicly predictable. It is
+  // not that player's army and must never be reported as though it were: a
+  // spectator bound to that side would read a fabricated deployment as fact, in
+  // breach of gamebook §10「猜測不得在任何情況下被誤認為事實」. Suppressing it here
+  // fixes every consumer at once — web board, LLM render, raw JSON — rather than
+  // asking each renderer to remember to guard.
+  if (s.status.kind === 'setup' && !s.status.submitted[piece.color]) return false
+  return true
 }
 
 function copyMove(m: Move): Move {
