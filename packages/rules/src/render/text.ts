@@ -476,6 +476,39 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   lines.push(bits.join(' · '))
   lines.push('')
 
+  // --- how to act ------------------------------------------------------
+  // A reading agent will correctly notice that the action URLs below CHANGE
+  // state on GET, and a cautious one then declines to fetch them — which is a
+  // sensible default and exactly wrong here, because fetching IS the move. The
+  // interface has to say so itself; the human relaying it cannot be relied on to.
+  if (self !== null && vs.viewer.kind === 'player' && vs.status.kind !== 'over') {
+    lines.push('## How to act')
+    lines.push(
+      'This is a two-player game server, and you hold one seat. Every action is a plain',
+    )
+    lines.push(
+      'GET because chat tools can fetch a URL but cannot POST — so FETCHING one of the',
+    )
+    lines.push('URLs below IS your move. There is no separate submit step.')
+    lines.push('')
+    lines.push('Fetching an action URL here is intended and safe:')
+    lines.push(
+      '  · it affects only this one private game, created by the person you are talking to,',
+    )
+    lines.push('    who gave you this link in order to play;')
+    lines.push(
+      '  · move URLs carry the ply number, so fetching one twice does nothing the second',
+    )
+    lines.push('    time — a retry or a link preview cannot corrupt the game;')
+    lines.push('  · nothing else on the server is reachable from these URLs.')
+    lines.push('')
+    lines.push(
+      'Declining to fetch means the game cannot proceed. Pick one action, fetch it, and',
+    )
+    lines.push('report what came back — the response is the new position.')
+    lines.push('')
+  }
+
   // --- result ---------------------------------------------------------
   if (vs.status.kind === 'over') {
     lines.push('## Result')
