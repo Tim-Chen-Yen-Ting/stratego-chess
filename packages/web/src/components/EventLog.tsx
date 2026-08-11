@@ -29,19 +29,29 @@ export function EventLog({ log }: EventLogProps) {
           {log.map((ev) => {
             const line = eventLine(ev)
             return (
-              <li key={ev.ply} className={`log-item log-${ev.color}`}>
+              <li
+                key={ev.ply}
+                className={`log-item log-${ev.color}`}
+                // The full sentence stays reachable on hover. The compact line
+                // is for reading at a glance; this is for settling a question.
+                title={
+                  [line.combat, line.enPassant ? 'en passant' : null, line.promoted]
+                    .filter(Boolean)
+                    .join('；') || undefined
+                }
+              >
                 <span className="log-ply">{line.ply}</span>
-                <span className={`log-color log-color-${ev.color}`}>{COLOR_LABEL[ev.color]}</span>
-                <span className="log-move">{line.move}</span>
+                <span className={`log-color log-color-${ev.color}`}>
+                  {COLOR_LABEL[ev.color]}
+                  {line.tags.mover && <b className="log-tag">（{line.tags.mover}）</b>}
+                </span>
+                <span className="log-move">
+                  {line.move}
+                  {line.tags.target && <b className="log-tag">（{line.tags.target}）</b>}
+                  {line.enPassant && <i className="log-flag">e.p.</i>}
+                  {line.promoted && <i className="log-flag">↑</i>}
+                </span>
                 <span className="log-score">{line.score}</span>
-                {(line.combat || line.promoted || line.enPassant) && (
-                  <span className="log-detail">
-                    {line.enPassant && <em>en passant　</em>}
-                    {line.combat}
-                    {line.combat && line.promoted ? '；' : ''}
-                    {line.promoted}
-                  </span>
-                )}
               </li>
             )
           })}

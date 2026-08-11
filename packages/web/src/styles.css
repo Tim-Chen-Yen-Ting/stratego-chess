@@ -642,11 +642,14 @@ a {
 
 .log-item {
   display: grid;
-  grid-template-columns: 2.2em 1.6em 1fr auto;
+  /* colour column widened so a 兵種 tag sits beside the mover without pushing
+     the move column out of alignment; the move column absorbs the target tag */
+  grid-template-columns: 2.2em minmax(1.6em, auto) 1fr auto;
   gap: 6px;
   padding: 4px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   font-size: 0.86rem;
+  align-items: baseline;
 }
 
 .log-ply {
@@ -672,8 +675,19 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
-.log-detail {
-  grid-column: 3 / -1;
+/* A 兵種 the server announced. Gold, matching 翻明 on the board, so the log and
+   the board speak with one voice about what is a fact. */
+.log-tag {
   color: var(--gold);
-  font-size: 0.8rem;
+  font-weight: 600;
+  font-size: 0.82em;
+  white-space: nowrap;
+}
+
+/* en passant / promotion markers — structural notes, not 兵種 */
+.log-flag {
+  color: var(--muted);
+  font-size: 0.75em;
+  font-style: normal;
+  margin-left: 4px;
 }

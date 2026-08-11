@@ -69,13 +69,64 @@ export function combatText(outcome: CombatOutcome, attacker: Color): string {
   }
 }
 
+/**
+ * The compact log tags. POSITION carries the meaning: a tag beside the mover is
+ * about the piece that moved, a tag beside the destination is about the piece
+ * that was standing there. That is enough to read every outcome without a
+ * sentence, because who-was-revealed is exactly what the sentence used to say.
+ *
+ *   6黑（軍長） f6xf5          attacker won and is now 翻明 as 軍長
+ *   7白　　　　 e4xf5（軍長）   defender won; the attacker is gone
+ *   8黑（團長） d4xd5（團長）   同階雙亡
+ *   9白（爆裂物）e2xe4          白's bomb detonated; the victim stays hidden
+ *  10黑（工兵/軍旗）h7xg5（爆裂物） 有煙無傷 — the bomb died, the survivor is one of two
+ *
+ * A rank never appears here unless the server actually announced it, so this
+ * stays a restatement of the record and never becomes a solver (gamebook §10).
+ */
+export interface CombatTags {
+  /** shown next to the side that moved */
+  mover: string | null
+  /** shown next to the destination square */
+  target: string | null
+}
+
+const EITHER = '工兵/軍旗'
+const BOMB = RANK_LABEL.bomb
+
+export function combatTags(outcome: CombatOutcome, mover: Color): CombatTags {
+  switch (outcome.kind) {
+    case 'attacker-wins':
+      return { mover: RANK_LABEL[outcome.winnerRank], target: null }
+    case 'defender-wins':
+      return { mover: null, target: RANK_LABEL[outcome.winnerRank] }
+    case 'mutual-rank':
+      return { mover: RANK_LABEL[outcome.rank], target: RANK_LABEL[outcome.rank] }
+    case 'bomb-vs-bomb':
+      return { mover: BOMB, target: BOMB }
+    case 'bomb-detonate':
+      // only the bomb is announced; the piece it took stays hidden (§4 翻明總表)
+      return outcome.bombColor === mover
+        ? { mover: BOMB, target: null }
+        : { mover: null, target: BOMB }
+    case 'fizzle':
+      // the dead piece was necessarily a bomb; the survivor is narrowed to two,
+      // and deliberately no further — that ambiguity is the point (附錄 A(a))
+      return outcome.survivorColor === mover
+        ? { mover: EITHER, target: BOMB }
+        : { mover: BOMB, target: EITHER }
+  }
+}
+
 export interface EventLine {
   ply: number
   color: Color
   /** the move in coordinate notation */
   move: string
-  /** the public combat announcement, if the move made contact */
+  /** the public combat announcement, if the move made contact — tooltip only */
   combat: string | null
+  /** compact inline tags; see combatTags */
+  tags: CombatTags
   /** true when the contact square differs from the destination (en passant) */
   enPassant: boolean
   promoted: string | null
@@ -89,6 +140,7 @@ export function eventLine(ev: GameEvent): EventLine {
     color: ev.color,
     move: moveText(ev.move, contact),
     combat: ev.combat ? combatText(ev.combat.outcome, ev.color) : null,
+    tags: ev.combat ? combatTags(ev.combat.outcome, ev.color) : { mover: null, target: null },
     enPassant:
       ev.combat != null && ev.move.kind === 'move' && ev.combat.defenderSquare !== ev.move.to,
     promoted: ev.promoted ? `升變為 ${CARRIER_LABEL[ev.promoted].split(' ')[0]}` : null,
