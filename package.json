@@ -1,0 +1,27 @@
+{
+  "name": "xingjun-xiyangqi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "行軍西洋棋 — chess carriers, 行軍棋 ranks, hidden information",
+  "type": "module",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build -w @xiyang/rules && npm run build -w @xiyang/server && npm run build -w @xiyang/web",
+    "build:rules": "npm run build -w @xiyang/rules",
+    "build:server": "npm run build -w @xiyang/server",
+    "build:web": "npm run build -w @xiyang/web",
+    "test": "npm run test -w @xiyang/rules",
+    "start": "node packages/server/dist/index.js",
+    "dev": "npm run build -w @xiyang/rules && concurrently -k -n server,web -c blue,magenta \"npm run dev -w @xiyang/server\" \"npm run dev -w @xiyang/web\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  }
+}

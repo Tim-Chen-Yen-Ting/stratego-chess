@@ -1,0 +1,14 @@
+# TODO(render): PLACEHOLDER — not deployed. techspec §8.
+# Every value below is a placeholder; nothing here is wired up in this build.
+services:
+  - type: web
+    name: PLACEHOLDER_SERVICE_NAME
+    runtime: node
+    plan: starter # free tier sleeps and drops live games
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: PUBLIC_BASE_URL
+        value: PLACEHOLDER_BASE_URL # needed for LLM move URLs

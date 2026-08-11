@@ -1,0 +1,344 @@
+/**
+ * Bootstrap — techspec §5, §8.
+ *
+ * One Fastify 5 instance on one port serving three things: the JSON/HTTP API,
+ * the Socket.IO endpoint (attached to the same http.Server) and the built web
+ * client as static files with an SPA fallback. Single origin, so no CORS and no
+ * second service.
+ *
+ *   POST /api/game            create a game, get the invite links back
+ *   GET  /api/game/:token     ViewerState as JSON
+ *   GET  /api/links/:token    the share/LLM links that belong to this token
+ *   GET  /healthz             200
+ *   GET  /llm/...             see llm.ts (techspec §6)
+ *   GET  /*                   static client build, falling back to index.html
+ *
+ * PORT comes from the environment (Render supplies it) and falls back to 3000.
+ * PUBLIC_BASE_URL is needed only to build absolute LLM move URLs; locally it
+ * defaults to http://localhost:PORT.
+ */
+
+import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import fastifyStatic from '@fastify/static'
+import Fastify from 'fastify'
+import { Server as SocketIOServer } from 'socket.io'
+
+import { viewerColor } from '@xiyang/rules'
+import type { GameConfig, Viewer } from '@xiyang/rules'
+
+import { registerLlmRoutes } from './llm.js'
+import {
+  createRoom,
+  disposeAll,
+  resolveToken,
+  roomCount,
+  seatColor,
+  serialiseFor,
+  type Room,
+} from './rooms.js'
+import { registerSocketHandlers, type GameServer, type ServerLog } from './sockets.js'
+
+const here = dirname(fileURLToPath(import.meta.url))
+/** dist/index.js and src/index.ts both sit two levels above packages/web/dist. */
+const WEB_DIST = resolve(here, '../../web/dist')
+const WEB_INDEX = join(WEB_DIST, 'index.html')
+
+const PORT = readPort()
+const HOST = process.env.HOST ?? '0.0.0.0'
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? `http://localhost:${PORT}`).replace(
+  /\/+$/,
+  '',
+)
+
+/** Client-side route that turns a token into a seat at the table. */
+function playUrl(token: string): string {
+  return `${PUBLIC_BASE_URL}/g/${token}`
+}
+
+function llmUrl(token: string): string {
+  return `${PUBLIC_BASE_URL}/llm/${token}`
+}
+
+function readPort(): number {
+  const parsed = Number.parseInt(process.env.PORT ?? '', 10)
+  return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : 3000
+}
+
+// --------------------------------------------------------------- config input
+
+function clampNumber(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  return Math.min(max, Math.max(min, value))
+}
+
+/**
+ * Whatever the caller sends is untrusted input, not a rules decision: the bounds
+ * below only stop a client from parking the server on an absurd timer. Anything
+ * omitted keeps the rules engine's own default (gamebook 附錄 B).
+ */
+function readConfig(input: unknown): Partial<GameConfig> | undefined {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return undefined
+  const raw = input as Record<string, unknown>
+  const config: Partial<GameConfig> = {}
+
+  const scoreTarget = clampNumber(raw['scoreTarget'], 1, 10_000)
+  if (scoreTarget !== undefined) config.scoreTarget = scoreTarget
+
+  const noProgressTurns = clampNumber(raw['noProgressTurns'], 1, 10_000)
+  if (noProgressTurns !== undefined) config.noProgressTurns = noProgressTurns
+
+  const komi = clampNumber(raw['komi'], 0, 1_000)
+  if (komi !== undefined) config.komi = komi
+
+  const clockInitialMs = clampNumber(raw['clockInitialMs'], 1_000, 86_400_000)
+  if (clockInitialMs !== undefined) config.clockInitialMs = clockInitialMs
+
+  const clockIncrementMs = clampNumber(raw['clockIncrementMs'], 0, 600_000)
+  if (clockIncrementMs !== undefined) config.clockIncrementMs = clockIncrementMs
+
+  const setupTimeoutMs = clampNumber(raw['setupTimeoutMs'], 1_000, 3_600_000)
+  if (setupTimeoutMs !== undefined) config.setupTimeoutMs = setupTimeoutMs
+
+  if (typeof raw['clockEnabled'] === 'boolean') config.clockEnabled = raw['clockEnabled']
+
+  return Object.keys(config).length === 0 ? undefined : config
+}
+
+// --------------------------------------------------------------- logging
+
+/**
+ * Strip token segments out of a URL before it reaches the log stream.
+ * `/llm/abc123/14/e2e4` -> `/llm/***\/14/e2e4`, `/api/game/abc123` -> `/api/game/***`.
+ */
+export function redactTokens(url: string): string {
+  return url
+    .replace(/^\/llm\/[^/?]+/, '/llm/***')
+    .replace(/^\/api\/game\/[^/?]+/, '/api/game/***')
+    .replace(/^\/api\/links\/[^/?]+/, '/api/links/***')
+    .replace(/^\/g\/[^/?]+/, '/g/***')
+}
+
+// --------------------------------------------------------------- app
+
+export function buildApp(): ReturnType<typeof Fastify> {
+  const app = Fastify({
+    logger: {
+      level: process.env.LOG_LEVEL ?? 'info',
+      serializers: {
+        // Tokens ARE the auth. Fastify logs req.url by default, which would put
+        // every player's bearer credential into the log stream.
+        req(request: { method: string; url: string; ip?: string }) {
+          return {
+            method: request.method,
+            url: redactTokens(request.url),
+            remoteAddress: request.ip,
+          }
+        },
+      },
+    },
+    trustProxy: true,
+  })
+
+  // A bare `POST /api/game` with a JSON content-type and no body is normal here.
+  app.addContentTypeParser<string>(
+    'application/json',
+    { parseAs: 'string' },
+    (_request, body, done) => {
+      if (body.trim().length === 0) {
+        done(null, {})
+        return
+      }
+      try {
+        done(null, JSON.parse(body) as unknown)
+      } catch (error) {
+        done(error as Error, undefined)
+      }
+    },
+  )
+
+  app.get('/healthz', async () => ({ ok: true, games: roomCount() }))
+
+  app.post<{ Body: { config?: unknown } | undefined }>('/api/game', async (request) => {
+    const room = createRoom(readConfig(request.body?.config))
+    return describeNewRoom(room)
+  })
+
+  app.get<{ Params: { token: string } }>('/api/game/:token', async (request, reply) => {
+    const session = resolveToken(request.params.token)
+    if (session === undefined) {
+      void reply.status(404)
+      return { error: 'unknown token' }
+    }
+    void reply.header('Cache-Control', 'no-store')
+    return serialiseFor(session.room, session.viewer)
+  })
+
+  // gamebook §10: a spectator enters through a specific player and inherits that
+  // player's view, so each player needs the link that hands out their own view.
+  app.get<{ Params: { token: string } }>('/api/links/:token', async (request, reply) => {
+    const session = resolveToken(request.params.token)
+    if (session === undefined) {
+      void reply.status(404)
+      return { error: 'unknown token' }
+    }
+    void reply.header('Cache-Control', 'no-store')
+    const viewer: Viewer = session.viewer
+    return {
+      gameId: session.room.id,
+      viewer,
+      seat: session.seat ?? null,
+      color: viewerColor(viewer),
+      // hand this to a friend to have them watch over your shoulder
+      spectatorUrl:
+        viewer.kind === 'player'
+          ? playUrl(session.room.spectatorTokens[viewer.color])
+          : playUrl(session.token),
+      llmUrl: viewer.kind === 'player' ? llmUrl(session.token) : null,
+    }
+  })
+
+  registerLlmRoutes(app, PUBLIC_BASE_URL)
+
+  if (existsSync(WEB_DIST)) {
+    void app.register(fastifyStatic, {
+      root: WEB_DIST,
+      index: ['index.html'],
+      maxAge: '1h',
+      setHeaders: (response, filePath) => {
+        // the shell must never be cached; hashed assets under /assets may be
+        if (filePath.endsWith('.html')) response.setHeader('Cache-Control', 'no-cache')
+      },
+    })
+  } else {
+    app.log.warn(`web client build not found at ${WEB_DIST} — serving API only`)
+  }
+
+  // SPA fallback: any unmatched GET that is not an API path gets the shell.
+  app.setNotFoundHandler(async (request, reply) => {
+    const path = request.url.split('?')[0] ?? '/'
+    const isApi =
+      path.startsWith('/api') ||
+      path.startsWith('/llm') ||
+      path.startsWith('/socket.io') ||
+      path === '/healthz'
+
+    if (isApi || (request.method !== 'GET' && request.method !== 'HEAD')) {
+      void reply.status(404)
+      return { error: 'not found' }
+    }
+
+    try {
+      const shell = await readFile(WEB_INDEX, 'utf8')
+      void reply.type('text/html; charset=utf-8').header('Cache-Control', 'no-cache')
+      return shell
+    } catch {
+      void reply.status(503).type('text/plain; charset=utf-8')
+      return 'The web client has not been built yet. Run: npm run build\n'
+    }
+  })
+
+  return app
+}
+
+function describeNewRoom(room: Room): Record<string, unknown> {
+  const hostColor = room.hostColor
+  const guestColor = seatColor(room, 'guest')
+  const hostToken = room.playerTokens[hostColor]
+  const guestToken = room.playerTokens[guestColor]
+  // even a scalar off the config comes through the serialiser — there is exactly
+  // one road out of a GameState in this package and it runs through redaction
+  const config = serialiseFor(room, { kind: 'player', color: hostColor }).config
+
+  return {
+    gameId: room.id,
+    hostToken,
+    guestToken,
+    hostUrl: playUrl(hostToken),
+    guestUrl: playUrl(guestToken),
+    // gamebook §9: the coin flip already happened, server-side
+    hostColor,
+    guestColor,
+    // ONLY the host's own links. Returning the opponent's spectator token would
+    // let the creator read every enemy 兵種 for the whole game — the redactor
+    // would work perfectly and still hand over everything, because it would be
+    // given the wrong Viewer. Each player gets their own colour's spectator link
+    // from GET /api/game/:token instead.
+    spectatorUrl: playUrl(room.spectatorTokens[hostColor]),
+    llmUrl: llmUrl(hostToken),
+    setupTimeoutMs: config.setupTimeoutMs,
+  }
+}
+
+// --------------------------------------------------------------- start
+
+async function main(): Promise<void> {
+  const app = buildApp()
+
+  const io: GameServer = new SocketIOServer(app.server, {
+    serveClient: false,
+    path: '/socket.io',
+  })
+
+  const log: ServerLog = {
+    info: (message) => {
+      app.log.info(message)
+    },
+    warn: (message) => {
+      app.log.warn(message)
+    },
+    error: (message) => {
+      app.log.error(message)
+    },
+  }
+
+  registerSocketHandlers(io, log)
+
+  let closing = false
+  const shutdown = (signal: string): void => {
+    if (closing) return
+    closing = true
+    app.log.info(`${signal} received, shutting down`)
+    void io.close()
+    disposeAll()
+    void app.close().then(
+      () => process.exit(0),
+      () => process.exit(1),
+    )
+  }
+  process.once('SIGINT', () => {
+    shutdown('SIGINT')
+  })
+  process.once('SIGTERM', () => {
+    shutdown('SIGTERM')
+  })
+
+  await app.listen({ port: PORT, host: HOST })
+  app.log.info(`行軍西洋棋 server ready — public base URL ${PUBLIC_BASE_URL}`)
+}
+
+/**
+ * Only listen when this file IS the process. `buildApp` is exported so it can be
+ * driven in-process, and importing it must not bind a port. Anything other than a
+ * clean "argv[1] is some other file" answer falls through to starting, so the
+ * normal `node dist/index.js` path can never be argued out of running.
+ */
+function isEntrypoint(): boolean {
+  const invoked = process.argv[1]
+  if (invoked === undefined) return true
+  try {
+    return resolve(invoked) === resolve(fileURLToPath(import.meta.url))
+  } catch {
+    return true
+  }
+}
+
+if (isEntrypoint()) {
+  main().catch((error: unknown) => {
+    process.stderr.write(`failed to start: ${error instanceof Error ? error.message : 'unknown'}\n`)
+    process.exit(1)
+  })
+}
