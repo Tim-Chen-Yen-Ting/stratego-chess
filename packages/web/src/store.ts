@@ -1,5 +1,16 @@
 import { create } from 'zustand'
-import type { Color, Move, PieceId, Rank, Viewer, ViewerState } from '@xiyang/rules'
+import { STARTING_LAYOUT, castlePlan } from '@xiyang/rules'
+import type {
+  Color,
+  CombatOutcome,
+  GameEvent,
+  Move,
+  PieceId,
+  Rank,
+  Square,
+  Viewer,
+  ViewerState,
+} from '@xiyang/rules'
 import { RANKS_IN_ORDER } from './constants.js'
 import { connectGame, type GameSocket } from './socket.js'
 
@@ -24,6 +35,13 @@ interface AppState {
    * the redaction layer. Nothing in this store validates a mark against the
    * position, filters the offered ranks, or counts what is left — that would
    * make it a solver, which §10 forbids for players.
+   *
+   * Keyed by PieceId, never by square, so a mark survives the piece moving AND
+   * the piece leaving the board. A CAPTURED piece is the one a player most wants
+   * to annotate: the killing event is public, the player works the range out in
+   * their own head, and they write it down here before they forget. The store
+   * has no opinion about which pieces are annotatable — that is an entitlement
+   * question the UI answers (enemy, rank not disclosed), not a deduction.
    */
   pencilScope: string | null
   pencilMarks: Record<PieceId, Rank[]>
@@ -64,6 +82,13 @@ const PENCIL_TTL_MS = 7 * 24 * 60 * 60 * 1000
  * v1 held one rank per piece. v2 holds a set. Records at any other version are
  * discarded on sight rather than migrated — a notepad is cheap to rewrite and a
  * migration is one more thing that can silently corrupt it.
+ *
+ * Extending marks to captured pieces did NOT bump this. The stored shape is
+ * `{pieceId: rankName[]}` either way — a dead piece is just a piece id that
+ * happens to have `square === null` in the payload, and nothing about a record
+ * says where its pieces stand. A v2 notepad written before captured pieces were
+ * annotatable reads back correctly; bumping would have thrown away the notes of
+ * everyone mid-game for no gain.
  */
 const PENCIL_VERSION = 2
 
@@ -326,4 +351,127 @@ export function canAct(view: ViewerState): boolean {
 export function myLegalMoves(view: ViewerState): Move[] {
   if (!canAct(view)) return []
   return view.legalMoves ?? []
+}
+
+// ---------- which event removed which piece (log bookkeeping, not a solver) ----------
+
+/**
+ * 紀錄給，解算不給 (gamebook §10). A `GameEvent` names squares, not pieces, so
+ * "what killed my knight?" is buried twenty lines up the log even though the
+ * answer was announced out loud at the time. What follows re-associates each
+ * removed piece with the public event that removed it, so the captured tray can
+ * put the announcement next to the piece instead of making the player scroll.
+ *
+ * THIS IS LOG, NOT SOLVER, and the line between them is exactly where the
+ * carrier layer ends:
+ *
+ *   · Everything consumed here is public to both sides — the fixed opening
+ *     position (`STARTING_LAYOUT`), the from/to squares in the log, the castling
+ *     geometry (`castlePlan`), and the outcome kind the server announced. The
+ *     rules engine's own LLM renderer replays the same record the same way.
+ *   · Who died is READ OFF the announced outcome, never worked out: an
+ *     `attacker-wins` event says the defender was removed, a `fizzle` says the
+ *     bomb was. No rank is compared, no rank is guessed, no candidate set is
+ *     built, nothing is counted against §2. The 兵種 layer is not touched at all.
+ *
+ * A consumer that turned a record into "so it must be one of these five" would
+ * be the solver §10 forbids. Showing the event and stopping is the whole point.
+ */
+export interface CaptureRecord {
+  /** the ply whose ACTION sub-step removed this piece */
+  ply: number
+  /** the public event, verbatim from `view.log` */
+  event: GameEvent
+  /** did this piece move into the contact, or was it the one standing there */
+  role: 'attacker' | 'defender'
+  /** the square it was standing on when it was removed (§4 位置結算) */
+  square: Square
+}
+
+/**
+ * Who is left standing, restated from the announcement. Every branch is a
+ * transcription of gamebook §4「翻明總表」/ §5 — not a rank comparison, which
+ * the client could not perform and must never attempt.
+ */
+function survivors(
+  outcome: CombatOutcome,
+  mover: Color,
+): { attacker: boolean; defender: boolean } {
+  switch (outcome.kind) {
+    case 'attacker-wins':
+      return { attacker: true, defender: false }
+    case 'defender-wins':
+      return { attacker: false, defender: true }
+    // 同階雙亡 and both bomb announcements clear the square (§4 位置結算)
+    case 'mutual-rank':
+    case 'bomb-detonate':
+    case 'bomb-vs-bomb':
+      return { attacker: false, defender: false }
+    case 'fizzle': {
+      // 有煙無傷: the 爆裂物 is the one removed, so the announced survivor colour
+      // says which side of the contact walked away (§5).
+      const attackerLived = outcome.survivorColor === mover
+      return { attacker: attackerLived, defender: !attackerLived }
+    }
+  }
+}
+
+function applyEventToIds(
+  board: (PieceId | undefined)[],
+  out: Map<PieceId, CaptureRecord>,
+  e: GameEvent,
+): void {
+  if (e.move.kind === 'pass') return
+
+  if (e.move.kind === 'castle') {
+    const plan = castlePlan(e.color, e.move.side)
+    const king = board[plan.kingFrom]
+    const rook = board[plan.rookFrom]
+    board[plan.kingFrom] = undefined
+    board[plan.rookFrom] = undefined
+    if (king !== undefined) board[plan.kingTo] = king
+    if (rook !== undefined) board[plan.rookTo] = rook
+    return
+  }
+
+  const { from, to } = e.move
+
+  if (!e.combat) {
+    const id = board[from]
+    board[from] = undefined
+    if (id !== undefined) board[to] = id
+    return
+  }
+
+  const { outcome, attackerSquare, defenderSquare, survivorSquare } = e.combat
+  const attacker = board[attackerSquare]
+  const defender = board[defenderSquare]
+  board[attackerSquare] = undefined
+  board[defenderSquare] = undefined
+  // en passant is the one case where the destination is neither contact square
+  board[to] = undefined
+
+  const alive = survivors(outcome, e.color)
+
+  if (!alive.attacker && attacker !== undefined) {
+    out.set(attacker, { ply: e.ply, event: e, role: 'attacker', square: attackerSquare })
+  }
+  if (!alive.defender && defender !== undefined) {
+    out.set(defender, { ply: e.ply, event: e, role: 'defender', square: defenderSquare })
+  }
+
+  const survivor = alive.attacker ? attacker : alive.defender ? defender : undefined
+  if (survivor !== undefined && survivorSquare !== null) board[survivorSquare] = survivor
+}
+
+/**
+ * piece id → the public event that removed it. Pieces still on the board, and
+ * any piece the log never touched, simply have no entry.
+ */
+export function captureRecords(log: readonly GameEvent[]): Map<PieceId, CaptureRecord> {
+  const out = new Map<PieceId, CaptureRecord>()
+  const board = new Array<PieceId | undefined>(64)
+  for (const slot of STARTING_LAYOUT) board[slot.square] = slot.id
+  for (const e of log) applyEventToIds(board, out, e)
+  return out
 }

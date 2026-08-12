@@ -42,6 +42,8 @@ export {
   DISTRIBUTION,
   RANK_NAMES_ZH,
   RANK_ORDER,
+  SCORING_CENTRE_4,
+  SCORING_WIDE_8,
 } from './constants.js'
 
 // ---------- board helpers ----------
@@ -110,6 +112,8 @@ export { isBombImmune, rankOrder, resolveCombat, resolvePieceCombat } from './co
 export type { CombatResolution } from './combat.js'
 
 // ---------- game loop (§4, §6, §7, §8) ----------
+// `scoringPoints` / `scoringSquares` take the game's config; `centerPoints` /
+// `centerSquares` are their deprecated former names.
 export {
   applyMove,
   centerPoints,
@@ -117,6 +121,8 @@ export {
   flagFall,
   isGameOver,
   resign,
+  scoringPoints,
+  scoringSquares,
   tickClock,
 } from './game.js'
 

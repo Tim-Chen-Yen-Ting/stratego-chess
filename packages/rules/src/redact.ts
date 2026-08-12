@@ -149,7 +149,11 @@ export function stateForViewer(s: GameState, v: Viewer): ViewerState {
     clockMs: { white: s.clockMs.white, black: s.clockMs.black },
     noProgressTurns: s.noProgressTurns,
     status: copyStatus(s.status),
-    config: { ...s.config },
+    // scoringSquares is an array, so a shallow spread would alias it straight
+    // through the boundary — a consumer could push onto the ViewerState copy and
+    // mutate the authoritative GameState. Every other field here is deep-copied
+    // for exactly that reason; this one has to be too.
+    config: { ...s.config, scoringSquares: [...s.config.scoringSquares] },
     viewer: copyViewer(v),
   }
 

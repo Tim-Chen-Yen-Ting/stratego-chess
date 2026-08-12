@@ -4,16 +4,20 @@ import type { Color, PieceId, Rank, Square, ViewerPiece } from '@xiyang/rules'
 import {
   CARRIER_GLYPH,
   CARRIER_LABEL,
-  CENTER_SQUARES,
   RANKS_IN_ORDER,
   RANK_LABEL,
+  scoringSquaresOf,
 } from '../constants.js'
 import { isDarkSquare, squareName } from '../format.js'
+import { useStore } from '../store.js'
 
 /**
  * Dumb 8×8 grid. It renders whatever the server sent and reports clicks and
  * drops. It knows nothing about how pieces move: `targets` is always derived
- * from the `legalMoves` in the payload (techspec §7). Nothing here infers,
+ * from the `legalMoves` in the payload (techspec §7). Its one reach outside the
+ * props is the 計分區 highlight, which it takes from `config.scoringSquares` on
+ * the live payload when the caller does not pass it — a per-game value that
+ * must never come from a module constant. Nothing here infers,
  * narrows or validates a 兵種 — a dropped rank is handed straight back to the
  * caller as an opaque DataTransfer, and the pencil popover offers all eleven
  * ranks on every annotatable piece, always (gamebook §10).
@@ -28,6 +32,15 @@ export interface BoardProps {
   pieces: readonly ViewerPiece[]
   /** which colour sits at the bottom */
   orientation: Color
+  /**
+   * The 計分區 to highlight (gamebook §7). Optional: when the caller does not
+   * pass it the board reads `config.scoringSquares` off the live payload
+   * itself. Either way the value ORIGINATES IN THE GAME'S CONFIG — 附錄 B makes
+   * the scoring area a per-game tunable, and a game created with the wide
+   * eight-square area must not be drawn with the four-square one. Never a
+   * module constant.
+   */
+  scoringSquares?: readonly Square[]
   selected?: Square | null
   /** legal destination squares for the selected piece */
   targets?: readonly Square[]
@@ -154,6 +167,7 @@ export function Board(props: BoardProps) {
   const {
     pieces,
     orientation,
+    scoringSquares,
     selected = null,
     targets = [],
     origins = [],
@@ -175,6 +189,17 @@ export function Board(props: BoardProps) {
     onSquareDragEnd,
     onSquareDrop,
   } = props
+
+  /*
+   * The 計分區, from the config of the game actually on screen. The selector
+   * returns a stable reference (see `scoringSquaresOf`), and it is subscribed
+   * unconditionally so the hook order never changes. A caller that already has
+   * the config in hand may pass `scoringSquares` and this is ignored; what is
+   * NOT allowed is a constant, which would keep painting d4 e4 d5 e5 on a board
+   * whose config scores eight squares.
+   */
+  const configSquares = useStore((s) => (s.view === null ? null : scoringSquaresOf(s.view.config)))
+  const scoreSquares = scoringSquares ?? configSquares ?? []
 
   // purely visual: which drop target the pointer is currently over
   const [hoverSq, setHoverSq] = useState<Square | null>(null)
@@ -218,7 +243,9 @@ export function Board(props: BoardProps) {
   const targetSet = new Set(targets)
   const originSet = new Set(origins)
   const lastSet = new Set(lastMove)
-  const centerSet = new Set(CENTER_SQUARES)
+  // `sq-center` / `center-dot` are the shared stylesheet's names for the
+  // scoring highlight and stay as they are; only the membership is per-game.
+  const centerSet = new Set(scoreSquares)
 
   const rows = orientation === 'white' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
   const cols = orientation === 'white' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]

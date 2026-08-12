@@ -105,6 +105,21 @@ function readConfig(input: unknown): Partial<GameConfig> | undefined {
 
   if (typeof raw['clockEnabled'] === 'boolean') config.clockEnabled = raw['clockEnabled']
 
+  // The engine trusts this list, so it is sanitised here rather than there:
+  // integers only, on the board, deduped, and never empty — a game with no
+  // scoring squares could not be won on points at all.
+  const rawSquares = raw['scoringSquares']
+  if (Array.isArray(rawSquares)) {
+    const squares = [
+      ...new Set(
+        rawSquares.filter(
+          (sq): sq is number => Number.isInteger(sq) && (sq as number) >= 0 && (sq as number) < 64,
+        ),
+      ),
+    ].sort((a, b) => a - b)
+    if (squares.length > 0) config.scoringSquares = squares
+  }
+
   return Object.keys(config).length === 0 ? undefined : config
 }
 
@@ -274,7 +289,14 @@ function describeNewRoom(room: Room): Record<string, unknown> {
     // from GET /api/game/:token instead.
     spectatorUrl: playUrl(room.spectatorTokens[hostColor]),
     llmUrl: llmUrl(hostToken),
+    // Echo back what the server ACTUALLY built, not what was asked for. The
+    // creation form confirms the settings to the player, and confirming a value
+    // that was clamped or dropped on the way in is worse than not confirming it.
     setupTimeoutMs: config.setupTimeoutMs,
+    scoreTarget: config.scoreTarget,
+    noProgressTurns: config.noProgressTurns,
+    clockEnabled: config.clockEnabled,
+    scoringSquares: config.scoringSquares,
   }
 }
 

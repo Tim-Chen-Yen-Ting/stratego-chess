@@ -13,7 +13,14 @@ import {
   RANK_LABEL,
 } from '../constants.js'
 import { colorLabel, formatClock, formatScore, resultText, squareName } from '../format.js'
-import { canAct, myLegalMoves, pencilSeatKey, useStore, viewerColor } from '../store.js'
+import {
+  canAct,
+  captureRecords,
+  myLegalMoves,
+  pencilSeatKey,
+  useStore,
+  viewerColor,
+} from '../store.js'
 
 /**
  * Game screen (techspec §7).
@@ -28,6 +35,11 @@ import { canAct, myLegalMoves, pencilSeatKey, useStore, viewerColor } from '../s
  * under the captured tray. The board keeps its natural size — `--sq` is a vmin
  * clamp, and the centre grid column is `min-content`, so the side columns give
  * way first and the whole thing folds to one column when it no longer fits.
+ *
+ * `captures` is the one derived structure this screen builds: piece id → the
+ * public event that removed it, replayed off `view.log` (see `captureRecords`).
+ * It is the log re-indexed, so the captured tray can put an announcement beside
+ * the piece it was about. Nothing downstream turns it into a candidate set.
  */
 
 interface GameProps {
@@ -75,6 +87,10 @@ export function Game({ view }: GameProps) {
   useEffect(() => {
     loadPencilMarks(view.id, seat)
   }, [view.id, seat, loadPencilMarks])
+
+  // piece id → the public event that removed it. Pure log bookkeeping; see the
+  // header note and `captureRecords`.
+  const captures = useMemo(() => captureRecords(view.log), [view.log])
 
   const movesFrom = useMemo(() => {
     const m = new Map<Square, BoardMove[]>()
@@ -124,15 +140,21 @@ export function Game({ view }: GameProps) {
   )
 
   /**
-   * Squares that accept a dropped pencil mark: enemy pieces on the board that
-   * are not yet 翻明. This is entitlement bookkeeping — which pieces the player
-   * is allowed to scribble on — and says nothing about what rank they hold.
+   * Squares that accept a dropped pencil mark: enemy pieces on the board whose
+   * 兵種 the payload does not carry. This is entitlement bookkeeping — which
+   * pieces the player is allowed to scribble on — and says nothing about what
+   * rank they hold. `rank === null` rather than `!revealed` so the final reveal
+   * at game end (§10 終局公開全部兵種) retires the notepad too: once every rank
+   * is a fact there is nothing left to guess at.
+   *
+   * Captured pieces are annotatable as well, but they have no square; the
+   * captured tray and the pencil panel open their picker inline.
    */
   const pencilSquares = useMemo(() => {
     const set = new Set<Square>()
     if (me === null) return set
     for (const p of view.pieces) {
-      if (p.color === me || p.square === null || p.revealed) continue
+      if (p.color === me || p.square === null || p.rank !== null) continue
       set.add(p.square)
     }
     return set
@@ -351,14 +373,21 @@ export function Game({ view }: GameProps) {
 
           {me !== null && (
             <p className="muted small">
-              右鍵或長按敵方棋子可寫下猜測（未選取自己棋子時，左鍵點擊亦可）。一顆棋子可標多個兵種；系統不驗證、不推論。
+              右鍵或長按敵方棋子可寫下猜測（未選取自己棋子時，左鍵點擊亦可）。已離場的棋子在「已離場棋子」面板按「標記」即可標。一顆棋子可標多個兵種；系統不驗證、不推論。
             </p>
           )}
         </div>
 
         {/* ---- right: what has left the board, what is known, what is guessed ---- */}
         <div className="xy-col xy-col-right">
-          <CapturedTray pieces={view.pieces} me={me} />
+          <CapturedTray
+            pieces={view.pieces}
+            me={me}
+            captures={captures}
+            marks={pencilMarks}
+            onToggleMark={togglePencilMark}
+            onClearMark={clearPencilMark}
+          />
 
           <section className="panel">
             <h2>已翻明的敵方兵種</h2>
@@ -384,6 +413,7 @@ export function Game({ view }: GameProps) {
             pieces={view.pieces}
             me={me}
             marks={pencilMarks}
+            captures={captures}
             onAdd={addPencilMark}
             onToggle={togglePencilMark}
             onClear={clearPencilMark}

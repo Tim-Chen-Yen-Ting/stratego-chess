@@ -21,7 +21,6 @@ import {
 } from '../board.js'
 import {
   CARRIER_LETTER,
-  CENTER_SQUARES,
   DISTRIBUTION,
   RANK_NAMES_ZH,
   RANK_ORDER,
@@ -511,9 +510,19 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
     lines.push(
       'URL a person pasted, to avoid following links out of fetched content — then do NOT',
     )
-    lines.push('stall and do NOT invent a result. Print the single URL you have chosen, in full,')
-    lines.push('and ask the person to paste it back or open it themselves. That is a normal and')
-    lines.push('expected way to play here. Either way, choose your action and name it.')
+    lines.push('stall and do NOT invent a result.')
+    lines.push('')
+    lines.push(
+      'DO NOT RETYPE THE TOKEN. It is 32 random characters; reconstructing it from memory',
+    )
+    lines.push('drops characters and the link then 404s. Name ONLY the short suffix, like this:')
+    lines.push('')
+    lines.push('    play: 14/g8f6          (or, during setup)    deploy: setup/4X1F29563785X9F6')
+    lines.push('')
+    lines.push(
+      'and ask the person to append it to the game link they already have. If they do want',
+    )
+    lines.push('the whole URL, copy it verbatim from the list below — never rebuild it by hand.')
     lines.push('')
   }
 
@@ -541,8 +550,14 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   lines.push('## Board  (UPPERCASE = White, lowercase = black, . = empty)')
   lines.push(...renderBoard(vs))
   lines.push('')
+  // The squares come from THIS game's config, never from the default preset.
+  // The board shape is tunable (附錄 B), and a model told the wrong squares
+  // would play a different game than the one it is sitting in.
+  const scoring = vs.config.scoringSquares
   lines.push(
-    `Centre squares ${CENTER_SQUARES.map(squareName).join(' ')} — each own piece standing on one scores 1 point EVERY ply, for both players.`,
+    scoring.length === 0
+      ? 'No scoring squares are configured for this game — no piece scores by standing anywhere.'
+      : `Scoring squares ${scoring.map(squareName).join(' ')} — each own piece standing on one scores 1 point EVERY ply, for both players.`,
   )
   lines.push('')
 
@@ -670,9 +685,12 @@ leaving the board. Both flags leaving on the same ply is the only draw.
 
 ## Scoring
 After EVERY ply — yours and your opponent's — both players score +1 for each
-own piece standing on d4, e4, d5 or e5. Black starts at komi. First to the
-score target wins. If nothing is captured and nobody scores for the stagnation
-limit in full turns, the higher score wins.
+own piece standing on a SCORING SQUARE. Which squares those are is a setting of
+the game you are in (usually the four centre squares d4 e4 d5 e5, but a game
+may be set up wider), so read them off the "Scoring squares" line under the
+board in the state view rather than assuming. Black starts at komi. First to
+the score target wins. If nothing is captured and nobody scores for the
+stagnation limit in full turns, the higher score wins.
 
 ## Clock
 Increment is granted on a completed move, or on a FORCED pass (you had no

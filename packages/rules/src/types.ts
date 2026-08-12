@@ -76,6 +76,15 @@ export interface GameConfig {
   scoreTarget: number        // X, default 40
   noProgressTurns: number    // N, default 30
   komi: number               // default 0.5, credited to black
+  /**
+   * ② 結算階段 scoring squares (§7). Default `SCORING_CENTRE_4` — d4/e4/d5/e5,
+   * the gamebook's 中央四格. `SCORING_WIDE_8` adds the a/h flanks.
+   *
+   * 附錄 B: the board shape is a tunable, so settlement reads THIS list and
+   * never a module constant. A game therefore keeps scoring the shape it was
+   * created with, whatever a later preset says.
+   */
+  scoringSquares: readonly Square[]
   clockInitialMs: number     // default 900_000
   clockIncrementMs: number   // default 10_000
   setupTimeoutMs: number     // default 180_000

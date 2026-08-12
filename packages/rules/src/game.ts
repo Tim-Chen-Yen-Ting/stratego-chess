@@ -12,12 +12,12 @@
  * sub-object of the returned state is freshly allocated.
  */
 
-import { CENTER_SQUARES } from './constants.js'
 import { opposite, promotionRank, rankOf } from './board.js'
 import { resolveCombat } from './combat.js'
 import { hasAnyPieceMove, matchMove, type ResolvedMove } from './moves.js'
 import type {
   Color,
+  GameConfig,
   GameEvent,
   GameState,
   Move,
@@ -34,14 +34,31 @@ function initialScore(s: GameState): { white: number; black: number } {
   return { white: 0, black: s.config.komi }
 }
 
-/** 中央計分 (§7): +1 per own piece standing on d4 / e4 / d5 / e5. */
-export function centerPoints(pieces: readonly Piece[], color: Color): number {
+/**
+ * ② 結算 (§7): +1 per own piece standing on a scoring square.
+ *
+ * The square list is a PARAMETER, never a module constant — callers pass
+ * `state.config.scoringSquares` (附錄 B: 必須為設定值，不得寫死), so a game
+ * scores the shape it was created with. This counts PIECES, not squares, so a
+ * duplicate in the list cannot pay twice.
+ */
+export function scoringPoints(
+  pieces: readonly Piece[],
+  color: Color,
+  scoringSquares: readonly Square[],
+): number {
   let n = 0
   for (const p of pieces) {
-    if (p.color === color && p.square !== null && CENTER_SQUARES.includes(p.square)) n++
+    if (p.color === color && p.square !== null && scoringSquares.includes(p.square)) n++
   }
   return n
 }
+
+/**
+ * @deprecated Former name of {@link scoringPoints}, when the squares were fixed
+ * at 中央四格. Kept so existing imports resolve; the square list is now required.
+ */
+export const centerPoints = scoringPoints
 
 /** Did the given ply move the needle for §7③ — a capture, or any point scored? */
 function plyHadProgress(
@@ -188,9 +205,10 @@ export function applyMove(s: GameState, move: Move): GameState {
 
   if (!result) {
     // Both players score, every single ply (§7). A piece captured in ① is
-    // already off the board and does not score for this ply.
-    score.white += centerPoints(pieces, 'white')
-    score.black += centerPoints(pieces, 'black')
+    // already off the board and does not score for this ply. The board shape
+    // comes from THIS game's config, never from a constant.
+    score.white += scoringPoints(pieces, 'white', s.config.scoringSquares)
+    score.black += scoringPoints(pieces, 'black', s.config.scoringSquares)
   }
 
   const event: GameEvent = {
@@ -305,7 +323,20 @@ export function tickClock(s: GameState, color: Color, elapsedMs: number): GameSt
   }
 }
 
-/** Squares that score this ply, for UI highlighting. */
-export function centerSquares(): Square[] {
-  return [...CENTER_SQUARES]
+/**
+ * Squares that score this ply, for UI highlighting. Reads the game's own
+ * config, so a board created with a different preset highlights that preset.
+ *
+ * Takes anything carrying a config — `GameState` and `ViewerState` both fit, so
+ * a client can ask the same question of the redacted state it actually holds.
+ * Returns a fresh mutable copy; the config's own list is frozen.
+ */
+export function scoringSquares(s: { config: GameConfig }): Square[] {
+  return [...s.config.scoringSquares]
 }
+
+/**
+ * @deprecated Former name of {@link scoringSquares}, when it answered from a
+ * constant and took no argument. Kept so existing imports resolve.
+ */
+export const centerSquares = scoringSquares

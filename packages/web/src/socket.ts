@@ -63,6 +63,12 @@ export interface CreatedGame {
   hostToken: string
   guestUrl: string
   hostUrl: string
+  /** what the server actually built — may differ from what was requested */
+  setupTimeoutMs?: number
+  scoreTarget?: number
+  noProgressTurns?: number
+  clockEnabled?: boolean
+  scoringSquares?: readonly number[]
 }
 
 // POST /api/game lives in Create.tsx (postCreateGame), which sends the config

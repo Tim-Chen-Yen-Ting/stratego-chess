@@ -6,6 +6,7 @@
  * part of the normative contract.
  */
 
+import { parseSquare } from './board.js'
 import type { Carrier, Color, GameConfig, Rank, Square } from './types.js'
 
 // ---------------------------------------------------------------------------
@@ -23,11 +24,53 @@ export const DISTRIBUTION: Record<Rank, number> = {
   battalion: 2, company: 1, platoon: 1, engineer: 2, flag: 1, bomb: 2,
 }  // sums to 16
 
-/** d4, e4, d5, e5 */
-export const CENTER_SQUARES: Square[] = [27, 28, 35, 36]
+// ---------------------------------------------------------------------------
+// 結算格 presets (§7 ②, 附錄 B)
+//
+// Built from square NAMES, never from literal indices. The name→index mapping
+// is the one place where a mistake is invisible: an off-by-one produces no
+// error, no crash and no odd-looking board — the game simply scores the wrong
+// four squares for the rest of its life, and every score in it is wrong.
+// `test/scoring-squares.test.ts` asserts the mapping back out by name.
+// ---------------------------------------------------------------------------
+
+function squaresNamed(...names: readonly string[]): readonly Square[] {
+  return Object.freeze(
+    names.map((n) => {
+      const sq = parseSquare(n)
+      if (sq === null) throw new Error(`constants: not a square name: ${n}`)
+      return sq
+    }),
+  )
+}
+
+/** 中央四格 d4 e4 d5 e5 — the gamebook §7 default. `[27, 28, 35, 36]`. */
+export const SCORING_CENTRE_4: readonly Square[] = squaresNamed('d4', 'e4', 'd5', 'e5')
+
+/**
+ * The centre four PLUS the a/h flanks on the same two ranks: a4 h4 a5 h5
+ * (`[24, 31, 32, 39]`). A playtest shape — the centre-only board funnels every
+ * piece into four squares and leaves the flanks dead, so the wide board is here
+ * to be tried, not because it is better. Set it via `createGame`'s config.
+ */
+export const SCORING_WIDE_8: readonly Square[] = Object.freeze([
+  ...SCORING_CENTRE_4,
+  ...squaresNamed('a4', 'h4', 'a5', 'h5'),
+])
+
+/**
+ * d4, e4, d5, e5.
+ *
+ * @deprecated Alias of `SCORING_CENTRE_4`, kept so existing importers keep
+ * working. It is the DEFAULT preset, not "the scoring squares" — a game may be
+ * configured with any shape, so anything that scores, highlights or describes
+ * the board must read `config.scoringSquares` instead.
+ */
+export const CENTER_SQUARES: readonly Square[] = SCORING_CENTRE_4
 
 export const DEFAULT_CONFIG: GameConfig = {
   scoreTarget: 40, noProgressTurns: 30, komi: 0.5,
+  scoringSquares: SCORING_CENTRE_4,
   clockInitialMs: 900_000, clockIncrementMs: 10_000,
   setupTimeoutMs: 180_000, clockEnabled: true,
 }

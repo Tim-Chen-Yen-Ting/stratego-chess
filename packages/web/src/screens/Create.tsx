@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { DEFAULT_CONFIG } from '@xiyang/rules'
+import type { Square } from '@xiyang/rules'
 import type { CreatedGame } from '../socket.js'
-import { formatClock } from '../format.js'
+import { SCORING_AREAS, SCORING_AREA_IDS, type ScoringAreaId } from '../constants.js'
+import { formatClock, squareName } from '../format.js'
 import { localizeUrl } from '../url.js'
 
 /**
@@ -21,11 +23,30 @@ interface CreateOptions {
   clockEnabled: boolean
   scoreTarget: number
   noProgressTurns: number
+  setupTimeoutMs: number
+  /** 計分區 (gamebook §7, 附錄 B) — which squares score, for this game only. */
+  scoringSquares: readonly Square[]
 }
+
+/**
+ * Deploying against an LLM means relaying URLs through a chat window, which
+ * takes far longer than a person dragging ranks onto a board. At the 3-minute
+ * default the timer fires mid-conversation and the server rolls a RANDOM army
+ * over the deployment the model was still choosing — silently, because a
+ * random army looks exactly like a chosen one. So the untimed preset, which IS
+ * the LLM preset, gets an hour.
+ */
+const SETUP_MINUTES_TIMED = Math.round(DEFAULT_CONFIG.setupTimeoutMs / 60_000)
+const SETUP_MINUTES_UNTIMED = 60
 
 const CLOCK_SUMMARY = `${formatClock(DEFAULT_CONFIG.clockInitialMs)} + ${Math.round(
   DEFAULT_CONFIG.clockIncrementMs / 1000,
 )} 秒`
+
+/** "d4 e4 d5 e5" — a plain listing of the chosen squares, for the hint line. */
+function squareList(squares: readonly Square[]): string {
+  return squares.map(squareName).join(' ')
+}
 
 /**
  * POST /api/game (techspec §5). The body is NESTED — `{ config: { ... } }` —
@@ -74,15 +95,32 @@ export function Create() {
   const [copied, setCopied] = useState<string | null>(null)
 
   const [clockEnabled, setClockEnabled] = useState(true)
-  const [scoreTarget, setScoreTarget] = useState(String(DEFAULT_CONFIG.scoreTarget))
   const [noProgressTurns, setNoProgressTurns] = useState(String(DEFAULT_CONFIG.noProgressTurns))
   const [opponentMode, setOpponentMode] = useState<OpponentMode>('human')
+  const [scoringAreaId, setScoringAreaId] = useState<ScoringAreaId>('center')
+  const scoringArea = SCORING_AREAS[scoringAreaId]
+
+  // null until the player types a value, so flipping the clock preset can keep
+  // moving the default without ever discarding something they chose themselves
+  const [setupMinutes, setSetupMinutes] = useState<string | null>(null)
+  const setupMinutesShown =
+    setupMinutes ?? String(clockEnabled ? SETUP_MINUTES_TIMED : SETUP_MINUTES_UNTIMED)
+
+  // same touched-flag pattern: the scoring-area preset moves the default X
+  // (twice the area, twice the rate) until the player types their own number
+  const [scoreTarget, setScoreTarget] = useState<string | null>(null)
+  const scoreTargetDefault = DEFAULT_CONFIG.scoreTarget * scoringArea.scoreTargetFactor
+  const scoreTargetShown = scoreTarget ?? String(scoreTargetDefault)
 
   async function onCreate() {
     const options: CreateOptions = {
       clockEnabled,
-      scoreTarget: readPositiveInt(scoreTarget, DEFAULT_CONFIG.scoreTarget),
+      scoreTarget: readPositiveInt(scoreTargetShown, scoreTargetDefault),
       noProgressTurns: readPositiveInt(noProgressTurns, DEFAULT_CONFIG.noProgressTurns),
+      setupTimeoutMs:
+        readPositiveInt(setupMinutesShown, clockEnabled ? SETUP_MINUTES_TIMED : SETUP_MINUTES_UNTIMED) *
+        60_000,
+      scoringSquares: scoringArea.squares,
     }
     setBusy(true)
     setError(null)
@@ -162,6 +200,32 @@ export function Create() {
             <details className="c-adv">
               <summary>進階設定</summary>
               <div className="c-adv-body">
+                <div className="c-num-row c-area-row">
+                  <span className="c-num-label" id="c-area-label">
+                    計分區
+                  </span>
+                  <span className="c-seg" role="group" aria-labelledby="c-area-label">
+                    {SCORING_AREA_IDS.map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        aria-pressed={scoringAreaId === id}
+                        onClick={() => setScoringAreaId(id)}
+                      >
+                        {SCORING_AREAS[id].label}
+                        {id === 'center' && '（預設）'}
+                      </button>
+                    ))}
+                  </span>
+                </div>
+                <p className="muted small c-hint">
+                  每一手結束時，己方棋子每佔一格得 1 分。目前選的是{' '}
+                  <code className="c-sq">{squareList(scoringArea.squares)}</code>。
+                </p>
+                <p className="muted small c-hint">
+                  八格版把 a、h 兩條 rook 直線與兩側翼也變成有分可搶的地方，讓中央以外的半盤有東西可爭。
+                </p>
+
                 <label className="c-num-row">
                   <span className="c-num-label">目標分數 X</span>
                   <input
@@ -170,12 +234,15 @@ export function Create() {
                     min={1}
                     step={1}
                     inputMode="numeric"
-                    value={scoreTarget}
+                    value={scoreTargetShown}
                     onChange={(e) => setScoreTarget(e.target.value)}
                   />
                 </label>
                 <p className="muted small c-hint">
-                  先達到 X 分者獲勝（預設 {DEFAULT_CONFIG.scoreTarget}）。試玩短局時調低。
+                  先達到 X 分者獲勝（此計分區預設 {scoreTargetDefault}）。
+                  {scoringArea.scoreTargetFactor > 1
+                    ? '兩倍的計分區大約以兩倍速度累積，預設值因此同步加倍；覺得太長就自己改。'
+                    : '試玩短局時調低。'}
                 </p>
 
                 <label className="c-num-row">
@@ -193,6 +260,24 @@ export function Create() {
                 <p className="muted small c-hint">
                   連續 N 個完整回合無吃子且無得分即終局，由比分高者獲勝（預設{' '}
                   {DEFAULT_CONFIG.noProgressTurns}）。
+                </p>
+
+                <label className="c-num-row">
+                  <span className="c-num-label">佈署時限（分）</span>
+                  <input
+                    className="c-num"
+                    type="number"
+                    min={1}
+                    step={1}
+                    inputMode="numeric"
+                    value={setupMinutesShown}
+                    onChange={(e) => setSetupMinutes(e.target.value)}
+                  />
+                </label>
+                <p className="muted small c-hint">
+                  時間內未佈署者，伺服器代為<strong>隨機</strong>配置後開局。與 LLM
+                  對局時需要來回貼網址，務必留足時間——逾時的隨機軍容與自選的看起來完全一樣，
+                  不會有任何提示。
                 </p>
               </div>
             </details>
@@ -214,8 +299,10 @@ export function Create() {
           <h2>對局已建立</h2>
           <p className="muted small">
             對局編號 {created.game.gameId} ·{' '}
-            {created.options.clockEnabled ? `計時 ${CLOCK_SUMMARY}` : '不計時'} · 目標{' '}
-            {created.options.scoreTarget} 分 · 無進展 {created.options.noProgressTurns} 回合
+            {created.options.clockEnabled ? `計時 ${CLOCK_SUMMARY}` : '不計時'} · 計分區{' '}
+            {created.options.scoringSquares.length} 格 · 目標 {created.options.scoreTarget} 分 ·
+            無進展 {created.options.noProgressTurns} 回合 · 佈署時限{' '}
+            {Math.round(created.options.setupTimeoutMs / 60_000)} 分
           </p>
 
           <div className="link-row">
@@ -337,4 +424,16 @@ const CREATE_CSS = `
   padding: 6px 8px;
 }
 .screen-create .c-num:focus { outline: none; border-color: var(--accent); }
+
+/* the 計分區 picker: same row rhythm as the number fields, but the control is a
+   segmented pair, so it may wrap instead of squeezing the labels */
+.screen-create .c-area-row { flex-wrap: wrap; }
+.screen-create .c-area-row .c-seg { flex-wrap: wrap; }
+.screen-create .c-sq {
+  background: #0f1114;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+  letter-spacing: 0.04em;
+}
 `
