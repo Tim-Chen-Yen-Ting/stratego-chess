@@ -63,6 +63,8 @@ export interface CreatedGame {
   hostToken: string
   guestUrl: string
   hostUrl: string
+  hostColor: 'white' | 'black'
+  guestColor: 'white' | 'black'
   /** what the server actually built — may differ from what was requested */
   setupTimeoutMs?: number
   scoreTarget?: number

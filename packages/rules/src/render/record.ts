@@ -23,9 +23,12 @@
  *    is 推論輔助 (§10) and it is the reader's job, not the record's — even
  *    though the deduction is trivial and even though a spectator UI is allowed
  *    to show it. A record that solves for you turns 讀盤 into reading.
- *  · The statistics are aggregates over the PUBLIC log: how many contacts, how
- *    they were announced, how many plies a side scored nothing. They are
- *    statements about what happened, not about who anyone is.
+ *  · The statistics are aggregates over the PUBLIC log and the PUBLIC carrier
+ *    layer: how many contacts, how they were announced, how many plies a side
+ *    scored nothing, how many squares it held, where its moves landed, which
+ *    piece moved. They are statements about what happened, not about who anyone
+ *    is. Nothing here narrows, eliminates or ranges over a 兵種 — that is 解算,
+ *    and no aggregate of squares can produce it.
  *  · At game end the ViewerState carries every rank (§10 終局公開全部兵種), so a
  *    finished game exports in full with no special-casing anywhere below.
  *
@@ -33,7 +36,7 @@
  * the same ViewerState always exports the same bytes.
  */
 
-import { opposite, squareName } from '../board.js'
+import { castlePlan, opposite, squareName } from '../board.js'
 import {
   ALL_RANKS,
   CARRIER_LETTER,
@@ -94,6 +97,49 @@ export interface ZeroRun {
   startPly: number | null
 }
 
+/**
+ * The most 結算格 a side stood on at the same moment.
+ *
+ * §7② credits exactly +1 per own piece standing on a scoring square, so a ply's
+ * income IS the number of squares held on that ply, and this is the maximum of
+ * that series. It is the one figure a score column will not give up at a
+ * glance: notebook §3.3b's whole finding — White reaching six of eight at once
+ * while Black never held two — had to be hand-derived from a running total.
+ *
+ * Nothing here is about identity. It counts squares.
+ */
+export interface PeakHold {
+  /** squares held simultaneously at the peak; 0 when the side never scored */
+  count: number
+  /** the FIRST ply the peak was reached; null when `count` is 0 */
+  ply: number | null
+}
+
+/**
+ * Moves that ended on a 結算格, over that side's moves.
+ *
+ * Playing the objective, as opposed to merely playing. A move counts by the
+ * square it was played TO — including one that then lost the contact standing
+ * there. Whether the attack came off is the outcome column's business, and
+ * folding it in here would fuse two measurements into one number, which is the
+ * mistake this block exists to avoid.
+ */
+export interface ObjectiveMoves {
+  /** moves whose destination was a scoring square */
+  count: number
+  /** the side's moves. A pass is an action, not a move (§3④), and is not here. */
+  total: number
+  /** count / total, or null — never 0 — when the side made no move at all */
+  ratio: number | null
+}
+
+/** The longest streak of consecutive moves by one side played with one piece. */
+export interface PieceRun {
+  length: number
+  /** ply the run started on; null when the side never moved a piece */
+  startPly: number | null
+}
+
 export interface SideStats {
   color: Color
   /** final score as the ViewerState reports it — 貼目 included for black */
@@ -103,14 +149,34 @@ export interface SideStats {
   /** score / plies — the headline rate, 貼目 included */
   pointsPerPly: number
   /**
-   * earned / plies. Because 結算 credits exactly +1 per own piece standing on a
-   * scoring square (§7②), this is also the mean number of scoring squares the
-   * side HELD per ply. It differs from `pointsPerPly` only by 貼目/plies.
+   * earned / plies — the same series with 貼目 taken out. Because §7② credits
+   * exactly +1 per own piece standing on a scoring square, it is also the MEAN
+   * number of squares the side held per ply, of which `peakSquaresHeld` is the
+   * maximum.
+   *
+   * This is not a second name for `pointsPerPly`. That one answers "how fast did
+   * the score move", which is what 分數線 X is checked against, and it carries
+   * Black's head start for the whole game. This one is the figure that survives
+   * comparison ACROSS games, where 貼目 and length differ — notebook §3.3b lines
+   * three games up by per-ply rate and every Black entry in it is shifted by
+   * komi/plies.
    */
-  scoringSquaresPerPly: number
+  earnedPerPly: number
+  /** the most scoring squares held at once, and when — see {@link PeakHold} */
+  peakSquaresHeld: PeakHold
   /** plies on which this side was credited nothing */
   zeroPlies: number
   longestZeroRun: ZeroRun
+  /** moves that landed on a scoring square — see {@link ObjectiveMoves} */
+  objectiveMoves: ObjectiveMoves
+  /**
+   * How many distinct pieces this side moved at all. 王車易位 counts the king
+   * only: it is one move and §3② calls it the king's, so the rook rides along
+   * rather than becoming a second mover.
+   */
+  distinctPiecesMoved: number
+  /** longest streak of consecutive own moves made with one piece */
+  longestSinglePieceRun: PieceRun
   /** 爆裂物 this side lost — detonated, traded, or fizzled against 工兵/軍旗 */
   bombsSpent: number
   /** the plies on which it lost them */
@@ -199,7 +265,130 @@ function isZero(n: number): boolean {
   return Math.abs(n) < 1e-9
 }
 
-function sideStats(vs: ViewerState, color: Color, income: readonly PlyIncome[]): SideStats {
+// ---------------------------------------------------------------------------
+// Public-carrier replay — WHICH piece moved
+//
+// The log records squares, not piece ids, so the three counters that ask about
+// pieces (`objectiveMoves`, `distinctPiecesMoved`, `longestSinglePieceRun`) need
+// the carrier layer walked forward. ONE pass produces all three; nothing below
+// replays anything a second time.
+//
+// Redaction-wise this is the cheapest block in the file. It reads `move`, the
+// three contact squares, `e.color`, `outcome.kind` and — on a 有煙無傷 — the
+// announced `survivorColor`: every one a field of a public event, all six
+// outcome kinds already公告 by §4「翻明總表」. No rank is read, so none can
+// leak, and what it produces are opaque tokens that say only "this is the same
+// piece as that", never what that piece is.
+// ---------------------------------------------------------------------------
+
+/**
+ * Opaque per-piece identity, only ever compared for equality.
+ *
+ * A piece that has not yet moved is named by the square it started on, so this
+ * needs no opening layout — which matters, because a ViewerState carries the
+ * CURRENT position and §9's is not the only position this file is ever handed.
+ * A square can only be vacated by the piece on it moving, so a token is minted
+ * exactly once per piece and follows it for the rest of the game.
+ */
+type PieceToken = string
+
+interface PlyMover {
+  /** who moved; null on a pass, which moves nobody */
+  token: PieceToken | null
+  /** the square the move was played TO; null on a pass */
+  landedOn: Square | null
+}
+
+/**
+ * Who is left standing after a contact, from the announcement alone.
+ *
+ *   attacker-wins / defender-wins  the announcement names the winner's side
+ *   fizzle                         有煙無傷 removes only the 爆裂物 (§5), and
+ *                                  the event names the colour that survived
+ *   mutual-rank / the two bombs    nobody stands (§4, §5)
+ *
+ * No rank is compared here; `resolveCombat` already did that, publicly.
+ */
+function survivorToken(
+  outcome: CombatOutcome,
+  mover: Color,
+  attacker: PieceToken,
+  defender: PieceToken | undefined,
+): PieceToken | undefined {
+  switch (outcome.kind) {
+    case 'attacker-wins': return attacker
+    case 'defender-wins': return defender
+    case 'fizzle': return outcome.survivorColor === mover ? attacker : defender
+    default: return undefined
+  }
+}
+
+/** Mover + landing square for every logged ply, parallel to `vs.log`. */
+function replayMovers(log: readonly GameEvent[]): PlyMover[] {
+  const on: (PieceToken | undefined)[] = Array.from({ length: 64 }, (_, sq) => `sq${sq}`)
+  let minted = 0
+  /**
+   * A move can only start from an occupied square, so this is unreachable on any
+   * log the engine produced. It exists so a malformed one degrades into "some
+   * piece we have not seen before" rather than merging two pieces into one.
+   */
+  const stranger = (): PieceToken => `x${minted++}`
+
+  const out: PlyMover[] = []
+
+  for (const e of log) {
+    if (e.move.kind === 'pass') {
+      out.push({ token: null, landedOn: null })
+      continue
+    }
+
+    if (e.move.kind === 'castle') {
+      // 王車易位 relocates two carriers but is ONE move, and §3② calls it the
+      // king's — so the king is the mover and its destination is where the move
+      // landed. The rook rides along and is not a second mover.
+      const plan = castlePlan(e.color, e.move.side)
+      const king = on[plan.kingFrom] ?? stranger()
+      const rook = on[plan.rookFrom] ?? stranger()
+      on[plan.kingFrom] = undefined
+      on[plan.rookFrom] = undefined
+      on[plan.kingTo] = king
+      on[plan.rookTo] = rook
+      out.push({ token: king, landedOn: plan.kingTo })
+      continue
+    }
+
+    const { from, to } = e.move
+    const attacker = on[from] ?? stranger()
+    out.push({ token: attacker, landedOn: to })
+
+    if (!e.combat) {
+      on[from] = undefined
+      on[to] = attacker             // 升變 swaps the carrier, not the piece (§6)
+      continue
+    }
+
+    // §4 位置結算: a losing attacker is removed from the square it came FROM and
+    // never enters the target, so every square touched is cleared first and only
+    // the announced survivor is put back.
+    const { outcome, attackerSquare, defenderSquare, survivorSquare } = e.combat
+    const defender = on[defenderSquare]
+    on[from] = undefined
+    on[attackerSquare] = undefined
+    on[defenderSquare] = undefined
+    on[to] = undefined              // en passant: `to` is neither contact square
+    const survivor = survivorToken(outcome, e.color, attacker, defender)
+    if (survivor !== undefined && survivorSquare !== null) on[survivorSquare] = survivor
+  }
+
+  return out
+}
+
+function sideStats(
+  vs: ViewerState,
+  color: Color,
+  income: readonly PlyIncome[],
+  movers: readonly PlyMover[],
+): SideStats {
   const plies = income.length
   const score = vs.score[color]
   const earned = score - startingScore(vs)[color]
@@ -210,13 +399,28 @@ function sideStats(vs: ViewerState, color: Color, income: readonly PlyIncome[]):
   let run = 0
   let runStart = 0
 
+  let peak = 0
+  let peakPly: number | null = null
+
   income.forEach((inc, i) => {
+    const ply = vs.log[i]?.ply ?? i + 1
+
+    // §7② credits +1 per own piece standing on a 結算格, so this ply's income IS
+    // the count of squares held on it — an integer by construction. Rounding
+    // clears the float dust a rational 貼目 (附錄 B) leaves in the difference.
+    const held = Math.round(inc[color])
+    // strictly greater: a repeat of the peak keeps the FIRST ply that reached it
+    if (held > peak) {
+      peak = held
+      peakPly = ply
+    }
+
     if (!isZero(inc[color])) {
       run = 0
       return
     }
     zeroPlies++
-    if (run === 0) runStart = vs.log[i]?.ply ?? i + 1
+    if (run === 0) runStart = ply
     run++
     // strictly greater: a tie keeps the FIRST run of that length
     if (run > longest) {
@@ -225,20 +429,62 @@ function sideStats(vs: ViewerState, color: Color, income: readonly PlyIncome[]):
     }
   })
 
+  const scoring = new Set<Square>(vs.config.scoringSquares)
+
+  let objective = 0
+  let moves = 0
+  const moved = new Set<PieceToken>()
+  let pieceRun = 0
+  let pieceRunStart: number | null = null
+  let pieceRunToken: PieceToken | null = null
+  let longestPieceRun = 0
+  let longestPieceRunStart: number | null = null
+
   const bombPlies: number[] = []
-  for (const e of vs.log) {
-    if (!e.combat) continue
-    if (bombSpenders(e.combat.outcome).includes(color)) bombPlies.push(e.ply)
-  }
+
+  vs.log.forEach((e, i) => {
+    if (e.combat && bombSpenders(e.combat.outcome).includes(color)) bombPlies.push(e.ply)
+    if (e.color !== color) return
+
+    // A pass is a legal ACTION, not a move (§3④): it is out of the denominator,
+    // and since it moves nobody it does not interrupt a one-piece run either.
+    const m = movers[i]
+    if (m === undefined || m.token === null) return
+
+    moves++
+    moved.add(m.token)
+    if (m.landedOn !== null && scoring.has(m.landedOn)) objective++
+
+    if (m.token === pieceRunToken) {
+      pieceRun++
+    } else {
+      pieceRunToken = m.token
+      pieceRun = 1
+      pieceRunStart = e.ply
+    }
+    // strictly greater: a tie keeps the FIRST run of that length
+    if (pieceRun > longestPieceRun) {
+      longestPieceRun = pieceRun
+      longestPieceRunStart = pieceRunStart
+    }
+  })
 
   return {
     color,
     score,
     earned,
     pointsPerPly: plies === 0 ? 0 : score / plies,
-    scoringSquaresPerPly: plies === 0 ? 0 : earned / plies,
+    earnedPerPly: plies === 0 ? 0 : earned / plies,
+    peakSquaresHeld: { count: peak, ply: peakPly },
     zeroPlies,
     longestZeroRun: { length: longest, startPly: longestStart },
+    objectiveMoves: {
+      count: objective,
+      total: moves,
+      ratio: moves === 0 ? null : objective / moves,
+    },
+    distinctPiecesMoved: moved.size,
+    longestSinglePieceRun: { length: longestPieceRun, startPly: longestPieceRunStart },
     bombsSpent: bombPlies.length,
     bombPlies,
   }
@@ -247,6 +493,7 @@ function sideStats(vs: ViewerState, color: Color, income: readonly PlyIncome[]):
 /** The analysis summary. Aggregates over the public log; infers nothing. */
 export function gameStats(vs: ViewerState): GameStats {
   const income = incomePerPly(vs)
+  const movers = replayMovers(vs.log)
 
   const contactsByOutcome = {} as Record<CombatOutcome['kind'], number>
   for (const kind of OUTCOME_KINDS) contactsByOutcome[kind] = 0
@@ -277,8 +524,8 @@ export function gameStats(vs: ViewerState): GameStats {
       duelRatio: rankDuels === 0 ? null : ties / rankDuels,
     },
     sides: {
-      white: sideStats(vs, 'white', income),
-      black: sideStats(vs, 'black', income),
+      white: sideStats(vs, 'white', income, movers),
+      black: sideStats(vs, 'black', income, movers),
     },
   }
 }
@@ -730,21 +977,53 @@ function statsLines(vs: ViewerState, stats: GameStats): string[] {
     return `${s.longestZeroRun.length} (plies ${from}–${to})`
   }
 
+  const peakHeld = (s: SideStats): string =>
+    s.peakSquaresHeld.ply === null
+      ? '0 — never held one'
+      : `${s.peakSquaresHeld.count} (first on ply ${s.peakSquaresHeld.ply})`
+
+  const objective = (s: SideStats): string =>
+    s.objectiveMoves.ratio === null
+      ? '— (no moves)'
+      : `${s.objectiveMoves.count} of ${s.objectiveMoves.total} (${fmt(s.objectiveMoves.ratio)})`
+
+  const pieceRun = (s: SideStats): string =>
+    s.longestSinglePieceRun.startPly === null
+      ? '0 — never moved a piece'
+      : `${s.longestSinglePieceRun.length} (from ply ${s.longestSinglePieceRun.startPly})`
+
   out.push('| Per side | White | Black |')
   out.push('| :--- | ---: | ---: |')
   out.push(`| Total score (貼目 included) | ${fmt(w.score)} | ${fmt(b.score)} |`)
-  out.push(`| Points per ply | ${fmt(w.pointsPerPly)} | ${fmt(b.pointsPerPly)} |`)
+  // ONE rate row, not two. One piece on one scoring square scores exactly one
+  // point per ply, so "mean squares held per ply" and "points earned per ply"
+  // are the same measurement — printing both invites the reader to look for a
+  // difference that is only 貼目/plies (0.02 in a 23-ply game). `earnedPerPly`
+  // stays in GameStats and the JSON for anyone scripting komi-free numbers;
+  // it does not get a row that implies it measures something else.
   out.push(
-    `| Scoring squares held, per ply | ${fmt(w.scoringSquaresPerPly)} `
-    + `| ${fmt(b.scoringSquaresPerPly)} |`,
+    `| Points per ply (貼目 included) | ${fmt(w.pointsPerPly)} | ${fmt(b.pointsPerPly)} |`,
   )
+  out.push(`| Peak scoring squares held at once | ${peakHeld(w)} | ${peakHeld(b)} |`)
   out.push(
     `| Plies scoring zero | ${w.zeroPlies} of ${stats.pliesPlayed} `
     + `| ${b.zeroPlies} of ${stats.pliesPlayed} |`,
   )
   out.push(`| Longest zero-income run | ${zeroRun(w)} | ${zeroRun(b)} |`)
+  out.push(`| Moves ending on a scoring square | ${objective(w)} | ${objective(b)} |`)
+  out.push(`| Distinct pieces moved | ${w.distinctPiecesMoved} | ${b.distinctPiecesMoved} |`)
+  out.push(`| Longest run on one piece | ${pieceRun(w)} | ${pieceRun(b)} |`)
   out.push(`| 爆裂物 spent | ${w.bombsSpent} | ${b.bombsSpent} |`)
   out.push(`| …on plies | ${plyList(w.bombPlies)} | ${plyList(b.bombPlies)} |`)
+  out.push('')
+  out.push(
+    '> Peak-held and the mean above it are the max and the mean of ONE series —'
+    + ' the points a side took each ply, which by §7② is the number of squares it'
+    + ' was standing on. Read together they say how much was held and how'
+    + ' steadily. A pass is not a move, so it is in neither move row: it costs a'
+    + ' side nothing in the ratio and does not break a one-piece run. 王車易位'
+    + ' counts once, by the square the king landed on.',
+  )
   return out
 }
 

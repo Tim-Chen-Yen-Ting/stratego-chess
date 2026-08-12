@@ -27,7 +27,7 @@ import {
 import { createGame, submitAssignment } from '../src/setup.js'
 import { decodeSetupCode } from '../src/setupcode.js'
 import type { Color, GameState, Move, Rank, Result, Viewer, ViewerState } from '../src/types.js'
-import { PASS, mv, position } from './helpers.js'
+import { PASS, mv, position, sq } from './helpers.js'
 
 /**
  * Rotate the 兵種 of every piece this viewer may NOT see, giving a different but
@@ -183,40 +183,75 @@ describe('gameStats over the public log', () => {
   it('white: 8 points over 14 plies, a 6-ply opening drought, 2 爆裂物 spent', () => {
     // White scores nothing until the pawn reaches e4 on ply 7, then +1 on every
     // ply to the end: plies 1–6 zero (a run of 6), plies 7–14 one each = 8.
+    // Income is therefore [0×6, 1×8]: the peak is ONE square, first held on the
+    // ply the pawn arrived, 7. White never holds two at a time.
+    // White's seven moves are seven different pieces —
+    //   1 a1a8 · 3 b1b8 · 5 c1c8 · 7 e2e4 · 9 f1f8 · 11 g1g8 · 13 h1h8
+    // — so distinct = 7 and no piece ever moves twice in a row: runs of 1, and
+    // the first of them starts on ply 1. Of those seven destinations only e4 is
+    // a 結算格 (d4 e4 d5 e5), so 1 of 7.
     // White's bombs: g1 traded on ply 11, h1 lost to the 工兵 on ply 13.
     expect(stats.sides.white).toEqual({
       color: 'white',
       score: 8,
       earned: 8,
       pointsPerPly: 8 / 14,
-      scoringSquaresPerPly: 8 / 14,
+      earnedPerPly: 8 / 14,
+      peakSquaresHeld: { count: 1, ply: 7 },
       zeroPlies: 6,
       longestZeroRun: { length: 6, startPly: 1 },
+      objectiveMoves: { count: 1, total: 7, ratio: 1 / 7 },
+      distinctPiecesMoved: 7,
+      longestSinglePieceRun: { length: 1, startPly: 1 },
       bombsSpent: 2,
       bombPlies: [11, 13],
     })
     expect(stats.sides.white.pointsPerPly).toBeCloseTo(0.5714, 4)
+    expect(stats.sides.white.objectiveMoves.ratio).toBeCloseTo(0.1429, 4)
   })
 
   it('black: 6 earned + 0.5 貼目, and a 7-ply drought after leaving d5', () => {
     // Black holds d5 from ply 2 to ply 7 = 6 points, then nothing at all from
     // ply 8 to ply 14 = a run of 7. Ply 1 is also zero, so 8 zero plies in all,
     // but the LONGEST run is the 7 at the end — that is the one-sidedness.
+    // Income is [0, 1×6, 0×7]: one square at the peak, first held on ply 2.
+    // Black plays exactly TWO moves in fourteen plies — 2 d8d5 and 8 d5d7, the
+    // same rook both times, and the five passes in between are not moves. So
+    // total = 2 (not 7), distinct = 1, and the run is 2 long from ply 2. d5 is
+    // a 結算格 and d7 is not: 1 of 2.
     // Black's bombs: f8 detonated on ply 9, g8 traded on ply 11.
     expect(stats.sides.black).toEqual({
       color: 'black',
       score: 6.5,
       earned: 6,
       pointsPerPly: 6.5 / 14,
-      scoringSquaresPerPly: 6 / 14,
+      earnedPerPly: 6 / 14,
+      peakSquaresHeld: { count: 1, ply: 2 },
       zeroPlies: 8,
       longestZeroRun: { length: 7, startPly: 8 },
+      objectiveMoves: { count: 1, total: 2, ratio: 0.5 },
+      distinctPiecesMoved: 1,
+      longestSinglePieceRun: { length: 2, startPly: 2 },
       bombsSpent: 2,
       bombPlies: [9, 11],
     })
     // 貼目 is in the score but is not a scoring square: the two rates differ.
     expect(stats.sides.black.pointsPerPly).toBeCloseTo(0.4643, 4)
-    expect(stats.sides.black.scoringSquaresPerPly).toBeCloseTo(0.4286, 4)
+    expect(stats.sides.black.earnedPerPly).toBeCloseTo(0.4286, 4)
+  })
+
+  it('counts a PASS as an action, never as a move (§3④)', () => {
+    // Black is on the board for 14 plies and answers 7 of them; 5 of those 7
+    // are passes. The denominator of `objectiveMoves` is the other 2 — putting
+    // passes in it would report Black landing on the objective 1 time in 7
+    // rather than 1 in 2, which is a statement about a side that never moved.
+    const blackPlies = asBlackDone.log.filter((e) => e.color === 'black')
+    expect(blackPlies).toHaveLength(7)
+    expect(blackPlies.filter((e) => e.move.kind === 'pass')).toHaveLength(5)
+    expect(stats.sides.black.objectiveMoves.total).toBe(2)
+    // and the five passes sit BETWEEN Black's two moves without breaking the
+    // one-piece run: a pass moves nobody, so there is nobody else to break it
+    expect(stats.sides.black.longestSinglePieceRun).toEqual({ length: 2, startPly: 2 })
   })
 
   it('is identical from every viewer — the numbers are public by construction', () => {
@@ -240,7 +275,278 @@ describe('gameStats over the public log', () => {
       duelRatio: null,
     })
     expect(s.sides.white.pointsPerPly).toBe(0)
+    expect(s.sides.white.earnedPerPly).toBe(0)
     expect(s.sides.black.longestZeroRun).toEqual({ length: 0, startPly: null })
+    // nothing happened, so every "when" is null rather than a fabricated ply 0
+    expect(s.sides.white.peakSquaresHeld).toEqual({ count: 0, ply: null })
+    expect(s.sides.black.peakSquaresHeld).toEqual({ count: 0, ply: null })
+    expect(s.sides.white.objectiveMoves).toEqual({ count: 0, total: 0, ratio: null })
+    expect(s.sides.black.distinctPiecesMoved).toBe(0)
+    expect(s.sides.black.longestSinglePieceRun).toEqual({ length: 0, startPly: null })
+  })
+
+  it('ships ONE name for the held-squares rate, not two', () => {
+    // The bug this replaced: `scoringSquaresPerPly` and `pointsPerPly` were the
+    // same measurement under two names — one piece on one 結算格 scores exactly
+    // one point per ply — so the table printed the same fact twice and the game
+    // 3 export read 3.478 / 3.478 for White. `earnedPerPly` is kept because it
+    // is the same series with 貼目 removed, which is what makes it comparable
+    // across games; for White, who has no 貼目, it is identical by definition
+    // and that identity is the point, not a duplicate row.
+    expect(stats.sides.white).not.toHaveProperty('scoringSquaresPerPly')
+    expect(stats.sides.black).not.toHaveProperty('scoringSquaresPerPly')
+    expect(stats.sides.white.earnedPerPly).toBe(stats.sides.white.pointsPerPly)
+    expect(stats.sides.black.earnedPerPly).not.toBe(stats.sides.black.pointsPerPly)
+    expect(stats.sides.black.pointsPerPly - stats.sides.black.earnedPerPly)
+      .toBeCloseTo(asBlackDone.config.komi / 14, 12)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fixture B — the peak
+//
+// Fixture A never lets either side hold two 結算格 at once, which is exactly the
+// case the headline number exists for (notebook §3.3b: White reached six of
+// eight simultaneously and it had to be hand-derived from the score column).
+// This one builds the peak on purpose, reaches it FOUR times, and gives Black a
+// side that scores nothing and moves nothing at all.
+//
+//     1  a1 —          d1 WD rook   e1 WE rook
+//     8  a8 BA rook
+//
+// No 軍旗 anywhere and no contact ever, so nothing ends the game early.
+// ---------------------------------------------------------------------------
+
+function peakStart(): GameState {
+  return position(
+    [
+      { at: 'd1', color: 'white', carrier: 'rook', rank: 'brigade', id: 'WD' },
+      { at: 'e1', color: 'white', carrier: 'rook', rank: 'regiment', id: 'WE' },
+      { at: 'a8', color: 'black', carrier: 'rook', rank: 'battalion', id: 'BA' },
+    ],
+    { id: 'rec-peak', toMove: 'white' },
+  )
+}
+
+/**
+ *   1  W d1d3   off the 結算格 — income 0
+ *   2  B pass
+ *   3  W d3d4   holds d4               → +1
+ *   4  B pass
+ *   5  W d4d5   holds d5               → +1
+ *   6  B pass
+ *   7  W e1e4   holds d5 AND e4        → +2   ← the peak, first reached here
+ *   8  B pass
+ *   9  W d5d4   holds d4 AND e4        → +2   ← the peak again; ply 7 stands
+ *  10  B pass
+ */
+const PEAK_SCRIPT: Move[] = [
+  mv('d1', 'd3'), PASS,
+  mv('d3', 'd4'), PASS,
+  mv('d4', 'd5'), PASS,
+  mv('e1', 'e4'), PASS,
+  mv('d5', 'd4'), PASS,
+]
+
+const PEAK: ViewerState = stateForViewer(
+  PEAK_SCRIPT.reduce(applyMove, peakStart()),
+  { kind: 'replay-omniscient' },
+)
+
+describe('peakSquaresHeld — the most squares held at once', () => {
+  const stats = gameStats(PEAK)
+
+  it('the fixture scores what the script says: income [0,0,1,1,1,1,2,2,2,2]', () => {
+    expect(stats.pliesPlayed).toBe(10)
+    const json = exportJson(PEAK) as RecordJson
+    expect(json.moves.map((m) => m.income.white)).toEqual([0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
+    expect(json.moves.map((m) => m.income.black)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    expect(PEAK.score).toEqual({ white: 12, black: 0.5 })
+  })
+
+  it('white peaked at TWO on ply 7 — the first ply at the peak, not the last', () => {
+    // The maximum of the income series is 2, and 2 is reached on plies 7, 8, 9
+    // and 10. The record keeps the ply the peak was first reached, the same
+    // tie-break `longestZeroRun` uses, because "when did it get there" is the
+    // question and the last ply at the peak answers nothing.
+    expect(stats.sides.white.peakSquaresHeld).toEqual({ count: 2, ply: 7 })
+    // and it is genuinely more than the mean of the same series, 12/10
+    expect(stats.sides.white.earnedPerPly).toBe(1.2)
+  })
+
+  it('a side that never scores gets a peak of zero and no ply', () => {
+    // Black stands on a8 for the whole game. There is no ply to point at, so
+    // the field is null — never 0, which would read as "peaked on ply 0".
+    expect(stats.sides.black.peakSquaresHeld).toEqual({ count: 0, ply: null })
+    expect(stats.sides.black.earned).toBe(0)
+    expect(stats.sides.black.zeroPlies).toBe(10)
+    expect(exportMarkdown(PEAK)).toContain(
+      '| Peak scoring squares held at once | 2 (first on ply 7) | 0 — never held one |',
+    )
+  })
+
+  it('a side that only ever passes moved no pieces at all', () => {
+    // Ten plies, five of them Black's, every one a pass. `total` is 0, so the
+    // ratio is null rather than 0/0, and there is no run to start.
+    expect(PEAK.log.filter((e) => e.color === 'black').every((e) => e.move.kind === 'pass'))
+      .toBe(true)
+    expect(stats.sides.black.objectiveMoves).toEqual({ count: 0, total: 0, ratio: null })
+    expect(stats.sides.black.distinctPiecesMoved).toBe(0)
+    expect(stats.sides.black.longestSinglePieceRun).toEqual({ length: 0, startPly: null })
+    expect(exportMarkdown(PEAK)).toContain(
+      '| Moves ending on a scoring square | 4 of 5 (0.8) | — (no moves) |',
+    )
+  })
+
+  it('white: 5 moves by 2 pieces, one of them three plies in a row', () => {
+    // Moves: 1 d1d3, 3 d3d4, 5 d4d5 — all the d1 rook — then 7 e1e4 with the
+    // other one, then 9 d5d4 with the first again. Two distinct pieces; the
+    // longest same-piece run is the opening three, from ply 1. The later return
+    // to the d-rook is a run of 1 and does not extend the earlier one.
+    // Destinations d4, d5, e4, d4 are 結算格 and d3 is not: 4 of 5.
+    expect(stats.sides.white.distinctPiecesMoved).toBe(2)
+    expect(stats.sides.white.longestSinglePieceRun).toEqual({ length: 3, startPly: 1 })
+    expect(stats.sides.white.objectiveMoves).toEqual({ count: 4, total: 5, ratio: 0.8 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fixture D — a piece keeps its identity through a contact
+//
+// The log carries squares, not piece ids, so "which piece moved" is replayed
+// off the public carrier layer. The replay has to follow a piece THROUGH a
+// contact in both directions — a winning attacker takes the target square, a
+// winning defender stays on its own (§4 位置結算) — or a survivor that moves
+// again looks like a brand new piece and both piece counters inflate.
+//
+//     8  b8 BB rook 師長  c8 BC rook 營長  h8 BH rook 司令
+//     4  a4 BA rook 工兵
+//     1  a1 WA rook 司令  h1 WH rook 排長
+//
+// b8 and c8 never move and never fight. They are here so that White's view has
+// more than one 兵種 left to permute in the last test of the block.
+// ---------------------------------------------------------------------------
+
+function survivorStart(): GameState {
+  return position(
+    [
+      { at: 'a1', color: 'white', carrier: 'rook', rank: 'commander', id: 'WA' },
+      { at: 'h1', color: 'white', carrier: 'rook', rank: 'platoon', id: 'WH' },
+      { at: 'a4', color: 'black', carrier: 'rook', rank: 'engineer', id: 'BA' },
+      { at: 'b8', color: 'black', carrier: 'rook', rank: 'division', id: 'BB' },
+      { at: 'c8', color: 'black', carrier: 'rook', rank: 'battalion', id: 'BC' },
+      { at: 'h8', color: 'black', carrier: 'rook', rank: 'commander', id: 'BH' },
+    ],
+    { id: 'rec-survivor', toMove: 'white' },
+  )
+}
+
+const SURVIVOR_SCRIPT: Move[] = [
+  mv('a1', 'a4'),   // 1  司令 beats 工兵 — the white rook takes a4
+  mv('h8', 'h4'),   // 2  the black rook comes down
+  mv('a4', 'd4'),   // 3  the SAME white rook goes on to d4, a 結算格
+  PASS,             // 4
+  mv('h1', 'h4'),   // 5  排長 throws itself at 司令 — white is removed from h1
+  mv('h4', 'h5'),   // 6  the SAME black rook, which never left h4, moves on
+]
+
+const SURVIVOR_RAW: GameState = SURVIVOR_SCRIPT.reduce(applyMove, survivorStart())
+const SURVIVOR: ViewerState = stateForViewer(SURVIVOR_RAW, { kind: 'replay-omniscient' })
+
+describe('a survivor is still the same piece', () => {
+  const stats = gameStats(SURVIVOR)
+
+  it('the fixture is the two contacts it claims to be', () => {
+    expect(stats.contactsByOutcome['attacker-wins']).toBe(1)
+    expect(stats.contactsByOutcome['defender-wins']).toBe(1)
+    expect(SURVIVOR.score).toEqual({ white: 4, black: 0.5 })
+  })
+
+  it('a winning ATTACKER that moves on again is not counted twice', () => {
+    // White plays a1a4, a4d4, h1h4. The first two are one rook that captured
+    // its way to a4 and carried on; the third is the other one. Two pieces, and
+    // the first of them moved twice running from ply 1. Only d4 is a 結算格.
+    expect(stats.sides.white.distinctPiecesMoved).toBe(2)
+    expect(stats.sides.white.longestSinglePieceRun).toEqual({ length: 2, startPly: 1 })
+    expect(stats.sides.white.objectiveMoves).toEqual({ count: 1, total: 3, ratio: 1 / 3 })
+  })
+
+  it('a winning DEFENDER that moves on again is not counted twice either', () => {
+    // Black plays h8h4 and, after standing its ground on ply 5, h4h5. One rook,
+    // moving twice — the pass on ply 4 is not a move and does not split them.
+    // Neither square is a 結算格, so the ratio is a real 0, not null.
+    expect(stats.sides.black.distinctPiecesMoved).toBe(1)
+    expect(stats.sides.black.longestSinglePieceRun).toEqual({ length: 2, startPly: 2 })
+    expect(stats.sides.black.objectiveMoves).toEqual({ count: 0, total: 2, ratio: 0 })
+  })
+
+  it('and none of it moves when the hidden 兵種 are permuted', () => {
+    // The replay reads squares, `outcome.kind` and the announced colours — all
+    // public. Nothing it produces may vary with a rank a player cannot see.
+    const viewer: Viewer = { kind: 'player', color: 'white' }
+    const alt = permuteHiddenRanks(SURVIVOR_RAW, viewer)
+    expect(alt.changed).toBe(true)
+    expect(gameStats(stateForViewer(alt.state, viewer)))
+      .toEqual(gameStats(stateForViewer(SURVIVOR_RAW, viewer)))
+    expect(exportMarkdown(stateForViewer(alt.state, viewer)))
+      .toBe(exportMarkdown(stateForViewer(SURVIVOR_RAW, viewer)))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fixture C — 王車易位
+//
+// Castling relocates two carriers on one move, so it has to be decided which
+// square and which piece it counts as. §3② calls it the king's move, so both
+// answers come from the king. The two games below differ ONLY in which of the
+// two landing squares is a 結算格, which is what makes the choice testable.
+// ---------------------------------------------------------------------------
+
+function castleGame(scoring: string[]): ViewerState {
+  const start = position(
+    [
+      { at: 'e1', color: 'white', carrier: 'king', rank: 'brigade', id: 'WK' },
+      { at: 'h1', color: 'white', carrier: 'rook', rank: 'regiment', id: 'WR' },
+      { at: 'a8', color: 'black', carrier: 'rook', rank: 'battalion', id: 'BA' },
+    ],
+    { id: 'rec-castle', toMove: 'white', config: { scoringSquares: scoring.map(sq) } },
+  )
+  // 1 W O-O (king e1→g1, rook h1→f1) · 2 B pass
+  const played = [{ kind: 'castle', side: 'king' } as Move, PASS].reduce(applyMove, start)
+  return stateForViewer(played, { kind: 'replay-omniscient' })
+}
+
+describe('王車易位 counts once, by the king (§3②)', () => {
+  it('lands on a 結算格 when the KING does', () => {
+    // g1 is the king's destination and the only 結算格 in this game. One move,
+    // and it ended on the objective: 1 of 1.
+    const stats = gameStats(castleGame(['g1']))
+    expect(stats.sides.white.objectiveMoves).toEqual({ count: 1, total: 1, ratio: 1 })
+    // it scored, so the peak sees it too — one square, from ply 1
+    expect(stats.sides.white.peakSquaresHeld).toEqual({ count: 1, ply: 1 })
+    expect(stats.sides.white.score).toBe(2)   // +1 on ply 1 and again on ply 2
+  })
+
+  it('does NOT land on one when only the ROOK does', () => {
+    // Same castle, but now f1 — where the rook lands — is the 結算格 and g1 is
+    // not. White still scores +1 a ply off the rook, so the move plainly
+    // reached the objective in points; it is still not an objective MOVE,
+    // because the move is the king's and the king landed on g1.
+    const stats = gameStats(castleGame(['f1']))
+    expect(stats.sides.white.objectiveMoves).toEqual({ count: 0, total: 1, ratio: 0 })
+    expect(stats.sides.white.peakSquaresHeld).toEqual({ count: 1, ply: 1 })
+    expect(stats.sides.white.score).toBe(2)
+  })
+
+  it('is ONE mover, not two — the rook rides along', () => {
+    const stats = gameStats(castleGame(['g1']))
+    expect(stats.sides.white.distinctPiecesMoved).toBe(1)
+    expect(stats.sides.white.longestSinglePieceRun).toEqual({ length: 1, startPly: 1 })
+    // and the log really did move both carriers
+    const done = castleGame(['g1'])
+    expect(done.pieces.find((p) => p.id === 'WK')!.square).toBe(sq('g1'))
+    expect(done.pieces.find((p) => p.id === 'WR')!.square).toBe(sq('f1'))
+    expect(done.log[0]!.move).toEqual({ kind: 'castle', side: 'king' })
   })
 })
 
@@ -299,6 +605,30 @@ describe('exportMarkdown — the thing you paste into a chat', () => {
     expect(md).toContain('| Longest zero-income run | 6 (plies 1–6) | 7 (plies 8–14) |')
     expect(md).toContain('| 爆裂物 spent | 2 | 2 |')
     expect(md).toContain('| …on plies | 11, 13 | 9, 11 |')
+  })
+
+  it('puts peak-held next to points/ply, and prints each rate once', () => {
+    // 8/14 = 0.571 and 6.5/14 = 0.464; the 貼目-free means are 8/14 and 6/14.
+    expect(md).toContain('| Points per ply (貼目 included) | 0.571 | 0.464 |')
+    expect(md).toContain('| Peak scoring squares held at once | 1 (first on ply 7) | 1 (first on ply 2) |')
+    // White's komi-free mean is ALSO 0.571 — identical to its points/ply. That is
+    // the redundancy being removed: one square = one point per ply, so the two
+    // rates only ever differ by 貼目/plies.
+    expect(md).not.toContain('Mean scoring squares held per ply')
+    // the row that used to restate points-per-ply under another name is gone
+    expect(md).not.toContain('Scoring squares held, per ply')
+
+    const rows = md.split('\n').filter((l) => l.startsWith('| Points per ply'))
+    expect(rows).toHaveLength(1)
+    expect(md.split(String.fromCharCode(10)).filter((l) => l.includes('squares held per ply'))).toHaveLength(0)
+  })
+
+  it('prints the move counters: objective, distinct pieces, longest one-piece run', () => {
+    // White 1 of 7 (only e2e4 landed on a 結算格) = 0.143; Black 1 of 2 (d8d5,
+    // not d5d7) = 0.5, its five passes excluded from both denominators.
+    expect(md).toContain('| Moves ending on a scoring square | 1 of 7 (0.143) | 1 of 2 (0.5) |')
+    expect(md).toContain('| Distinct pieces moved | 7 | 1 |')
+    expect(md).toContain('| Longest run on one piece | 1 (from ply 1) | 2 (from ply 2) |')
   })
 
   it('renders a game that has not started yet without inventing one', () => {
@@ -609,6 +939,30 @@ describe('exportJson — arrays of records, for a script', () => {
     })
     expect(json.stats.contacts_by_outcome).toContainEqual({ outcome: 'mutual-rank', count: 1 })
     expect(json.stats.sides.map((s) => s.color)).toEqual(['white', 'black'])
+  })
+
+  it('carries every per-side counter, and no second name for one of them', () => {
+    // Same hand computation as the gameStats block: White holds one square from
+    // ply 7, moves seven different pieces and lands on e4 once in seven; Black
+    // holds one from ply 2 and moves one rook twice, its five passes excluded.
+    const [w, b] = json.stats.sides
+    expect(w).toMatchObject({
+      color: 'white',
+      earnedPerPly: 8 / 14,
+      peakSquaresHeld: { count: 1, ply: 7 },
+      objectiveMoves: { count: 1, total: 7, ratio: 1 / 7 },
+      distinctPiecesMoved: 7,
+      longestSinglePieceRun: { length: 1, startPly: 1 },
+    })
+    expect(b).toMatchObject({
+      color: 'black',
+      earnedPerPly: 6 / 14,
+      peakSquaresHeld: { count: 1, ply: 2 },
+      objectiveMoves: { count: 1, total: 2, ratio: 0.5 },
+      distinctPiecesMoved: 1,
+      longestSinglePieceRun: { length: 2, startPly: 2 },
+    })
+    expect(JSON.stringify(json)).not.toContain('scoringSquaresPerPly')
   })
 
   it('gives one record per ply, with the per-ply income spelled out', () => {

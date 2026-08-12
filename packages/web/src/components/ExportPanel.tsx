@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CombatOutcome, GameStats, TiesPerContest, ViewerState, ZeroRun } from '@xiyang/rules'
+import type { CombatOutcome, GameStats, ViewerState } from '@xiyang/rules'
 import { exportJson, exportMarkdown, gameStats } from '@xiyang/rules'
 import { colorLabel, formatScore, resultText } from '../format.js'
 
@@ -18,11 +18,14 @@ import { colorLabel, formatScore, resultText } from '../format.js'
  * enter the output, because there is no path here that reads a rank at all.
  *
  * The stats table is history, not inference: counts over the PUBLIC log (how
- * many contacts happened, how many were 同階雙亡, how many plies scored
- * nothing). Those are facts about what was announced, not claims about who
- * anyone is. Nothing here narrows a candidate set, and nothing here is a solver.
- * It shows the headline numbers only — the full breakdown is in the blob below
- * it, which is the point of having the blob.
+ * many contacts happened, how many were 同階雙亡, how many plies scored nothing)
+ * and over the PUBLIC carrier layer (how many squares were held, where moves
+ * landed, which piece moved — all of it on the board for both sides to see).
+ * Those are facts about what was announced, not claims about who anyone is. No
+ * figure here ranges over 兵種: none narrows a candidate set, none eliminates
+ * one, and nothing here is a solver. The table shows the headline numbers only
+ * — the full breakdown is in the blob below it, which is the point of having
+ * the blob.
  *
  * A finished game needs no special case: at 終局 the ViewerState carries every
  * rank (§10 終局公開全部兵種), so the very same code path exports the complete
@@ -60,15 +63,27 @@ function num(value: number): string {
   return String(Math.round(value * 1000) / 1000)
 }
 
-/** `2 / 9（22%）` — the fraction always, because the ratio alone misleads. */
-function ratioText(t: TiesPerContest): string {
-  const pct = t.ratio === null ? '—' : `${Math.round(t.ratio * 100)}%`
-  return `${t.ties} / ${t.contests}（${pct}）`
+/**
+ * `2 / 9（22%）` — both terms always, because the percentage alone misleads:
+ * "22%" reads the same at 2-of-9 and at 220-of-1000, and notebook §6.4 records
+ * two games already argued about on the strength of a ratio with no
+ * denominator. A `null` ratio (empty denominator) prints as —, never 0%.
+ */
+function fractionText(top: number, bottom: number, ratio: number | null): string {
+  const pct = ratio === null ? '—' : `${Math.round(ratio * 100)}%`
+  return `${top} / ${bottom}（${pct}）`
 }
 
-function zeroRunText(run: ZeroRun): string {
+/** `5 手（第 12 手起）` — a streak is worth little without where it started. */
+function runText(run: { length: number; startPly: number | null }): string {
   if (run.length === 0) return '—'
   return run.startPly === null ? `${run.length} 手` : `${run.length} 手（第 ${run.startPly} 手起）`
+}
+
+/** `6 格（第 19 手）` — the high-water mark, and the ply it was reached on. */
+function peakText(peak: { count: number; ply: number | null }): string {
+  if (peak.count === 0) return '—'
+  return peak.ply === null ? `${peak.count} 格` : `${peak.count} 格（第 ${peak.ply} 手）`
 }
 
 // ---------------------------------------------------------------------------
@@ -79,20 +94,28 @@ export interface ExportButtonProps {
   prominent?: boolean
 }
 
-/** The trigger. Lives in the game screen; the panel below is what it opens. */
+/**
+ * The trigger. Lives in the game screen; the panel below is what it opens.
+ *
+ * It carries NO `<style>`. The game screen mounts this button in two places at
+ * once (a prominent one at 終局 plus the one in the toolbar), so injecting the
+ * panel's stylesheet here put two or three identical ~150-line copies of it in
+ * the DOM at the same time. `STYLE` now ships with `ExportPanel` alone — one
+ * copy, and only while the panel is actually open. The one declaration this
+ * button needed for itself is inline, so it does not depend on the panel being
+ * open to look right.
+ */
 export function ExportButton({ onClick, prominent = false }: ExportButtonProps) {
   return (
-    <>
-      <style>{STYLE}</style>
-      <button
-        type="button"
-        className={prominent ? 'primary big xy-ex-open' : 'xy-ex-open'}
-        onClick={onClick}
-        title="匯出這局的公開紀錄（Markdown / JSON），可直接貼到別處分析"
-      >
-        匯出紀錄
-      </button>
-    </>
+    <button
+      type="button"
+      className={prominent ? 'primary big xy-ex-open' : 'xy-ex-open'}
+      style={{ whiteSpace: 'nowrap' }}
+      onClick={onClick}
+      title="匯出這局的公開紀錄（Markdown / JSON），可直接貼到別處分析"
+    >
+      匯出紀錄
+    </button>
   )
 }
 
@@ -332,9 +355,12 @@ export function ExportPanel({ view, onClose }: ExportPanelProps) {
 
 /**
  * The headline numbers: game-wide rows spanning both columns, then one column
- * per side. Every figure is a count or a rate over the PUBLIC log — what
- * happened, not who anyone is (gamebook §10). The per-ply detail behind these
- * totals is in the exported record itself, which is the point of the blob.
+ * per side. Every figure is a count or a rate over the PUBLIC log and the
+ * PUBLIC carrier layer — how many squares a side held, where its moves landed,
+ * how many of its pieces it has moved. What happened, not who anyone is
+ * (gamebook §10); no row here is about a 兵種, hidden or otherwise. The per-ply
+ * detail behind these totals is in the exported record itself, which is the
+ * point of the blob.
  */
 function StatsTable({ stats }: { stats: GameStats }) {
   const w = stats.sides.white
@@ -371,7 +397,13 @@ function StatsTable({ stats }: { stats: GameStats }) {
         </tr>
         <tr>
           <th scope="row">同階雙亡／接觸</th>
-          <td colSpan={2}>{ratioText(stats.tiesPerContest)}</td>
+          <td colSpan={2}>
+            {fractionText(
+              stats.tiesPerContest.ties,
+              stats.tiesPerContest.contests,
+              stats.tiesPerContest.ratio,
+            )}
+          </td>
         </tr>
         <tr>
           <th scope="row">比分（含貼目）</th>
@@ -389,9 +421,9 @@ function StatsTable({ stats }: { stats: GameStats }) {
           <td>{num(b.pointsPerPly)}</td>
         </tr>
         <tr>
-          <th scope="row">每手佔分格</th>
-          <td>{num(w.scoringSquaresPerPly)}</td>
-          <td>{num(b.scoringSquaresPerPly)}</td>
+          <th scope="row">最高同時佔格</th>
+          <td>{peakText(w.peakSquaresHeld)}</td>
+          <td>{peakText(b.peakSquaresHeld)}</td>
         </tr>
         <tr>
           <th scope="row">零分手數</th>
@@ -400,8 +432,27 @@ function StatsTable({ stats }: { stats: GameStats }) {
         </tr>
         <tr>
           <th scope="row">最長零分連續</th>
-          <td>{zeroRunText(w.longestZeroRun)}</td>
-          <td>{zeroRunText(b.longestZeroRun)}</td>
+          <td>{runText(w.longestZeroRun)}</td>
+          <td>{runText(b.longestZeroRun)}</td>
+        </tr>
+        <tr>
+          <th scope="row">落點在計分格的手數</th>
+          <td>
+            {fractionText(w.objectiveMoves.count, w.objectiveMoves.total, w.objectiveMoves.ratio)}
+          </td>
+          <td>
+            {fractionText(b.objectiveMoves.count, b.objectiveMoves.total, b.objectiveMoves.ratio)}
+          </td>
+        </tr>
+        <tr>
+          <th scope="row">動過的棋子數</th>
+          <td>{w.distinctPiecesMoved}</td>
+          <td>{b.distinctPiecesMoved}</td>
+        </tr>
+        <tr>
+          <th scope="row">單子連續移動最長</th>
+          <td>{runText(w.longestSinglePieceRun)}</td>
+          <td>{runText(b.longestSinglePieceRun)}</td>
         </tr>
         <tr>
           <th scope="row">爆裂物損失</th>
@@ -422,9 +473,12 @@ function plyListText(plies: readonly number[]): string | undefined {
  * Scoped to this component (the shared stylesheet is owned elsewhere), under an
  * `xy-ex-` prefix. Same vocabulary as the rest of the app: dark panel, one line
  * colour, accent for the live thing.
+ *
+ * Mounted by `ExportPanel` and nowhere else — every selector below describes
+ * something inside the open dialog, so the whole sheet enters and leaves with
+ * it, exactly once.
  */
 const STYLE = `
-.xy-ex-open { white-space: nowrap; }
 .xy-ex-backdrop {
   position: fixed;
   inset: 0;
@@ -508,8 +562,8 @@ const STYLE = `
   border-bottom: 1px solid var(--line);
 }
 .xy-ex-stats thead th:first-child { text-align: left; }
-.xy-ex-stats td { width: 28%; }
 .xy-ex-stats td {
+  width: 28%;
   text-align: right;
   font-variant-numeric: tabular-nums;
   padding: 2px 0;
@@ -567,5 +621,9 @@ const STYLE = `
 @media (max-width: 620px) {
   .xy-ex-bar { align-items: stretch; flex-direction: column; }
   .xy-ex-text { min-height: 180px; font-size: 0.75rem; }
+  /* row labels only: 落點在計分格的手數 is wider than a phone can spare beside
+     two value columns, and a wrapped label beats a sideways scroll. The header
+     row keeps its nowrap — 白方 / 黑方 are two characters. */
+  .xy-ex-stats tbody th { white-space: normal; }
 }
 `

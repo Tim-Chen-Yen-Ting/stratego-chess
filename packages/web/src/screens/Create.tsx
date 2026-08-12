@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { DEFAULT_CONFIG } from '@xiyang/rules'
-import type { Square } from '@xiyang/rules'
+import type { Color, Square } from '@xiyang/rules'
 import type { CreatedGame } from '../socket.js'
 import { SCORING_AREAS, SCORING_AREA_IDS, type ScoringAreaId } from '../constants.js'
 import { formatClock, squareName } from '../format.js'
@@ -67,6 +67,17 @@ async function postCreateGame(options: CreateOptions): Promise<CreatedGame> {
  * the SAME seat as plain text for a chatbot to fetch (techspec §6). This is not
  * a second invitation — whoever holds the token sits in that chair either way.
  */
+/**
+ * Which colour a link sits in. The server flips a fair coin at creation
+ * (gamebook §9) and returns both colours, but the screen used to discard them —
+ * so the host discovered their colour only by entering, and could not choose.
+ * Being able to choose matters: testing whether 貼目 0.5 covers the first-move
+ * advantage requires deliberately taking Black, not waiting for the coin.
+ */
+function seatLabel(color: Color): string {
+  return color === 'white' ? '執白（先手）' : '執黑（後手，貼目 +0.5）'
+}
+
 function llmForm(playUrl: string): string {
   try {
     const parsed = new URL(playUrl, window.location.origin)
@@ -307,7 +318,7 @@ export function Create() {
 
           <div className="link-row">
             <div className="link-label c-label-row">
-              <span>邀請對手（分享這條）</span>
+              <span>邀請對手（分享這條）— {seatLabel(created.game.guestColor)}</span>
               <span className="c-seg" role="group" aria-label="對手連結形式">
                 <button
                   type="button"
@@ -341,7 +352,11 @@ export function Create() {
           </div>
 
           <div className="link-row">
-            <div className="link-label">你的入口（房主）</div>
+            <p className="muted small c-hint">
+              擲幣已決定顏色。想要另一色就把兩條連結對調——誰拿到哪條，誰就坐那個位子。
+            </p>
+
+            <div className="link-label">你的入口（房主）— {seatLabel(created.game.hostColor)}</div>
             <code className="link">{created.game.hostUrl}</code>
             <button type="button" onClick={() => void copy('host', created.game.hostUrl)}>
               {copied === 'host' ? '已複製' : '複製'}
