@@ -1,4 +1,4 @@
-import type { CombatOutcome, Color, GameEvent, Move, Result, Square } from '@xiyang/rules'
+import type { Carrier, CombatOutcome, Color, GameEvent, Move, Result, Square } from '@xiyang/rules'
 import { CARRIER_LABEL, COLOR_LABEL, RANK_LABEL } from './constants.js'
 
 /**
@@ -37,7 +37,15 @@ export function colorLabel(color: Color): string {
   return `${COLOR_LABEL[color]}方`
 }
 
-export function moveText(move: Move, madeContact: boolean): string {
+/**
+ * @param promoted what the pawn ACTUALLY promoted to (`GameEvent.promoted`),
+ *   not what the move requested. A pawn that loses or ties on the 8th rank is
+ *   removed and does not promote (gamebook §6), yet `move.promote` still carries
+ *   the choice that was submitted — so rendering from the move claims a
+ *   promotion the engine correctly denied. Seen live: a 司令 pawn tying against
+ *   the enemy 司令 on d1 logged as `e2×d1＝后` with both pieces gone.
+ */
+export function moveText(move: Move, madeContact: boolean, promoted?: Carrier): string {
   switch (move.kind) {
     case 'pass':
       return 'pass（跳過）'
@@ -45,7 +53,7 @@ export function moveText(move: Move, madeContact: boolean): string {
       return move.side === 'king' ? 'O-O（王翼易位）' : 'O-O-O（后翼易位）'
     case 'move': {
       const sep = madeContact ? '×' : '–'
-      const promo = move.promote ? `＝${CARRIER_LABEL[move.promote].split(' ')[0]}` : ''
+      const promo = promoted ? `＝${CARRIER_LABEL[promoted].split(' ')[0]}` : ''
       return `${squareName(move.from)}${sep}${squareName(move.to)}${promo}`
     }
   }
@@ -138,7 +146,7 @@ export function eventLine(ev: GameEvent): EventLine {
   return {
     ply: ev.ply,
     color: ev.color,
-    move: moveText(ev.move, contact),
+    move: moveText(ev.move, contact, ev.promoted),
     combat: ev.combat ? combatText(ev.combat.outcome, ev.color) : null,
     tags: ev.combat ? combatTags(ev.combat.outcome, ev.color) : { mover: null, target: null },
     enPassant:

@@ -4,6 +4,7 @@ import type { Carrier, Color, Move, Rank, Square, ViewerState } from '@xiyang/ru
 import { Board } from '../components/Board.js'
 import { CapturedTray } from '../components/CapturedTray.js'
 import { EventLog } from '../components/EventLog.js'
+import { ExportButton, ExportPanel } from '../components/ExportPanel.js'
 import { PencilPanel, readDraggedRank } from '../components/PencilPanel.js'
 import { RankTable } from '../components/RankTable.js'
 import {
@@ -70,6 +71,8 @@ export function Game({ view }: GameProps) {
 
   const [selected, setSelected] = useState<Square | null>(null)
   const [promotion, setPromotion] = useState<PendingPromotion | null>(null)
+  /** 匯出 — the record, for reading elsewhere. See ExportPanel. */
+  const [exportOpen, setExportOpen] = useState(false)
   const [draggingRank, setDraggingRank] = useState<Rank | null>(null)
   /** which enemy square has the notepad popover open on the board, if any */
   const [pencilOpen, setPencilOpen] = useState<Square | null>(null)
@@ -169,6 +172,9 @@ export function Game({ view }: GameProps) {
 
   // stable identity: the board hangs document listeners off this while open
   const closePencil = useCallback(() => setPencilOpen(null), [])
+  // likewise — the export panel keeps an Escape listener on the document
+  const closeExport = useCallback(() => setExportOpen(false), [])
+  const openExport = useCallback(() => setExportOpen(true), [])
 
   function play(move: Move) {
     setSelected(null)
@@ -274,7 +280,11 @@ export function Game({ view }: GameProps) {
       </header>
 
       {view.status.kind === 'over' && (
-        <div className="banner">{resultText(view.status.result)}</div>
+        <div className="banner xy-over">
+          <span>{resultText(view.status.result)}</span>
+          {/* the moment the record is actually wanted — put it in the banner */}
+          <ExportButton onClick={openExport} prominent />
+        </div>
       )}
 
       <div className="xy-grid">
@@ -349,6 +359,9 @@ export function Game({ view }: GameProps) {
                 {m.side === 'king' ? 'O-O 王翼易位' : 'O-O-O 后翼易位'}
               </button>
             ))}
+            {/* always available: the record is readable mid-game too — it is
+                the public log, which both sides already have (規則書 §10) */}
+            <ExportButton onClick={openExport} />
             <button
               className="danger"
               type="button"
@@ -424,6 +437,13 @@ export function Game({ view }: GameProps) {
           />
         </div>
       </div>
+
+      {/*
+       * Handed the ViewerState this screen already renders. It is the redacted
+       * one (stateForViewer, 規則書 §10) — no fetch, no server call, nothing
+       * re-derived, which is exactly what makes exporting it safe.
+       */}
+      {exportOpen && <ExportPanel view={view} onClose={closeExport} />}
     </main>
   )
 }
@@ -461,6 +481,14 @@ function SidePanel({ color, score, clockMs, clockEnabled, toMove, isMe }: SidePa
  */
 const STYLE = `
 .screen.screen-game { max-width: 1560px; }
+/* the result banner also carries the export button once the game is over */
+.screen-game .banner.xy-over {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .xy-grid {
   display: grid;
   /* the centre column is min-content: it is exactly the board's natural width,

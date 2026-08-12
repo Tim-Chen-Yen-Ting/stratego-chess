@@ -132,3 +132,17 @@ export { entitledToRank, stateForViewer, viewerColor } from './redact.js'
 // ---------- rendering (§6) ----------
 export { renderForLLM, renderRulesForLLM } from './render/text.js'
 export type { RenderOptions } from './render/text.js'
+
+// ---------- 棋譜 export (§10 紀錄給，解算不給) ----------
+// Pure functions over a ViewerState, so the server can reuse them as-is.
+export { exportJson, exportMarkdown, gameStats } from './render/record.js'
+export type {
+  Deployment,
+  DeploymentPiece,
+  GameStats,
+  RecordJson,
+  RecordMoveJson,
+  SideStats,
+  TiesPerContest,
+  ZeroRun,
+} from './render/record.js'

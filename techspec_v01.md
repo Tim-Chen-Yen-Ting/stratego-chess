@@ -1,6 +1,14 @@
 # 行軍西洋棋 — Technical Specification v01
 
-Implementation contract for `gamebook_v02.md`. Where this document and the gamebook disagree about **rules**, the gamebook wins. This document is authoritative for **structure, types and APIs**.
+Implementation contract for `gamebook_v03.md`. Where this document and the gamebook disagree about **rules**, the gamebook wins. This document is authoritative for **structure, types and APIs**.
+
+Document set:
+| File | Role |
+|---|---|
+| `gamebook_v03.md` | **The rules.** What is legal. Normative. |
+| `notebook_v01.md` | Derivations, emergent interactions, playtest data. Never normative. |
+| `techspec_v01.md` | This file — structure, types, APIs. |
+| `gamebook.md`, `gamebook_v02.md`, `plan_v01.md` | Superseded. Kept for history. |
 
 ---
 
@@ -11,7 +19,7 @@ Implementation contract for `gamebook_v02.md`. Where this document and the gameb
 | Accounts | None. Guest play only. |
 | Persistence | None. Games live in memory. No database. |
 | Matchmaking | None. Invite links only. |
-| Setup timeout | Auto-assign a universal default, then continue |
+| Setup timeout | Auto-assign a RANDOM valid army, then continue. Must not be a fixed default — a deterministic fallback publishes that player's whole army |
 | Disconnect | Clock keeps running. No grace period. |
 | Spectating | Via a player's share link, bound to that player's view |
 | LLM play | GET-only HTTP interface, see §6 |
@@ -167,9 +175,13 @@ export interface GameEvent {
 }
 
 export interface GameConfig {
-  scoreTarget: number        // X, default 40
+  scoreTarget: number        // X, default 40 (80 under the wide-8 preset)
   noProgressTurns: number    // N, default 30
   komi: number               // default 0.5, credited to black
+  /** §7 settlement squares. Default SCORING_CENTRE_4; SCORING_WIDE_8 adds a/h flanks.
+   *  Settlement reads THIS, never a module constant, so a game keeps the shape
+   *  it was created with. */
+  scoringSquares: readonly Square[]
   clockInitialMs: number     // default 900_000
   clockIncrementMs: number   // default 10_000
   setupTimeoutMs: number     // default 180_000
@@ -236,6 +248,9 @@ export interface ViewerState {
   viewer: Viewer
   /** legal moves, present only for a player whose turn it is */
   legalMoves?: Move[]
+  /** absolute epoch-ms setup deadline, present only during setup. NOT derived
+   *  from GameState — the engine holds no wall clock. rooms.ts fills it in. */
+  setupDeadlineMs?: number
 }
 ```
 
@@ -253,8 +268,11 @@ export const DISTRIBUTION: Record<Rank, number> = {
   battalion: 2, company: 1, platoon: 1, engineer: 2, flag: 1, bomb: 2,
 }  // sums to 16
 
-/** d4, e4, d5, e5 */
-export const CENTER_SQUARES: Square[] = [27, 28, 35, 36]
+/** Built from square NAMES, never literals — an off-by-one here is invisible
+ *  and would corrupt every score. CENTER_SQUARES is an alias of the centre-4. */
+export const SCORING_CENTRE_4: readonly Square[]   // d4 e4 d5 e5 = 27 28 35 36
+export const SCORING_WIDE_8: readonly Square[]     // + a4 h4 a5 h5 = 24 31 32 39
+export const CENTER_SQUARES: readonly Square[]     // = SCORING_CENTRE_4
 
 export const DEFAULT_CONFIG: GameConfig = {
   scoreTarget: 40, noProgressTurns: 30, komi: 0.5,
@@ -291,6 +309,16 @@ export function flagFall(s: GameState, color: Color): GameState
 export function stateForViewer(s: GameState, v: Viewer): ViewerState
 
 export function renderForLLM(vs: ViewerState, opts: { baseUrl: string; token: string }): string
+
+/** Setup-code codec (§6). ONE implementation — a renderer-side encoder plus a
+ *  server-side parser would desync. 16 chars over 123456789FX. */
+export function encodeSetupCode(state, color): string
+export function decodeSetupCode(code, color, state): { assignment } | { error: string }
+
+/** Game record export. Pure over a ViewerState, so it inherits redaction. */
+export function exportMarkdown(vs: ViewerState): string
+export function exportJson(vs: ViewerState): unknown
+export function gameStats(vs: ViewerState): GameStats
 ```
 
 ### Critical implementation notes

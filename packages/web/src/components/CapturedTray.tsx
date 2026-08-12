@@ -252,8 +252,8 @@ function describe(p: ViewerPiece, rec: CaptureRecord | undefined, me: Color | nu
   if (rec === undefined) return head
   const ev = rec.event
   const record = ev.combat
-    ? `${moveText(ev.move, true)}｜${combatText(ev.combat.outcome, ev.color)}`
-    : moveText(ev.move, false)
+    ? `${moveText(ev.move, true, ev.promoted)}｜${combatText(ev.combat.outcome, ev.color)}`
+    : moveText(ev.move, false, ev.promoted)
   return `${head}\n第 ${rec.ply} 手 公開紀錄：${record}\n${captureLine(rec, me)}`
 }
 
