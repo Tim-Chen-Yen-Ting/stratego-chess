@@ -1,5 +1,5 @@
 /**
- * INDEPENDENT AUDIT — written against gamebook_v02.md directly, not against the
+ * INDEPENDENT AUDIT — written against gamebook_v04.md directly, not against the
  * engine's behaviour. Every expectation below quotes the gamebook clause it
  * enforces. Temporary integration-agent probe.
  */
@@ -113,7 +113,7 @@ describe('§4 en passant 結算', () => {
 // --------------------------------------------------------------------------
 
 describe('§5 爆裂物', () => {
-  it('爆裂物 vs 一般兵種 — 雙方移除，僅爆裂物公告', () => {
+  it('爆裂物 vs 一般兵種 — 雙方移除，不公告任何一方', () => {
     const s = position([
       { at: 'a1', color: 'white', carrier: 'rook', rank: 'bomb', id: 'A' },
       { at: 'a5', color: 'black', carrier: 'rook', rank: 'commander', id: 'D' },
@@ -123,23 +123,56 @@ describe('§5 爆裂物', () => {
     const n = applyMove(s, mv('a1', 'a5'))
     expect(pieceById(n, 'A').square).toBeNull()
     expect(pieceById(n, 'D').square).toBeNull()
-    expect(pieceById(n, 'A').revealed).toBe(true)
+    // The 爆裂物 is NOT 翻明. 翻明 is not merely a second announcement — a
+    // revealed piece hands its rank to every viewer through the piece list, so
+    // revealing it would republish exactly what the opaque outcome withholds.
+    expect(pieceById(n, 'A').revealed).toBe(false)
     expect(pieceById(n, 'D').revealed).toBe(false)
-    expect(lastEvent(n).combat?.outcome.kind).toBe('bomb-detonate')
+    expect(lastEvent(n).combat?.outcome).toEqual({ kind: 'mutual-destruction' })
   })
 
-  it('同階雙亡與爆裂物引爆是兩種可區分的公告', () => {
-    const kinds = new Set<string>()
-    for (const [ar, dr] of [['brigade', 'brigade'], ['bomb', 'brigade']] as const) {
+  /**
+   * §4.3 — 同階雙亡, 爆裂物引爆 and 爆裂物對爆 are ONE announcement.
+   *
+   * This inverts the v02 clause it replaces, which required 同階雙亡 and 引爆 to
+   * be distinguishable. Naming the tied 階級 handed both players an exact rank,
+   * and announcing a detonation made 爆裂物 publicly countable — count both of a
+   * side's bombs off the log and its revealed 司令 is known-unkillable. The three
+   * now announce identically, so a player who trades into you cannot tell whether
+   * they met their own rank or a bomb.
+   */
+  it('同階雙亡、爆裂物引爆、爆裂物對爆 — 三者公告完全相同，無從分辨', () => {
+    const bothDie = [
+      ['brigade', 'brigade'],   // 同階相遇
+      ['bomb', 'brigade'],      // 爆裂物 vs 一般兵種, bomb attacking
+      ['brigade', 'bomb'],      // 爆裂物 vs 一般兵種, bomb defending
+      ['bomb', 'bomb'],         // 爆裂物 vs 爆裂物
+    ] as const
+
+    const announcements = bothDie.map(([ar, dr]) => {
       const s = position([
         { at: 'a1', color: 'white', carrier: 'rook', rank: ar, id: 'A' },
         { at: 'a5', color: 'black', carrier: 'rook', rank: dr, id: 'D' },
         { at: 'h1', color: 'white', carrier: 'king', rank: 'flag', id: 'wf' },
         { at: 'h8', color: 'black', carrier: 'king', rank: 'flag', id: 'bf' },
       ])
-      kinds.add(applyMove(s, mv('a1', 'a5')).log[0]!.combat!.outcome.kind)
+      const n = applyMove(s, mv('a1', 'a5'))
+      // both gone, and neither 翻明, in every one of the four
+      expect(pieceById(n, 'A').square).toBeNull()
+      expect(pieceById(n, 'D').square).toBeNull()
+      expect(pieceById(n, 'A').revealed).toBe(false)
+      expect(pieceById(n, 'D').revealed).toBe(false)
+      return n.log[0]!.combat!.outcome
+    })
+
+    // Not just the same `kind` — the same OBJECT, field for field. A
+    // discriminator hidden in a second field would be exactly as fatal, and
+    // there must be nothing for a redaction layer to have to strip.
+    for (const a of announcements) {
+      expect(a).toEqual({ kind: 'mutual-destruction' })
+      expect(Object.keys(a)).toEqual(['kind'])
     }
-    expect(kinds.size).toBe(2)
+    expect(new Set(announcements.map((a) => JSON.stringify(a))).size).toBe(1)
   })
 
   it('工兵/軍旗為攻方 → 爆裂物移除，工兵/軍旗佔據目標格，不翻明', () => {
@@ -196,12 +229,16 @@ describe('§5 爆裂物', () => {
 // --------------------------------------------------------------------------
 
 describe('§4 翻明總表', () => {
+  // 翻明 now happens on exactly one kind of contact: one that has a WINNER.
+  // Every both-die contact reveals nobody, because all three of them share the
+  // one contentless 同歸於盡 announcement (§4.3) and a 翻明 flag would leak
+  // through the piece list what the announcement itself refuses to carry.
   const cases: Array<[string, 'commander' | 'company' | 'brigade' | 'bomb', 'commander' | 'company' | 'brigade' | 'bomb' | 'engineer', boolean, boolean]> = [
     ['高階勝低階 — 勝方翻明，敗方不公開', 'commander', 'company', true, false],
     ['守方勝 — 守方翻明，攻方不公開', 'company', 'commander', false, true],
-    ['同階相遇 — 雙方皆公開', 'brigade', 'brigade', true, true],
-    ['爆裂物 vs 一般 — 僅爆裂物公告', 'bomb', 'commander', true, false],
-    ['爆裂物 vs 爆裂物 — 雙方皆公告', 'bomb', 'bomb', true, true],
+    ['同階相遇 — 不公開任何一方', 'brigade', 'brigade', false, false],
+    ['爆裂物 vs 一般 — 不公開任何一方', 'bomb', 'commander', false, false],
+    ['爆裂物 vs 爆裂物 — 不公開任何一方', 'bomb', 'bomb', false, false],
     ['爆裂物 vs 工兵 — 不公開任何一方', 'bomb', 'engineer', false, false],
   ]
 
@@ -306,7 +343,18 @@ describe('§7 結算', () => {
     expect(s.score).toEqual({ white: 0, black: 0.5 })
   })
 
-  it('每一手結束後雙方同時計分 — 對手行棋時我方中央子照樣得分', () => {
+  /**
+   * §7 — 每一手結束後皆執行結算，但只有剛行動的一方計分.
+   *
+   * This inverts the v02 clause 「雙方同時計分」. Crediting both every ply put
+   * white one settlement ahead for every acquiring move: a square white takes on
+   * move m is counted from ply 2m-1, black's mirror-image square from ply 2m.
+   * Mover-only settles that, and settles the exposure question with it — each
+   * side banks once before the opponent can reply.
+   *
+   * A pass settles like anything else (§3④): the passer is the mover.
+   */
+  it('只有剛行動的一方計分 — 對手行棋時我方中央子不計分', () => {
     const s = position(
       [
         { at: 'e4', color: 'white', carrier: 'rook', rank: 'commander', id: 'W' },
@@ -316,8 +364,13 @@ describe('§7 結算', () => {
       ],
       { toMove: 'black' },
     )
+    // black passes: black is the mover and settles for 0; white's e4 is untouched
     const n = applyMove(s, PASS)
-    expect(n.score.white).toBe(1)
+    expect(n.score).toEqual({ white: 0, black: 0.5 })
+
+    // white's own ply is when white's e4 pays
+    const n2 = applyMove(n, PASS)
+    expect(n2.score).toEqual({ white: 1, black: 0.5 })
   })
 
   it('棋子若在①被吃掉，該手不計入其佔領分', () => {

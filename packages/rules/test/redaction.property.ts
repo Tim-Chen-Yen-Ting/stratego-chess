@@ -204,7 +204,7 @@ export const ALL_VIEWERS: readonly Viewer[] = [
   { kind: 'spectator', bound: 'white' },
   { kind: 'spectator', bound: 'black' },
   { kind: 'spectator-public' },
-  { kind: 'replay-omniscient' },
+  { kind: 'omniscient' },
   { kind: 'replay-player', color: 'white' },
   { kind: 'replay-player', color: 'black' },
 ]
@@ -347,13 +347,15 @@ export function contactGame(id: string, whiteRank: Rank, blackRank: Rank, config
 export function scenarioCorpus(): CorpusEntry[] {
   const out: CorpusEntry[] = []
 
-  // §4 翻明總表, row by row.
+  // §4 翻明總表, row by row. The four 同歸於盡 rows are labelled by the 兵種 pair
+  // that PRODUCED them, not by the announcement — all four announce the same
+  // thing, which is exactly what the suites below have to hold true.
   out.push({ label: 'contact/attacker-wins', state: contactGame('c-aw', 'commander', 'platoon') })
   out.push({ label: 'contact/defender-wins', state: contactGame('c-dw', 'platoon', 'commander') })
-  out.push({ label: 'contact/mutual-rank', state: contactGame('c-mr', 'brigade', 'brigade') })
-  out.push({ label: 'contact/bomb-detonate(white bomb)', state: contactGame('c-bd', 'bomb', 'brigade') })
-  out.push({ label: 'contact/bomb-detonate(black bomb)', state: contactGame('c-bd2', 'brigade', 'bomb') })
-  out.push({ label: 'contact/bomb-vs-bomb', state: contactGame('c-bb', 'bomb', 'bomb') })
+  out.push({ label: 'contact/mutual(equal ranks)', state: contactGame('c-mr', 'brigade', 'brigade') })
+  out.push({ label: 'contact/mutual(white bomb)', state: contactGame('c-bd', 'bomb', 'brigade') })
+  out.push({ label: 'contact/mutual(black bomb)', state: contactGame('c-bd2', 'brigade', 'bomb') })
+  out.push({ label: 'contact/mutual(bomb vs bomb)', state: contactGame('c-bb', 'bomb', 'bomb') })
   // 有煙無傷 — both directions, and both possible survivors (附錄 A(a)).
   out.push({ label: 'contact/fizzle(engineer attacks bomb)', state: contactGame('c-fz', 'engineer', 'bomb') })
   out.push({ label: 'contact/fizzle(flag attacks bomb)', state: contactGame('c-fz', 'flag', 'bomb') })
@@ -409,12 +411,12 @@ const RANKS = new Set<string>(ALL_RANKS)
  */
 export const KIND_VOCAB: ReadonlySet<string> = new Set([
   'move', 'castle', 'pass',                                                    // Move
-  'attacker-wins', 'defender-wins', 'mutual-rank',
-  'bomb-detonate', 'bomb-vs-bomb', 'fizzle',                                   // CombatOutcome
+  'attacker-wins', 'defender-wins',
+  'mutual-destruction', 'fizzle',                                              // CombatOutcome
   'flag', 'flag-both', 'score', 'no-progress', 'timeout', 'resign',            // Result
   'setup', 'playing', 'over',                                                  // GameStatus
   'player', 'spectator', 'spectator-public',
-  'replay-omniscient', 'replay-player',                                        // Viewer
+  'omniscient', 'replay-player',                                        // Viewer
 ])
 
 type Leaf = { path: string; value: string }
@@ -439,7 +441,6 @@ export function stringLeaves(node: unknown, path = '', out: Leaf[] = []): Leaf[]
 
 const PIECE_RANK_PATH = /^pieces\[(\d+)\]\.rank$/
 const LOG_WINNER_PATH = /^log\[(\d+)\]\.combat\.outcome\.winnerRank$/
-const LOG_MUTUAL_PATH = /^log\[(\d+)\]\.combat\.outcome\.rank$/
 const KIND_PATH = /(^|\.)kind$/
 
 /**
@@ -448,11 +449,13 @@ const KIND_PATH = /(^|\.)kind$/
  *   a Rank may appear in a ViewerState ONLY as
  *     • `pieces[i].rank` for a piece this viewer is entitled to
  *       (owns it / 已翻明 / omniscient replay / 終局), or
- *     • a rank the public log announced (§4「翻明總表」), which by construction
- *       belongs to a piece flagged `revealed`.
+ *     • the `winnerRank` of a DECISIVE contact (§4「翻明總表」), which by
+ *       construction belongs to a piece flagged `revealed`.
  *
- * Anything else — a nested field, an unexpected key, a stray reference dragged
- * along by a spread — is a leak.
+ * There is no third slot any more. 同歸於盡 used to announce the shared 階級 and
+ * a detonation used to announce a colour; both are gone, so a rank anywhere in a
+ * combat outcome other than `winnerRank` is a leak by definition — a nested
+ * field, an unexpected key, or a stray reference dragged along by a spread.
  */
 export function deepWalkViolations(s: GameState, v: Viewer, vs: ViewerState): string[] {
   const entitled = entitlement(s, v)
@@ -490,15 +493,6 @@ export function deepWalkViolations(s: GameState, v: Viewer, vs: ViewerState): st
       const e = vs.log[Number(winner[1])]!
       const k = e.combat?.outcome.kind
       if (k !== 'attacker-wins' && k !== 'defender-wins') bad.push(`winnerRank on a ${String(k)} outcome at ${path}`)
-      else if (!revealedRanks.has(value as Rank)) bad.push(`${path} announces ${value} but no piece is 翻明 with it`)
-      continue
-    }
-
-    const mutual = LOG_MUTUAL_PATH.exec(path)
-    if (mutual) {
-      const e = vs.log[Number(mutual[1])]!
-      const k = e.combat?.outcome.kind
-      if (k !== 'mutual-rank') bad.push(`bare rank on a ${String(k)} outcome at ${path}`)
       else if (!revealedRanks.has(value as Rank)) bad.push(`${path} announces ${value} but no piece is 翻明 with it`)
       continue
     }
@@ -555,8 +549,9 @@ export function rawJsonViolations(s: GameState, v: Viewer, vs: ViewerState): str
   for (const e of clone.log) {
     const o = e.combat?.outcome as (CombatOutcome & Record<string, unknown>) | undefined
     if (!o) continue
+    // `winnerRank` is the ONLY announced rank left: 同歸於盡 carries none and a
+    // 有煙無傷 carries only a colour. Blanking anything else would blank a leak.
     if (o.kind === 'attacker-wins' || o.kind === 'defender-wins') o.winnerRank = null as never
-    if (o.kind === 'mutual-rank') o.rank = null as never
   }
 
   const text = JSON.stringify(clone)
@@ -717,8 +712,11 @@ describe('遮蔽層 property — corpus', () => {
     )
 
     expect([...statuses].sort()).toEqual(['over', 'playing', 'setup'])
+    // FOUR announcements, not six. The corpus still builds all three both-die
+    // 兵種 pairings (see scenarioCorpus) — they simply announce as one kind now,
+    // which is why this list shrank rather than the coverage.
     expect([...outcomes].sort()).toEqual([
-      'attacker-wins', 'bomb-detonate', 'bomb-vs-bomb', 'defender-wins', 'fizzle', 'mutual-rank',
+      'attacker-wins', 'defender-wins', 'fizzle', 'mutual-destruction',
     ])
     for (const kind of ['flag', 'flag-both', 'no-progress', 'resign', 'score', 'timeout']) {
       expect(results.has(kind as never), `corpus never produces result ${kind}`).toBe(true)
@@ -833,15 +831,15 @@ describe('遮蔽層 property — C. hidden ranks are indistinguishable', () => {
 
         // Non-vacuity: the permutation really did change the underlying world,
         // so an omniscient viewer must be able to see the difference.
-        const oa = JSON.stringify(stateForViewer(state, { kind: 'replay-omniscient' }))
-        const ob = JSON.stringify(stateForViewer(alt, { kind: 'replay-omniscient' }))
+        const oa = JSON.stringify(stateForViewer(state, { kind: 'omniscient' }))
+        const ob = JSON.stringify(stateForViewer(alt, { kind: 'omniscient' }))
         if (oa === ob) bad.push(`[${label}] permutation was a no-op — the test would be vacuous`)
       }
 
       expect(bad.slice(0, 6)).toEqual([])
       // Omniscient / finished games have nothing hidden; everyone else must
       // have been exercised on a large part of the corpus.
-      if (v.kind !== 'replay-omniscient') expect(exercised).toBeGreaterThan(100)
+      if (v.kind !== 'omniscient') expect(exercised).toBeGreaterThan(100)
     })
   }
 })

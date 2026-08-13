@@ -165,7 +165,9 @@ function audit(before: GameState, move: Move, after: GameState): void {
             : null
 
     if (survivorColor === null) {
-      // 同階雙亡 / 爆裂物引爆 — 雙方移除, 目標格淨空.
+      // 同歸於盡 — 雙方移除, 目標格淨空. Which of the three cases it was (equal
+      // 階級, a 爆裂物, or 爆裂物 vs 爆裂物) is not in the event and is not needed
+      // here: the board result is the same for all three.
       expect(survivorSquare).toBeNull()
       expect(squareOf(attackerId)).toBeNull()
       expect(squareOf(defenderId)).toBeNull()
@@ -207,14 +209,16 @@ function audit(before: GameState, move: Move, after: GameState): void {
   else if (bOff) expect(after.status).toEqual({ kind: 'over', result: { kind: 'flag', winner: 'white' } })
 
   // ---- §7② 結算 ---------------------------------------------------------
+  // Settlement runs after every ply and credits ONLY the side that just moved.
+  // The idle side's column must come through byte-identical even when it is
+  // standing on all four 中央格 — it was credited on its own last ply and will
+  // be again on its next.
   const flagEnded = wOff || bOff
-  const expectedScore = flagEnded
-    ? { ...before.score }
-    : {
-      white: before.score.white + centre(after, 'white'),
-      black: before.score.black + centre(after, 'black'),
-    }
+  const idle = opposite(mover)
+  const expectedScore = { ...before.score }
+  if (!flagEnded) expectedScore[mover] = before.score[mover] + centre(after, mover)
   expect(after.score).toEqual(expectedScore)
+  expect(after.score[idle]).toBe(before.score[idle])
   expect(e.scoreAfter).toEqual(after.score)
   expect(after.score.white).toBeGreaterThanOrEqual(before.score.white)
   expect(after.score.black).toBeGreaterThanOrEqual(before.score.black)

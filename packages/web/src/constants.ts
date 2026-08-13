@@ -41,7 +41,7 @@ export { CENTER_SQUARES, DISTRIBUTION, PIECES_PER_SIDE, checkDistribution, distr
  * of the payloads that may arrive: a state from a server that predates the
  * field falls back to the engine's four, which is exactly what such a server is
  * scoring. This reads a config field; it does not decide one. The server still
- * settles every ply (techspec §7).
+ * settles after every ply, crediting the side that just moved (§7).
  */
 export type ScoringConfig = GameConfig & { readonly scoringSquares?: readonly Square[] }
 
@@ -63,17 +63,22 @@ export type ScoringAreaId = 'center' | 'wide'
 // off-by-one in these indices is invisible and would corrupt every score. Import
 // it rather than restating the numbers here.
 
+/**
+ * A 計分區 the Create screen offers.
+ *
+ * There is deliberately NO score-target multiplier here any more. The wide area
+ * used to carry `scoreTargetFactor: 2`, because settlement credited both players
+ * after every ply and eight squares therefore paid at twice the rate of four.
+ * Settlement now credits only the side that just moved (§7), so a side banks
+ * once per full turn on any board: widening the area raises how much a single
+ * settlement CAN pay, not how often one happens. Both presets take
+ * `DEFAULT_CONFIG.scoreTarget` unscaled, and the field is gone rather than set
+ * to 1 so that nothing can quietly start multiplying by it again.
+ */
 export interface ScoringAreaPreset {
   id: ScoringAreaId
   label: string
   squares: readonly Square[]
-  /**
-   * Multiplier on the default 目標分數 X. Twice the scoring area accrues points
-   * at roughly twice the rate, so the default finish line moves with it; 附錄 B
-   * calls X the length of the game, and this keeps that length comparable. It
-   * is only a DEFAULT — the player may type anything over it.
-   */
-  scoreTargetFactor: number
 }
 
 /** The presets the Create screen offers. Order is display order. */
@@ -84,13 +89,11 @@ export const SCORING_AREAS: Record<ScoringAreaId, ScoringAreaPreset> = {
     id: 'center',
     label: '中央四格',
     squares: scoringSquaresOf(DEFAULT_CONFIG),
-    scoreTargetFactor: 1,
   },
   wide: {
     id: 'wide',
     label: '中央＋側翼八格',
     squares: SCORING_WIDE_8,
-    scoreTargetFactor: 2,
   },
 }
 

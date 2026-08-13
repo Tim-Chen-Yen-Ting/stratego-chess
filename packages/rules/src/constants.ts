@@ -169,6 +169,12 @@ export const SCORING_CENTRE_4: readonly Square[] = squaresNamed('d4', 'e4', 'd5'
  * (`[24, 31, 32, 39]`). A playtest shape — the centre-only board funnels every
  * piece into four squares and leaves the flanks dead, so the wide board is here
  * to be tried, not because it is better. Set it via `createGame`'s config.
+ *
+ * **Suggested X: 40 — the same as 中央四格, NOT double it.** Doubling was right
+ * when both sides settled every ply; under mover-only settlement (§7) a piece
+ * holding a square banks 1 point per full turn on any board, so eight squares
+ * raise the CEILING of a turn's income, not its rate. Anything that offers this
+ * preset should offer `DEFAULT_CONFIG.scoreTarget` with it, unscaled.
  */
 export const SCORING_WIDE_8: readonly Square[] = Object.freeze([
   ...SCORING_CENTRE_4,
@@ -185,6 +191,15 @@ export const SCORING_WIDE_8: readonly Square[] = Object.freeze([
  */
 export const CENTER_SQUARES: readonly Square[] = SCORING_CENTRE_4
 
+/**
+ * X = 40 for every 結算格 preset, 貼目 = 0.5.
+ *
+ * A settlement credits only the mover (§7), so the scoring rate is one bank per
+ * side per full turn whatever the board shape — 40 is the same match length on
+ * 中央四格 and on 側翼八格, and neither preset scales it. 貼目 is here solely to
+ * make an exact tie impossible; it compensates for no first-move advantage,
+ * because mover-only settlement leaves none to compensate for.
+ */
 export const DEFAULT_CONFIG: GameConfig = {
   scoreTarget: 40, noProgressTurns: 30, komi: 0.5,
   scoringSquares: SCORING_CENTRE_4,

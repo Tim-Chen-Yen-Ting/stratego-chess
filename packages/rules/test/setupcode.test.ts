@@ -274,7 +274,7 @@ describe('encode refuses to invent a 兵種 it cannot see', () => {
     expect(encodeSetupCode(asWhite, 'white')).toBe(SETUP_CODE_EXAMPLE)
     expect(() => encodeSetupCode(asWhite, 'black')).toThrow(/hidden/)
 
-    const omniscient = stateForViewer(s, { kind: 'replay-omniscient' })
+    const omniscient = stateForViewer(s, { kind: 'omniscient' })
     expect(encodeSetupCode(omniscient, 'black')).toBe(SETUP_CODE_EXAMPLE)
   })
 })

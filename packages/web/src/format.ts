@@ -66,12 +66,11 @@ export function combatText(outcome: CombatOutcome, attacker: Color): string {
       return `攻方（${colorLabel(attacker)}）獲勝，永久翻明為 ${RANK_LABEL[outcome.winnerRank]}；守方移除，兵種不公開`
     case 'defender-wins':
       return `守方（${colorLabel(other(attacker))}）獲勝，永久翻明為 ${RANK_LABEL[outcome.winnerRank]}；攻方由原格移除，兵種不公開`
-    case 'mutual-rank':
-      return `同階雙亡 — 雙方皆為 ${RANK_LABEL[outcome.rank]}，同時移除`
-    case 'bomb-detonate':
-      return `爆裂物引爆（${colorLabel(outcome.bombColor)}）— 雙方移除；對方兵種不公開`
-    case 'bomb-vs-bomb':
-      return '爆裂物 vs 爆裂物 — 雙方皆為爆裂物，同時移除'
+    case 'mutual-destruction':
+      // The sentence has to spell the ambiguity out. A player who reads this as
+      // the old 同階雙亡 concludes the other piece shared their own 階級 — the
+      // exact false inference the single announcement exists to prevent.
+      return '雙方同時移除 — 可能是同階雙亡，也可能是爆裂物；兩者的公告完全相同，無從分辨。雙方兵種皆不公開'
     case 'fizzle':
       return `有煙無傷 — ${colorLabel(outcome.survivorColor)}該子為 工兵 或 軍旗；爆裂物移除`
   }
@@ -85,12 +84,17 @@ export function combatText(outcome: CombatOutcome, attacker: Color): string {
  *
  *   6黑（軍長） f6xf5          attacker won and is now 翻明 as 軍長
  *   7白　　　　 e4xf5（軍長）   defender won; the attacker is gone
- *   8黑（團長） d4xd5（團長）   同階雙亡
- *   9白（爆裂物）e2xe4          白's bomb detonated; the victim stays hidden
- *  10黑（工兵/軍旗）h7xg5（爆裂物） 有煙無傷 — the bomb died, the survivor is one of two
+ *   8黑　　　　 d4xd5          both pieces removed; NOTHING is announced
+ *   9白（工兵/軍旗）g4xh5（爆裂物） 有煙無傷 — the bomb died, the survivor is one of two
  *
  * A rank never appears here unless the server actually announced it, so this
  * stays a restatement of the record and never becomes a solver (gamebook §10).
+ * Line 8 is why 'mutual-destruction' carries no tags at ALL: a tag on either
+ * side would be a claim about a specific piece, and the announcement makes no
+ * such claim — it does not even say whether the trade was 同階 or a 爆裂物.
+ * The empty pair is the honest rendering, and it is also the readable one: a
+ * contact with neither tag is precisely a mutual destruction, and both pieces
+ * leaving the board is on the board itself.
  */
 export interface CombatTags {
   /** shown next to the side that moved */
@@ -108,15 +112,11 @@ export function combatTags(outcome: CombatOutcome, mover: Color): CombatTags {
       return { mover: RANK_LABEL[outcome.winnerRank], target: null }
     case 'defender-wins':
       return { mover: null, target: RANK_LABEL[outcome.winnerRank] }
-    case 'mutual-rank':
-      return { mover: RANK_LABEL[outcome.rank], target: RANK_LABEL[outcome.rank] }
-    case 'bomb-vs-bomb':
-      return { mover: BOMB, target: BOMB }
-    case 'bomb-detonate':
-      // only the bomb is announced; the piece it took stays hidden (§4 翻明總表)
-      return outcome.bombColor === mover
-        ? { mover: BOMB, target: null }
-        : { mover: null, target: BOMB }
+    case 'mutual-destruction':
+      // 同階雙亡 and 爆裂物 now share one announcement that names neither side.
+      // Tagging is positional, so any tag here would name one of the two pieces
+      // — and there is nothing to name. Both went; that is the whole record.
+      return { mover: null, target: null }
     case 'fizzle':
       // the dead piece was necessarily a bomb; the survivor is narrowed to two,
       // and deliberately no further — that ambiguity is the point (附錄 A(a))

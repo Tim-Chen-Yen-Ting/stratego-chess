@@ -83,12 +83,13 @@ progress. That is a deliberate v1 decision, not an oversight.
    authentication — there are no accounts.
 3. Both sides now assign their 16 兵種 to their 16 carriers, **simultaneously and in secret**. Click
    a rank in the tray, then click one of your pieces. Submit unlocks once the assignment is an exact
-   bijection onto the §2 count table. If you run out the setup clock (default 3 minutes) the server
-   assigns a fixed default for you and starts the game anyway.
+   bijection onto the §2 count table. If you run out the setup clock (default 3 minutes, 60 for
+   untimed games) the server rolls a **random legal deployment** for you and starts the game anyway —
+   random, not a fixed default, because a predictable army is the same failure as a published one.
 4. Play. Own ranks show on your own pieces; enemy ranks appear only once 翻明 (permanently revealed)
    by winning a fight. The centre squares d4/e4/d5/e5 are highlighted — **every piece you have
-   standing on one scores you 1 point after every single ply, yours and your opponent's.** First to
-   40 wins. Black starts at 0.5 (貼目), which is what makes an exact tie impossible.
+   standing on one scores you 1 point at the end of each of your OWN plies** — once per full turn,
+   not once per ply. First to 40 wins. Black starts at 0.5 (貼目), which is what makes an exact tie impossible.
 
 To let someone watch a LIVE game, share the **public spectator link** — it carries the board, the public log and 翻明 兵種 only, and hands over nobody's army. The **bound spectator link** shows one player's entire hand and must not go to a third party mid-game.
 more, so relaying cannot leak anything you do not already know.

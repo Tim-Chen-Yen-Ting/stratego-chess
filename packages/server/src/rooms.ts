@@ -77,6 +77,13 @@ export interface Room {
    * nothing else. Safe to hand to anyone while the game is running.
    */
   readonly publicToken: string
+  /**
+   * Sees both armies, live. Issued ONLY to the invite creator, who already
+   * holds both player tokens (techspec §0, accepted) — so it grants nothing
+   * they could not already get by opening both seats. It must never reach the
+   * guest or any third party: for them it IS the game.
+   */
+  readonly omniscientToken: string
   /** which colour the invite creator drew (gamebook §9 coin flip) */
   readonly hostColor: Color
   readonly clock: GameClock
@@ -144,6 +151,7 @@ export function createRoom(config?: Partial<GameConfig>): Room {
   playerTokens[guestColor] = mintToken()
   const spectatorTokens: Record<Color, string> = { white: mintToken(), black: mintToken() }
   const publicToken = mintToken()
+  const omniscientToken = mintToken()
 
   // The host closures only run after `room` below is initialised.
   const clock = new GameClock({
@@ -163,6 +171,7 @@ export function createRoom(config?: Partial<GameConfig>): Room {
     playerTokens,
     spectatorTokens,
     publicToken,
+    omniscientToken,
     hostColor,
     clock,
     setupTimer: null,
@@ -187,6 +196,7 @@ export function createRoom(config?: Partial<GameConfig>): Room {
   // piece is 翻明 or the game is over, so it is the one link in the room that can
   // be handed to a third party mid-game without giving away an army.
   tokens.set(publicToken, { gameId: id, viewer: { kind: 'spectator-public' } })
+  tokens.set(omniscientToken, { gameId: id, viewer: { kind: 'omniscient' } })
 
   rooms.set(id, room)
   armSetupTimer(room)
@@ -436,6 +446,7 @@ export function sweep(now = Date.now()): number {
     }
     // every token the room minted, or the map keeps growing after the sweep
     tokens.delete(room.publicToken)
+    tokens.delete(room.omniscientToken)
     rooms.delete(id)
     dropped += 1
   }

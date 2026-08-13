@@ -91,7 +91,10 @@ function readConfig(input: unknown): Partial<GameConfig> | undefined {
   const noProgressTurns = clampNumber(raw['noProgressTurns'], 1, 10_000)
   if (noProgressTurns !== undefined) config.noProgressTurns = noProgressTurns
 
-  const komi = clampNumber(raw['komi'], 0, 1_000)
+  // §7.3: 貼目's only remaining job is making ties impossible, so zero is not a
+  // legal value — at komi 0 a 停滯 finish at level scores has no winner and
+  // game.ts silently hands it to black.
+  const komi = clampNumber(raw['komi'], 0.5, 1_000)
   if (komi !== undefined) config.komi = komi
 
   const clockInitialMs = clampNumber(raw['clockInitialMs'], 1_000, 86_400_000)
@@ -246,6 +249,10 @@ export function buildApp(): ReturnType<typeof Fastify> {
       // ranks and the public log. Offered to every token holder, spectators
       // included, because sharing it can never widen what the recipient learns.
       publicUrl: playUrl(session.room.publicToken),
+      // HOST ONLY. The host already holds guestToken (techspec §0), so this
+      // grants no new capability. Handing it to the guest would hand them the
+      // opponent's whole army, and handing it to a spectator is worse.
+      omniscientUrl: session.seat === 'host' ? playUrl(session.room.omniscientToken) : null,
       llmUrl: viewer.kind === 'player' ? llmUrl(session.token) : null,
       // the same neutral view as text, for a model watching the game
       publicLlmUrl: llmUrl(session.room.publicToken),
@@ -329,6 +336,10 @@ function describeNewRoom(room: Room): Record<string, unknown> {
     // either player does not already have. Both are returned because they answer
     // different questions — "watch over my shoulder" vs "watch the game".
     publicUrl: playUrl(room.publicToken),
+    // Both armies, live. Safe to return HERE because the creator already holds
+    // both player tokens; it is deliberately absent from /api/links for anyone
+    // who is not the host, and must never reach the guest.
+    omniscientUrl: playUrl(room.omniscientToken),
     llmUrl: llmUrl(hostToken),
     // Echo back what the server ACTUALLY built, not what was asked for. The
     // creation form confirms the settings to the player, and confirming a value

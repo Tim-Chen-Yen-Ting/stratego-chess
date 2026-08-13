@@ -17,18 +17,21 @@
  *    path by which it could reach around that boundary.
  *  · A rank is printed only when it came from `ViewerPiece.rank` (non-null) or
  *    from a `CombatOutcome` field, which §4「翻明總表」defines as announced to
- *    everyone. 爆裂物 is named for the three bomb outcomes for the same reason:
- *    the bomb's identity is公告 by the event itself.
+ *    everyone. 爆裂物 is named on a 有煙無傷 for the same reason: that event
+ *    公告s that a bomb was lost. It is now the ONLY event that does — 同歸於盡
+ *    carries nothing, so a bomb that worked is not in the record at all.
  *  · No candidate sets, no ranges, no "the survivor must be 工兵 or 軍旗". That
  *    is 推論輔助 (§10) and it is the reader's job, not the record's — even
  *    though the deduction is trivial and even though a spectator UI is allowed
  *    to show it. A record that solves for you turns 讀盤 into reading.
  *  · The statistics are aggregates over the PUBLIC log and the PUBLIC carrier
- *    layer: how many contacts, how they were announced, how many plies a side
- *    scored nothing, how many squares it held, where its moves landed, which
+ *    layer: how many contacts, how they were announced, how many of a side's own
+ *    結算 paid nothing, how many squares it held, where its moves landed, which
  *    piece moved. They are statements about what happened, not about who anyone
  *    is. Nothing here narrows, eliminates or ranges over a 兵種 — that is 解算,
- *    and no aggregate of squares can produce it.
+ *    and no aggregate of squares can produce it. The one figure that does read a
+ *    兵種 — the true 爆裂物 count — is taken only at 終局, when §10.5 has already
+ *    opened every rank to every viewer.
  *  · At game end the ViewerState carries every rank (§10 終局公開全部兵種), so a
  *    finished game exports in full with no special-casing anywhere below.
  *
@@ -62,48 +65,73 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
- * 同階雙亡 over every contact, kept as a RAW FRACTION.
+ * 同歸於盡 over every contact, kept as a RAW FRACTION.
  *
- * This is the single most misread number in the system: a percentage alone
- * ("17% ties") says nothing about whether that was 1 tie in 6 or 170 in 1000,
- * and two playtest games have already been argued about on the strength of a
- * ratio with no denominator. Both terms are therefore always carried, and the
- * ratio is `null` — never 0, never NaN — when there were no contacts at all.
+ * **This replaces `tiesPerContest`, and it is not the same number.** The old one
+ * was 同階雙亡 over 階級對決 — rank ties over the contacts where two ranks were
+ * actually compared — which is the figure notebook §4.1 checks against its ~18%
+ * expectation. That number is no longer observable, and the rename is deliberate
+ * so that nothing keeps quoting it against the old expectation:
+ *
+ *   · the NUMERATOR is gone. A rank tie, a 爆裂物 taking an ordinary piece and
+ *     爆裂物 vs 爆裂物 all announce the same contentless 同歸於盡, by design, so
+ *     the log no longer says which of the three happened.
+ *   · the DENOMINATOR is gone with it. 階級對決 meant "contacts that compared
+ *     ranks", and the bomb contacts can no longer be split out of 同歸於盡 to be
+ *     excluded from it.
+ *
+ * What remains observable is this: how often a contact removed both pieces. It
+ * runs HIGHER than the old rank-tie rate — every bomb contact that used to be
+ * excluded is now inside both terms — so comparing it with ~18% is meaningless.
+ * The rank-tie rate is now measurable only by instrumenting the engine (or by
+ * re-resolving every contact at 終局 against the opened 兵種, which is combat
+ * logic and does not belong in a record). A record reports what was announced.
+ *
+ * Both terms are always carried and the ratio is `null` — never 0, never NaN —
+ * when there were no contacts at all: a percentage without a denominator is how
+ * two playtest games got argued about in the first place.
  */
-export interface TiesPerContest {
-  /** contacts announced as `mutual-rank` */
-  ties: number
-  /** contacts of every kind, bombs included */
+export interface MutualDestruction {
+  /** contacts announced as 同歸於盡 */
+  mutual: number
+  /** contacts of every kind */
   contests: number
-  /** ties / contests, or null when contests === 0 */
+  /** mutual / contests, or null when contests === 0 */
   ratio: number | null
-  /**
-   * Contacts in which two RANKS were actually compared: attacker-wins +
-   * defender-wins + mutual-rank. Bomb contacts compare nothing, so including
-   * them dilutes the denominator and makes the figure incomparable with the
-   * ~18% expectation in notebook §4.1, which is derived over a bomb-free pool.
-   * This is the fraction to quote.
-   */
-  rankDuels: number
-  /** ties / rankDuels, or null when rankDuels === 0 */
-  duelRatio: number | null
 }
 
-/** The longest streak of consecutive plies on which a side was credited nothing. */
+/**
+ * The longest streak of consecutive OWN SETTLEMENTS crediting nothing.
+ *
+ * Own settlements, not plies: §7 settles after every ply but credits only the
+ * mover, so a side is never credited on the opponent's plies and counting those
+ * zeros would report half of every game as a drought for both sides.
+ */
 export interface ZeroRun {
   length: number
-  /** ply the run started on; null when the side never scored zero */
+  /** ply the run started on; null when the side never settled for zero */
   startPly: number | null
+  /**
+   * Ply the run ended on; null likewise. It CANNOT be derived as
+   * `startPly + length - 1`: a side's settlements are its own plies, which are
+   * two apart, so a run of 3 from ply 1 ends on ply 5.
+   */
+  endPly: number | null
 }
 
 /**
  * The most 結算格 a side stood on at the same moment.
  *
- * §7② credits exactly +1 per own piece standing on a scoring square, so a ply's
- * income IS the number of squares held on that ply, and this is the maximum of
- * that series. It is the one figure a score column will not give up at a
- * glance: notebook §3.3b's whole finding — White reaching six of eight at once
- * while Black never held two — had to be hand-derived from a running total.
+ * §7② credits exactly +1 per own piece standing on a scoring square, so a
+ * settlement's income IS the number of squares held at that settlement, and this
+ * is the maximum of that series. It is the one figure a score column will not
+ * give up at a glance: notebook §3.3b's whole finding — White reaching six of
+ * eight at once while Black never held two — had to be hand-derived from a
+ * running total.
+ *
+ * Sampled on the side's OWN plies, because those are the only plies it is
+ * credited on (§7: only the mover settles). A square held across the opponent's
+ * reply is still held when the side's next settlement comes round.
  *
  * Nothing here is about identity. It counts squares.
  */
@@ -139,19 +167,50 @@ export interface PieceRun {
   startPly: number | null
 }
 
+/**
+ * 爆裂物 lost by one side — what the log proves, and what the record can prove.
+ *
+ * These are two different numbers now and they are kept apart on purpose. 同歸於盡
+ * announces nothing, so a 爆裂物 that did its job is indistinguishable from an
+ * equal-兵種 trade; the only contact that still names one is 有煙無傷, where it
+ * fizzled against 工兵/軍旗 and the other piece survived.
+ *
+ * So `known` is a FLOOR, not a count, and it is the only figure available while
+ * the game is live. `actual` is the truth, and it exists only at 終局 (§10.5
+ * 終局公開全部兵種), counted off the piece list. Never compare one game's
+ * `known` against another's `actual` — that is the mistake the split exists to
+ * make impossible.
+ */
+export interface BombsLost {
+  /** 爆裂物 this side is KNOWN to have lost: 有煙無傷 contacts only */
+  known: number
+  /** the plies those fizzles happened on */
+  knownPlies: number[]
+  /**
+   * The true number, or null when this view cannot derive it — which is every
+   * view while the game is running. See {@link bombsActuallyLost}.
+   */
+  actual: number | null
+}
+
 export interface SideStats {
   color: Color
   /** final score as the ViewerState reports it — 貼目 included for black */
   score: number
   /** points credited by 結算, i.e. `score` minus the starting 貼目 credit */
   earned: number
-  /** score / plies — the headline rate, 貼目 included */
+  /**
+   * This side's own 結算 — one per ply it moved, and the only plies it is
+   * credited on (§7: settlement runs after every ply but credits only the
+   * mover). It is the denominator of `earnedPerSettlement` and of
+   * `zeroSettlements`, and it is carried so a reader can convert between the
+   * two rates below without knowing whose ply came last.
+   */
+  settlements: number
+  /** score / plies — the headline rate over GAME LENGTH, 貼目 included */
   pointsPerPly: number
   /**
-   * earned / plies — the same series with 貼目 taken out. Because §7② credits
-   * exactly +1 per own piece standing on a scoring square, it is also the MEAN
-   * number of squares the side held per ply, of which `peakSquaresHeld` is the
-   * maximum.
+   * earned / plies — the same series with 貼目 taken out.
    *
    * This is not a second name for `pointsPerPly`. That one answers "how fast did
    * the score move", which is what 分數線 X is checked against, and it carries
@@ -159,12 +218,29 @@ export interface SideStats {
    * comparison ACROSS games, where 貼目 and length differ — notebook §3.3b lines
    * three games up by per-ply rate and every Black entry in it is shifted by
    * komi/plies.
+   *
+   * It is NOT the mean number of squares held: a side settles on half the plies,
+   * so this runs at about half of `earnedPerSettlement`. Comparing it with
+   * numbers from before settlement became mover-only will read as a collapse in
+   * play that is really just the rule change.
    */
   earnedPerPly: number
+  /**
+   * earned / settlements — the MEAN number of squares this side held at its own
+   * settlements, of which `peakSquaresHeld` is the maximum. Max and mean of one
+   * series; read together they say how much was held and how steadily.
+   */
+  earnedPerSettlement: number
   /** the most scoring squares held at once, and when — see {@link PeakHold} */
   peakSquaresHeld: PeakHold
-  /** plies on which this side was credited nothing */
-  zeroPlies: number
+  /**
+   * Own settlements that credited nothing, out of `settlements`.
+   *
+   * Not "plies scoring zero", which is what this used to be. Under mover-only
+   * settlement every one of the opponent's plies credits this side nothing, so
+   * counting plies would bury a real drought under a structural one.
+   */
+  zeroSettlements: number
   longestZeroRun: ZeroRun
   /** moves that landed on a scoring square — see {@link ObjectiveMoves} */
   objectiveMoves: ObjectiveMoves
@@ -176,17 +252,16 @@ export interface SideStats {
   distinctPiecesMoved: number
   /** longest streak of consecutive own moves made with one piece */
   longestSinglePieceRun: PieceRun
-  /** 爆裂物 this side lost — detonated, traded, or fizzled against 工兵/軍旗 */
-  bombsSpent: number
-  /** the plies on which it lost them */
-  bombPlies: number[]
+  /** 爆裂物 this side lost — see {@link BombsLost}, which is two numbers now */
+  bombsLost: BombsLost
 }
 
 export interface GameStats {
   pliesPlayed: number
   contacts: number
   contactsByOutcome: Record<CombatOutcome['kind'], number>
-  tiesPerContest: TiesPerContest
+  /** 同歸於盡 over all contacts — NOT the old tie rate, see {@link MutualDestruction} */
+  mutualDestruction: MutualDestruction
   sides: Record<Color, SideStats>
 }
 
@@ -201,9 +276,7 @@ export interface GameStats {
 const OUTCOME_LABEL: Record<CombatOutcome['kind'], string> = {
   'attacker-wins': '攻方勝 attacker-wins',
   'defender-wins': '守方勝 defender-wins',
-  'mutual-rank': '同階雙亡 mutual-rank',
-  'bomb-detonate': '爆裂物引爆 bomb-detonate',
-  'bomb-vs-bomb': '爆裂物對爆 bomb-vs-bomb',
+  'mutual-destruction': '同歸於盡 mutual-destruction',
   'fizzle': '有煙無傷 fizzle',
 }
 
@@ -213,22 +286,52 @@ const OUTCOME_KINDS = Object.keys(OUTCOME_LABEL) as CombatOutcome['kind'][]
 const COLORS: readonly Color[] = ['white', 'black']
 
 /**
- * Which side LOST a 爆裂物 in this contact, from the announcement alone.
+ * Which side is KNOWN to have lost a 爆裂物 in this contact — from the
+ * announcement alone, which is all a record ever gets.
  *
- *   bomb-detonate  the bomb's own colour is公告 (§4 表)
- *   bomb-vs-bomb   both sides spent one
- *   fizzle         有煙無傷 removes ONLY the bomb (§5), so the spender is the
- *                  side that did not survive
+ *   fizzle              有煙無傷 removes ONLY the 爆裂物 (§5) and the event names
+ *                       the colour that survived, so the loser is the other one.
+ *   mutual-destruction  says nothing. It covers an equal-兵種 trade, a 爆裂物
+ *                       taking an ordinary piece, and 爆裂物 vs 爆裂物 under one
+ *                       announcement that carries no rank and no colour. A bomb
+ *                       may well have been spent here; the log cannot say so, and
+ *                       neither may this function.
+ *   the two decisive kinds  no bomb: a 爆裂物 never wins and never loses alone.
  *
- * No rank is inferred: every branch reads a field of the public event.
+ * Returning null for 同歸於盡 is the whole point of the change. Counting bombs
+ * off the log is exactly the inference that made 爆裂物 inventory public and let
+ * a revealed 司令 be run to provably unkillable.
  */
-function bombSpenders(outcome: CombatOutcome): Color[] {
-  switch (outcome.kind) {
-    case 'bomb-detonate': return [outcome.bombColor]
-    case 'bomb-vs-bomb': return ['white', 'black']
-    case 'fizzle': return [opposite(outcome.survivorColor)]
-    default: return []
+function knownBombLoser(outcome: CombatOutcome): Color | null {
+  return outcome.kind === 'fizzle' ? opposite(outcome.survivorColor) : null
+}
+
+/**
+ * The TRUE number of 爆裂物 a side has lost, or null when it is not derivable.
+ *
+ * Derivable only at 終局: §10.5 opens every 兵種, so bomb-ranked pieces that are
+ * off the board (`square === null`) can simply be counted. Two deliberate
+ * refusals:
+ *
+ *  · Not attempted while the game is live, even for the exporter's own side,
+ *    whose bombs it can of course see. A live export is meant to be safe to
+ *    paste into the window the opponent is reading (see deploymentLines), and
+ *    "White has one 爆裂物 left" is exactly the sort of thing 同歸於盡 was made
+ *    silent to protect.
+ *  · Null, not a partial count, if any of that side's 兵種 is redacted. A number
+ *    assembled out of the ranks that happen to be visible would differ from
+ *    viewer to viewer, and every other figure in `gameStats` is the same for
+ *    everyone.
+ */
+function bombsActuallyLost(vs: ViewerState, color: Color): number | null {
+  if (vs.status.kind !== 'over') return null
+  let lost = 0
+  for (const p of vs.pieces) {
+    if (p.color !== color) continue
+    if (p.rank === null) return null
+    if (p.rank === 'bomb' && p.square === null) lost++
   }
+  return lost
 }
 
 /** Score at ply 0: white 0, black 貼目 — the same baseline `createGame` sets. */
@@ -244,10 +347,16 @@ interface PlyIncome {
 /**
  * Per-ply income for both sides, parallel to `vs.log`.
  *
- * Derived by differencing the log's `scoreAfter`, which is public. A ply that
- * ended the game by 奪旗 ran no 結算 (§7①) and therefore shows income 0 for
- * both sides — that is what the record says happened, and the record is what
- * this file reports.
+ * Derived by differencing the log's `scoreAfter`, which is public. Two entries
+ * are structurally zero and neither is a fact about play:
+ *
+ *  · the side that did NOT move. §7 settles after every ply but credits only the
+ *    mover, so a ply's income belongs to `e.color` and the other column is 0 on
+ *    every single ply. Everything downstream that asks "how much was held" reads
+ *    the mover's column only.
+ *  · a ply that ended the game by 奪旗 ran no 結算 at all (§7①), so it shows 0
+ *    for both — that is what the record says happened, and the record is what
+ *    this file reports.
  */
 function incomePerPly(vs: ViewerState): PlyIncome[] {
   const out: PlyIncome[] = []
@@ -274,7 +383,7 @@ function isZero(n: number): boolean {
 //
 // Redaction-wise this is the cheapest block in the file. It reads `move`, the
 // three contact squares, `e.color`, `outcome.kind` and — on a 有煙無傷 — the
-// announced `survivorColor`: every one a field of a public event, all six
+// announced `survivorColor`: every one a field of a public event, all four
 // outcome kinds already公告 by §4「翻明總表」. No rank is read, so none can
 // leak, and what it produces are opaque tokens that say only "this is the same
 // piece as that", never what that piece is.
@@ -304,9 +413,12 @@ interface PlyMover {
  *   attacker-wins / defender-wins  the announcement names the winner's side
  *   fizzle                         有煙無傷 removes only the 爆裂物 (§5), and
  *                                  the event names the colour that survived
- *   mutual-rank / the two bombs    nobody stands (§4, §5)
+ *   mutual-destruction             nobody stands (§4, §5) — and which of the
+ *                                  three ways it happened is not in the event,
+ *                                  which is fine here: the board is the same
+ *                                  either way, both pieces are gone
  *
- * No rank is compared here; `resolveCombat` already did that, publicly.
+ * No rank is compared here; `resolveCombat` already did that, privately.
  */
 function survivorToken(
   outcome: CombatOutcome,
@@ -318,7 +430,7 @@ function survivorToken(
     case 'attacker-wins': return attacker
     case 'defender-wins': return defender
     case 'fizzle': return outcome.survivorColor === mover ? attacker : defender
-    default: return undefined
+    case 'mutual-destruction': return undefined
   }
 }
 
@@ -391,42 +503,29 @@ function sideStats(
   const plies = income.length
   const score = vs.score[color]
   const earned = score - startingScore(vs)[color]
+  // §7.1: 奪旗 fires in the action phase and stops the game, so the winning ply
+  // never reached 結算.
+  const endedOnFlag =
+    vs.status.kind === 'over' &&
+    (vs.status.result.kind === 'flag' || vs.status.result.kind === 'flag-both')
 
-  let zeroPlies = 0
+  // The 結算 series and the move series are both walked here, in ONE pass over
+  // the log. They share a filter — `e.color === color` — because under §7 a side
+  // settles on exactly the plies it moves on: settlement follows every ply and
+  // credits the mover, so this side's settlements and this side's actions are
+  // the same list of plies. A pass is one of them (the passer is the mover), and
+  // it settles like any other; what it is NOT is a move (§3④), which is why the
+  // move counters below sit past an extra early return.
+  let settlements = 0
+  let zeroSettlements = 0
   let longest = 0
   let longestStart: number | null = null
+  let longestEnd: number | null = null
   let run = 0
   let runStart = 0
 
   let peak = 0
   let peakPly: number | null = null
-
-  income.forEach((inc, i) => {
-    const ply = vs.log[i]?.ply ?? i + 1
-
-    // §7② credits +1 per own piece standing on a 結算格, so this ply's income IS
-    // the count of squares held on it — an integer by construction. Rounding
-    // clears the float dust a rational 貼目 (附錄 B) leaves in the difference.
-    const held = Math.round(inc[color])
-    // strictly greater: a repeat of the peak keeps the FIRST ply that reached it
-    if (held > peak) {
-      peak = held
-      peakPly = ply
-    }
-
-    if (!isZero(inc[color])) {
-      run = 0
-      return
-    }
-    zeroPlies++
-    if (run === 0) runStart = ply
-    run++
-    // strictly greater: a tie keeps the FIRST run of that length
-    if (run > longest) {
-      longest = run
-      longestStart = runStart
-    }
-  })
 
   const scoring = new Set<Square>(vs.config.scoringSquares)
 
@@ -442,9 +541,47 @@ function sideStats(
   const bombPlies: number[] = []
 
   vs.log.forEach((e, i) => {
-    if (e.combat && bombSpenders(e.combat.outcome).includes(color)) bombPlies.push(e.ply)
+    // Read off EVERY ply, the opponent's included: 有煙無傷 names the side whose
+    // 爆裂物 was lost regardless of who was moving.
+    if (e.combat && knownBombLoser(e.combat.outcome) === color) bombPlies.push(e.ply)
     if (e.color !== color) return
 
+    // A ply that ended the game on 奪旗 ran NO settlement at all (§7.1: the
+    // 奪旗 判定 fires in the action phase and the game stops there). Counting it
+    // would report a settlement that paid zero, inventing a zero-income run out
+    // of the winning move.
+    if (endedOnFlag && i === vs.log.length - 1) return
+
+    // --- this side's 結算 ------------------------------------------------
+    const inc = income[i]?.[color] ?? 0
+    settlements++
+
+    // §7② credits +1 per own piece standing on a 結算格, so this settlement's
+    // income IS the count of squares held at it — an integer by construction.
+    // Rounding clears the float dust a rational 貼目 (附錄 B) leaves behind.
+    const held = Math.round(inc)
+    // strictly greater: a repeat of the peak keeps the FIRST ply that reached it
+    if (held > peak) {
+      peak = held
+      peakPly = e.ply
+    }
+
+    if (isZero(inc)) {
+      zeroSettlements++
+      if (run === 0) runStart = e.ply
+      run++
+      // strictly greater: a tie keeps the FIRST run of that length
+      if (run > longest) {
+        longest = run
+        longestStart = runStart
+        // the end is carried, not derived: own plies are two apart
+        longestEnd = e.ply
+      }
+    } else {
+      run = 0
+    }
+
+    // --- this side's moves -----------------------------------------------
     // A pass is a legal ACTION, not a move (§3④): it is out of the denominator,
     // and since it moves nobody it does not interrupt a one-piece run either.
     const m = movers[i]
@@ -472,11 +609,13 @@ function sideStats(
     color,
     score,
     earned,
+    settlements,
     pointsPerPly: plies === 0 ? 0 : score / plies,
     earnedPerPly: plies === 0 ? 0 : earned / plies,
+    earnedPerSettlement: settlements === 0 ? 0 : earned / settlements,
     peakSquaresHeld: { count: peak, ply: peakPly },
-    zeroPlies,
-    longestZeroRun: { length: longest, startPly: longestStart },
+    zeroSettlements,
+    longestZeroRun: { length: longest, startPly: longestStart, endPly: longestEnd },
     objectiveMoves: {
       count: objective,
       total: moves,
@@ -484,8 +623,11 @@ function sideStats(
     },
     distinctPiecesMoved: moved.size,
     longestSinglePieceRun: { length: longestPieceRun, startPly: longestPieceRunStart },
-    bombsSpent: bombPlies.length,
-    bombPlies,
+    bombsLost: {
+      known: bombPlies.length,
+      knownPlies: bombPlies,
+      actual: bombsActuallyLost(vs, color),
+    },
   }
 }
 
@@ -504,23 +646,20 @@ export function gameStats(vs: ViewerState): GameStats {
     contactsByOutcome[e.combat.outcome.kind]++
   }
 
-  const ties = contactsByOutcome['mutual-rank']
-  // only these three compare ranks; the three bomb outcomes never do
-  const rankDuels =
-    contactsByOutcome['attacker-wins'] +
-    contactsByOutcome['defender-wins'] +
-    contactsByOutcome['mutual-rank']
+  // No rank-duel denominator is computed. It used to be attacker-wins +
+  // defender-wins + mutual-rank — the contacts where two 階級 were compared —
+  // and it cannot be rebuilt: the bomb contacts that must be excluded from it
+  // are now inside 同歸於盡, unlabelled. See {@link MutualDestruction}.
+  const mutual = contactsByOutcome['mutual-destruction']
 
   return {
     pliesPlayed: vs.log.length,
     contacts,
     contactsByOutcome,
-    tiesPerContest: {
-      ties,
+    mutualDestruction: {
+      mutual,
       contests: contacts,
-      ratio: contacts === 0 ? null : ties / contacts,
-      rankDuels,
-      duelRatio: rankDuels === 0 ? null : ties / rankDuels,
+      ratio: contacts === 0 ? null : mutual / contacts,
     },
     sides: {
       white: sideStats(vs, 'white', income, movers),
@@ -597,6 +736,12 @@ function plyNotation(e: GameEvent): string {
  * Every rank named below is a field of the outcome, i.e. 公告 by §4「翻明總表」.
  * The 有煙無傷 line states what was announced (a 爆裂物 was lost, nobody was
  * 翻明) and stops there: naming the survivor as "工兵 or 軍旗" would be 解算.
+ *
+ * The 同歸於盡 line names 爆裂物 without attributing one to anybody, which is
+ * the opposite of 解算: the event carries no rank and no colour, and the line
+ * exists to say so. A reader who is not told that the announcement is ambiguous
+ * by construction will read it as a rank tie and start counting bombs off the
+ * log — the exact inference the single announcement was introduced to kill.
  */
 function outcomeText(e: GameEvent): string {
   if (!e.combat) return ''
@@ -616,12 +761,8 @@ function outcomeText(e: GameEvent): string {
       return `${where}: ${mover} wins — 翻明 ${rankText(outcome.winnerRank)}; ${other}'s piece removed`
     case 'defender-wins':
       return `${where}: ${other} holds — 翻明 ${rankText(outcome.winnerRank)}; ${mover}'s piece removed`
-    case 'mutual-rank':
-      return `${where}: 同階雙亡 — both ${rankText(outcome.rank)}, both removed`
-    case 'bomb-detonate':
-      return `${where}: ${colorLabel(outcome.bombColor)}'s 爆裂物 detonates — both removed, the victim is NOT 翻明`
-    case 'bomb-vs-bomb':
-      return `${where}: 爆裂物 vs 爆裂物 — both removed`
+    case 'mutual-destruction':
+      return `${where}: 同歸於盡 — both removed, nobody is 翻明. An equal 兵種 and a 爆裂物 announce identically; the record cannot say which this was`
     case 'fizzle': {
       const stands = survivorSquare === null ? where : squareName(survivorSquare)
       const survivor = colorLabel(outcome.survivorColor)
@@ -807,7 +948,7 @@ function viewerLine(vs: ViewerState): string {
       // else. Worth stating on the record itself, because it is the one export
       // that is safe to hand to anyone while the game is still running.
       return "Exported from the public spectator view — only 翻明 兵種 and announced events (§10.1). No side's hidden army is in this record."
-    case 'replay-omniscient':
+    case 'omniscient':
       return 'Exported from the omniscient replay view — every 兵種 is public here.'
     case 'replay-player':
       return `Exported from the replay view of ${colorLabel(self!)}.`
@@ -964,28 +1105,36 @@ function statsLines(vs: ViewerState, stats: GameStats): string[] {
   }
   out.push('')
 
-  const t = stats.tiesPerContest
+  const m = stats.mutualDestruction
   out.push(
-    `**同階雙亡 ${t.ties}/${t.rankDuels} 階級對決**`
-    + (t.duelRatio === null ? '' : ` (${fmt(t.duelRatio)})`)
-    + ` · ${t.ties}/${t.contests} 全部接觸`
-    + (t.ratio === null ? '' : ` (${fmt(t.ratio)})`),
+    `**同歸於盡 ${m.mutual}/${m.contests} 全部接觸**`
+    + (m.ratio === null ? '' : ` (${fmt(m.ratio)})`),
   )
   out.push('')
   out.push(
-    '> Quote the FIRST fraction. Bomb contacts compare no ranks, so counting them'
-    + ' dilutes the denominator and breaks comparison with the ~18% expectation'
-    + ' (notebook §4.1). Read the fraction, not the ratio — the denominator is'
-    + ' small and this is the noisiest number in the system.',
+    '> This is NOT the 同階雙亡/階級對決 tie rate this line used to carry, and it'
+    + ' must not be checked against the ~18% expectation in notebook §4.1.'
+    + ' 同歸於盡 is one announcement covering an equal 兵種, a 爆裂物 taking an'
+    + ' ordinary piece, and 爆裂物 vs 爆裂物, and it carries nothing — so the rank'
+    + ' ties can no longer be lifted out of the numerator, nor the bomb contacts'
+    + ' out of the denominator. It runs higher than the old figure for exactly that'
+    + ' reason. The rank-tie rate is not derivable from a log any more; measuring'
+    + ' it takes an instrumented engine. Read the fraction, not the ratio — the'
+    + ' denominator is small and this is the noisiest number in the system.',
   )
   out.push('')
 
+  // Own settlements, which are two plies apart, so the span is read off the run
+  // rather than derived from its length.
   const zeroRun = (s: SideStats): string => {
-    if (s.longestZeroRun.length === 0) return '0 — never scored zero'
-    const from = s.longestZeroRun.startPly!
-    const to = from + s.longestZeroRun.length - 1
-    return `${s.longestZeroRun.length} (plies ${from}–${to})`
+    if (s.longestZeroRun.length === 0) return '0 — never settled for zero'
+    return `${s.longestZeroRun.length} (plies ${s.longestZeroRun.startPly!}–${s.longestZeroRun.endPly!})`
   }
+
+  const bombsKnown = (s: SideStats): string => `${s.bombsLost.known}`
+
+  const bombsActual = (s: SideStats): string =>
+    s.bombsLost.actual === null ? 'not derivable yet' : `${s.bombsLost.actual}`
 
   const peakHeld = (s: SideStats): string =>
     s.peakSquaresHeld.ply === null
@@ -1005,34 +1154,53 @@ function statsLines(vs: ViewerState, stats: GameStats): string[] {
   out.push('| Per side | White | Black |')
   out.push('| :--- | ---: | ---: |')
   out.push(`| Total score (貼目 included) | ${fmt(w.score)} | ${fmt(b.score)} |`)
-  // ONE rate row, not two. One piece on one scoring square scores exactly one
-  // point per ply, so "mean squares held per ply" and "points earned per ply"
-  // are the same measurement — printing both invites the reader to look for a
-  // difference that is only 貼目/plies (0.02 in a 23-ply game). `earnedPerPly`
-  // stays in GameStats and the JSON for anyone scripting komi-free numbers;
-  // it does not get a row that implies it measures something else.
+  // TWO rate rows, and they are two measurements now. They were one when both
+  // sides settled on every ply: a piece on a scoring square scored a point per
+  // ply, so "squares held" and "points per ply" differed only by 貼目/plies and
+  // printing both invited a reader to hunt for a difference that was not there.
+  // Under mover-only settlement a side is settled on half the plies, so the two
+  // stand about a factor of two apart — points per ply keeps GAME LENGTH as its
+  // denominator, which is what 分數線 X is checked against, while the mean below
+  // is per own 結算 and is the mean of the same series `peakSquaresHeld` maxes.
   out.push(
     `| Points per ply (貼目 included) | ${fmt(w.pointsPerPly)} | ${fmt(b.pointsPerPly)} |`,
   )
+  out.push(
+    `| Mean squares held per own 結算 | ${fmt(w.earnedPerSettlement)} `
+    + `| ${fmt(b.earnedPerSettlement)} |`,
+  )
   out.push(`| Peak scoring squares held at once | ${peakHeld(w)} | ${peakHeld(b)} |`)
   out.push(
-    `| Plies scoring zero | ${w.zeroPlies} of ${stats.pliesPlayed} `
-    + `| ${b.zeroPlies} of ${stats.pliesPlayed} |`,
+    `| Own 結算 scoring zero | ${w.zeroSettlements} of ${w.settlements} `
+    + `| ${b.zeroSettlements} of ${b.settlements} |`,
   )
-  out.push(`| Longest zero-income run | ${zeroRun(w)} | ${zeroRun(b)} |`)
+  out.push(`| Longest zero-income run (own 結算) | ${zeroRun(w)} | ${zeroRun(b)} |`)
   out.push(`| Moves ending on a scoring square | ${objective(w)} | ${objective(b)} |`)
   out.push(`| Distinct pieces moved | ${w.distinctPiecesMoved} | ${b.distinctPiecesMoved} |`)
   out.push(`| Longest run on one piece | ${pieceRun(w)} | ${pieceRun(b)} |`)
-  out.push(`| 爆裂物 spent | ${w.bombsSpent} | ${b.bombsSpent} |`)
-  out.push(`| …on plies | ${plyList(w.bombPlies)} | ${plyList(b.bombPlies)} |`)
+  out.push(`| 爆裂物 KNOWN lost (有煙無傷 only) | ${bombsKnown(w)} | ${bombsKnown(b)} |`)
+  out.push(`| …on plies | ${plyList(w.bombsLost.knownPlies)} | ${plyList(b.bombsLost.knownPlies)} |`)
+  out.push(`| 爆裂物 truly lost (終局 only) | ${bombsActual(w)} | ${bombsActual(b)} |`)
   out.push('')
   out.push(
-    '> Peak-held and the mean above it are the max and the mean of ONE series —'
-    + ' the points a side took each ply, which by §7② is the number of squares it'
-    + ' was standing on. Read together they say how much was held and how'
-    + ' steadily. A pass is not a move, so it is in neither move row: it costs a'
-    + ' side nothing in the ratio and does not break a one-piece run. 王車易位'
-    + ' counts once, by the square the king landed on.',
+    '> The two 爆裂物 rows answer different questions, and the top one is a FLOOR,'
+    + ' not a count. 同歸於盡 announces nothing, so a 爆裂物 that did its job is'
+    + ' indistinguishable from an equal-兵種 trade and never appears in the log at'
+    + ' all; the one contact that still names a 爆裂物 is 有煙無傷, where it was'
+    + ' lost and the other piece survived. The true row is counted off the piece'
+    + ' list and exists only at 終局, where §10.5 opens every 兵種. Never read a'
+    + ' live figure against a finished one.',
+  )
+  out.push('')
+  out.push(
+    '> §7 settles after every ply but credits only the side that just moved, so a'
+    + ' side is settled on its OWN plies and on no others. The mean and the peak'
+    + ' above are the mean and the max of that one series — the squares a side was'
+    + ' standing on at each of its settlements — and the zero rows count the'
+    + ' settlements that paid nothing, out of the settlements it had. A pass'
+    + ' settles too (the passer is the mover) but is not a move, so it is in'
+    + ' neither move row: it costs a side nothing in the ratio and does not break a'
+    + ' one-piece run. 王車易位 counts once, by the square the king landed on.',
   )
   return out
 }
@@ -1110,7 +1278,11 @@ export interface RecordMoveJson {
     survivor_square_name: string | null
   } | null
   score_after: { white: number; black: number }
-  /** points credited to each side by this ply's 結算 */
+  /**
+   * Points credited by this ply's 結算. §7 credits only the side that just
+   * moved, so the other colour's entry is 0 on every ply — a structural zero,
+   * not a statement that the side held nothing.
+   */
   income: { white: number; black: number }
 }
 
@@ -1151,7 +1323,9 @@ export interface RecordJson {
     plies_played: number
     contacts: number
     contacts_by_outcome: { outcome: CombatOutcome['kind']; count: number }[]
-    ties_per_contest: TiesPerContest
+    /** renamed from `ties_per_contest`, which measured something no longer
+     *  observable — see {@link MutualDestruction} */
+    mutual_destruction: MutualDestruction
     sides: SideStats[]
   }
 }
@@ -1258,7 +1432,7 @@ export function exportJson(vs: ViewerState): unknown {
         outcome: kind,
         count: stats.contactsByOutcome[kind],
       })),
-      ties_per_contest: stats.tiesPerContest,
+      mutual_destruction: stats.mutualDestruction,
       sides: [stats.sides.white, stats.sides.black],
     },
   }

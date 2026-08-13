@@ -131,7 +131,7 @@ describe('§4 en passant — 攻方敗', () => {
   })
 })
 
-describe('§4 en passant — 同階雙亡', () => {
+describe('§4 en passant — 同歸於盡', () => {
   const s = applyMove(afterDoubleStep('brigade', 'brigade'), mv('b5', 'a6'))
 
   it('removes both and leaves BOTH a5 and the skipped a6 empty', () => {
@@ -142,15 +142,17 @@ describe('§4 en passant — 同階雙亡', () => {
     expect(isEmpty(s, 'b5')).toBe(true)
   })
 
-  it('announces mutual-rank with no survivor square', () => {
+  it('announces a bare 同歸於盡 with no survivor square, and 翻明s nobody', () => {
     expect(lastEvent(s).combat).toEqual({
-      outcome: { kind: 'mutual-rank', rank: 'brigade' },
+      outcome: { kind: 'mutual-destruction' },
       attackerSquare: sq('b5'),
       defenderSquare: sq('a5'),
       survivorSquare: null,
     })
-    expect(rankSeenBy(s, 'white', BP)).toBe('brigade')
-    expect(rankSeenBy(s, 'black', WP)).toBe('brigade')
+    // §4.3: the shared 階級 is not announced. It used to be, and it handed BOTH
+    // players an exact rank for free — here, that both pawns were 旅長.
+    expect(rankSeenBy(s, 'white', BP)).toBeNull()
+    expect(rankSeenBy(s, 'black', WP)).toBeNull()
   })
 })
 

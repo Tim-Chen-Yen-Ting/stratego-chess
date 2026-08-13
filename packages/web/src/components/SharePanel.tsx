@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react'
  */
 
 interface LinksResponse {
+  omniscientUrl?: string | null
   publicUrl?: string
   publicLlmUrl?: string | null
   spectatorUrl?: string | null
@@ -37,7 +38,12 @@ function localise(url: string): string {
   }
 }
 
-function Row(props: { label: string; hint: string; url: string; tone: 'safe' | 'private' }) {
+function Row(props: {
+  label: string
+  hint: string
+  url: string
+  tone: 'safe' | 'private' | 'danger'
+}) {
   const [copied, setCopied] = useState(false)
   const url = localise(props.url)
 
@@ -57,7 +63,11 @@ function Row(props: { label: string; hint: string; url: string; tone: 'safe' | '
       <div className="xy-share-head">
         <strong>{props.label}</strong>
         <span className={`xy-share-pill xy-share-pill-${props.tone}`}>
-          {props.tone === 'safe' ? '對局中可安全轉發' : '含該方全部兵種'}
+          {props.tone === 'safe'
+            ? '對局中可安全轉發'
+            : props.tone === 'danger'
+              ? '雙方全部兵種 — 只給你自己'
+              : '含該方全部兵種'}
         </span>
       </div>
       <p className="xy-share-hint">{props.hint}</p>
@@ -125,6 +135,15 @@ export function SharePanel({ token, onClose }: SharePanelProps) {
           />
         )}
 
+        {links?.omniscientUrl != null && (
+          <Row
+            tone="danger"
+            label="全知者視角（只有你拿得到）"
+            hint="雙方的全部兵種，即時。你身為建立者本來就同時持有兩個座位的連結，所以這條沒有給你任何新東西——但它對任何其他人來說就是整局的答案。給對手等於直接結束遊戲。"
+            url={links.omniscientUrl}
+          />
+        )}
+
         {links?.spectatorUrl != null && (
           <Row
             tone="private"
@@ -159,10 +178,12 @@ export function SharePanel({ token, onClose }: SharePanelProps) {
 }
 .xy-share-safe    { border-color: rgba(80, 200, 130, 0.45); background: rgba(80, 200, 130, 0.06); }
 .xy-share-private { border-color: rgba(220, 160, 70, 0.45); background: rgba(220, 160, 70, 0.06); }
+.xy-share-danger  { border-color: rgba(225, 90, 90, 0.55);  background: rgba(225, 90, 90, 0.07); }
 .xy-share-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .xy-share-pill { font-size: 0.7rem; padding: 2px 7px; border-radius: 99px; white-space: nowrap; }
 .xy-share-pill-safe    { background: rgba(80, 200, 130, 0.18); color: #7fe0a8; }
 .xy-share-pill-private { background: rgba(220, 160, 70, 0.18); color: #e9bd76; }
+.xy-share-pill-danger  { background: rgba(225, 90, 90, 0.20);  color: #f09a9a; }
 .xy-share-hint { margin: 6px 0 8px; font-size: 0.8rem; color: var(--muted, #8b95a5); line-height: 1.5; }
 .xy-share-err  { color: #e88; font-size: 0.85rem; }
 .xy-share-url { display: flex; gap: 6px; }

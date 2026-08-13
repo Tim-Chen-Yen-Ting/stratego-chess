@@ -3,9 +3,13 @@
  *
  * The scripted game below is played through the real engine and every number in
  * `gameStats` is then checked against a hand computation written out in the
- * comment beside it. It is built to hit every counter at least once: all six
- * CombatOutcome kinds, a 同階雙亡 tie, a 爆裂物 detonation, a 有煙無傷 fizzle,
- * and a zero-income run on BOTH sides.
+ * comment beside it. It is built to hit every counter at least once: all four
+ * CombatOutcome kinds, a 有煙無傷 fizzle, and a zero-income run on BOTH sides.
+ *
+ * 同歸於盡 is reached three different ways on purpose — an equal 兵種 (ply 3), a
+ * 爆裂物 against an ordinary piece (ply 9), and 爆裂物 against 爆裂物 (ply 11) —
+ * because the record's job is now to make those three indistinguishable. Three
+ * separate engine paths, one announcement, one line of text.
  *
  * Board (fixture A). No 軍旗 is deployed, so 奪旗 cannot fire and the script
  * runs to its end; the game is then ended by 認輸.
@@ -22,6 +26,7 @@ import {
   exportJson,
   exportMarkdown,
   gameStats,
+  type GameStats,
   type RecordJson,
 } from '../src/render/record.js'
 import { createGame, submitAssignment } from '../src/setup.js'
@@ -53,6 +58,15 @@ function permuteHiddenRanks(s: GameState, v: Viewer): { state: GameState; change
     return { ...p, rank: r }
   })
   return { state: { ...s, pieces }, changed }
+}
+
+/** The one figure that is not derivable from the log, blanked for comparison. */
+function withoutTrueBombCount(g: GameStats): GameStats {
+  const blank = (c: Color) => ({
+    ...g.sides[c],
+    bombsLost: { ...g.sides[c].bombsLost, actual: null },
+  })
+  return { ...g, sides: { white: blank('white'), black: blank('black') } }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,15 +101,15 @@ function scriptedStart(): GameState {
  *
  *   1  W a1a8  司令 beats 團長                       → attacker-wins
  *   2  B d8d5  black rook takes a scoring square
- *   3  W b1b8  旅長 vs 旅長                          → mutual-rank
+ *   3  W b1b8  旅長 vs 旅長                          → mutual-destruction
  *   4  B pass
  *   5  W c1c8  排長 throws itself at 司令             → defender-wins
  *   6  B pass
  *   7  W e2e4  white pawn takes a scoring square
  *   8  B d5d7  black rook leaves the centre
- *   9  W f1f8  營長 walks into a 爆裂物               → bomb-detonate (black's)
+ *   9  W f1f8  營長 walks into a 爆裂物               → mutual-destruction
  *  10  B pass
- *  11  W g1g8  爆裂物 vs 爆裂物                       → bomb-vs-bomb
+ *  11  W g1g8  爆裂物 vs 爆裂物                       → mutual-destruction
  *  12  B pass
  *  13  W h1h8  爆裂物 vs 工兵                         → fizzle (white's bomb lost)
  *  14  B pass
@@ -138,8 +152,12 @@ describe('the scripted game runs as the fixture claims', () => {
     expect(DONE.status).toEqual({ kind: 'over', result: { kind: 'resign', winner: 'white' } })
   })
 
-  it('ends 8 – 6.5: white holds e4 for plies 7–14, black holds d5 for plies 2–7 plus 貼目', () => {
-    expect(DONE.score).toEqual({ white: 8, black: 6.5 })
+  it('ends 4 – 3.5: each side banks only on its own plies (§7)', () => {
+    // 結算 runs after every ply but credits the MOVER alone. White's pawn stands
+    // on e4 from ply 7, so White is paid at its own settlements on plies 7, 9,
+    // 11 and 13 = 4. Black holds d5 from ply 2 and leaves it on ply 8, so it is
+    // paid on plies 2, 4 and 6 = 3, plus 0.5 貼目.
+    expect(DONE.score).toEqual({ white: 4, black: 3.5 })
   })
 })
 
@@ -151,93 +169,116 @@ describe('gameStats over the public log', () => {
   const stats = gameStats(asBlackDone)
 
   it('counts 14 plies and 6 contacts, one of every announced kind', () => {
+    // Four kinds now, not six. Plies 3, 9 and 11 are three different resolutions
+    // in the engine — equal 兵種, 爆裂物 vs ordinary, 爆裂物 vs 爆裂物 — and one
+    // single announcement out here.
     expect(stats.pliesPlayed).toBe(14)
     expect(stats.contacts).toBe(6)
     expect(stats.contactsByOutcome).toEqual({
       'attacker-wins': 1,
       'defender-wins': 1,
-      'mutual-rank': 1,
-      'bomb-detonate': 1,
-      'bomb-vs-bomb': 1,
+      'mutual-destruction': 3,
       fizzle: 1,
     })
   })
 
-  it('reports ties over RANK DUELS, not over all contacts', () => {
-    // The number two playtest games were misread on. Both denominators are
-    // carried, but the rank-duel one is the quotable figure: the 6 contacts
-    // include 3 bomb outcomes that compare no ranks at all, and diluting with
-    // them breaks comparison against the ~18% expectation in notebook §4.1.
-    expect(stats.tiesPerContest).toEqual({
-      ties: 1,
-      contests: 6,
-      ratio: 1 / 6,
-      rankDuels: 3,
-      duelRatio: 1 / 3,
-    })
-    expect(stats.tiesPerContest.duelRatio).toBeCloseTo(0.3333, 4)
-    // the two must not be allowed to silently collapse into each other
-    expect(stats.tiesPerContest.rankDuels).toBeLessThan(stats.tiesPerContest.contests)
+  it('reports 同歸於盡 over all contacts, and does NOT claim to be the tie rate', () => {
+    // The old `tiesPerContest` was 同階雙亡 over 階級對決, the figure notebook
+    // §4.1 checks against ~18%. Both of its terms are gone: the rank ties are
+    // inside 同歸於盡 with the two bomb cases and cannot be lifted out, and the
+    // bomb contacts can no longer be excluded from the denominator. What is left
+    // is a different measurement under a different name — 3 of 6 here, where the
+    // old figure would have been 1 of 3.
+    expect(stats.mutualDestruction).toEqual({ mutual: 3, contests: 6, ratio: 0.5 })
+    expect(stats).not.toHaveProperty('tiesPerContest')
   })
 
-  it('white: 8 points over 14 plies, a 6-ply opening drought, 2 爆裂物 spent', () => {
-    // White scores nothing until the pawn reaches e4 on ply 7, then +1 on every
-    // ply to the end: plies 1–6 zero (a run of 6), plies 7–14 one each = 8.
-    // Income is therefore [0×6, 1×8]: the peak is ONE square, first held on the
-    // ply the pawn arrived, 7. White never holds two at a time.
+  it('white: 4 points over its 7 settlements, an opening drought, 1 KNOWN bomb', () => {
+    // White is settled on plies 1, 3, 5, 7, 9, 11, 13 and on no others. It holds
+    // nothing until the pawn reaches e4 on ply 7, so that series is
+    // [0,0,0,1,1,1,1]: 3 zero settlements running from ply 1 to ply 5 — five
+    // plies apart, three settlements long — then one square every time after.
+    // The peak is ONE square, first held at the settlement of ply 7.
     // White's seven moves are seven different pieces —
     //   1 a1a8 · 3 b1b8 · 5 c1c8 · 7 e2e4 · 9 f1f8 · 11 g1g8 · 13 h1h8
     // — so distinct = 7 and no piece ever moves twice in a row: runs of 1, and
     // the first of them starts on ply 1. Of those seven destinations only e4 is
     // a 結算格 (d4 e4 d5 e5), so 1 of 7.
-    // White's bombs: g1 traded on ply 11, h1 lost to the 工兵 on ply 13.
+    // Bombs: White spent both — g1 on ply 11 and h1 on ply 13 — but only ply 13
+    // is KNOWN, because that one fizzled. Ply 11 announced 同歸於盡 and nothing
+    // else. The true 2 comes from the piece list at 終局, not from the log.
     expect(stats.sides.white).toEqual({
       color: 'white',
-      score: 8,
-      earned: 8,
-      pointsPerPly: 8 / 14,
-      earnedPerPly: 8 / 14,
+      score: 4,
+      earned: 4,
+      settlements: 7,
+      pointsPerPly: 4 / 14,
+      earnedPerPly: 4 / 14,
+      earnedPerSettlement: 4 / 7,
       peakSquaresHeld: { count: 1, ply: 7 },
-      zeroPlies: 6,
-      longestZeroRun: { length: 6, startPly: 1 },
+      zeroSettlements: 3,
+      longestZeroRun: { length: 3, startPly: 1, endPly: 5 },
       objectiveMoves: { count: 1, total: 7, ratio: 1 / 7 },
       distinctPiecesMoved: 7,
       longestSinglePieceRun: { length: 1, startPly: 1 },
-      bombsSpent: 2,
-      bombPlies: [11, 13],
+      bombsLost: { known: 1, knownPlies: [13], actual: 2 },
     })
-    expect(stats.sides.white.pointsPerPly).toBeCloseTo(0.5714, 4)
+    expect(stats.sides.white.earnedPerSettlement).toBeCloseTo(0.5714, 4)
     expect(stats.sides.white.objectiveMoves.ratio).toBeCloseTo(0.1429, 4)
   })
 
-  it('black: 6 earned + 0.5 貼目, and a 7-ply drought after leaving d5', () => {
-    // Black holds d5 from ply 2 to ply 7 = 6 points, then nothing at all from
-    // ply 8 to ply 14 = a run of 7. Ply 1 is also zero, so 8 zero plies in all,
-    // but the LONGEST run is the 7 at the end — that is the one-sidedness.
-    // Income is [0, 1×6, 0×7]: one square at the peak, first held on ply 2.
+  it('black: 3 earned + 0.5 貼目, a drought after leaving d5, and NO known bomb', () => {
+    // Black is settled on plies 2, 4, 6, 8, 10, 12, 14. It holds d5 for the
+    // first three = 3 points, then nothing at all: [1,1,1,0,0,0,0], a run of 4
+    // zero settlements spanning plies 8 to 14.
     // Black plays exactly TWO moves in fourteen plies — 2 d8d5 and 8 d5d7, the
     // same rook both times, and the five passes in between are not moves. So
     // total = 2 (not 7), distinct = 1, and the run is 2 long from ply 2. d5 is
     // a 結算格 and d7 is not: 1 of 2.
-    // Black's bombs: f8 detonated on ply 9, g8 traded on ply 11.
+    // Black lost both 爆裂物 (f8 on ply 9, g8 on ply 11) and the log proves
+    // NEITHER: both announced 同歸於盡. `known` is 0 while `actual` is 2 — the
+    // whole point of keeping the two numbers apart.
     expect(stats.sides.black).toEqual({
       color: 'black',
-      score: 6.5,
-      earned: 6,
-      pointsPerPly: 6.5 / 14,
-      earnedPerPly: 6 / 14,
+      score: 3.5,
+      earned: 3,
+      settlements: 7,
+      pointsPerPly: 3.5 / 14,
+      earnedPerPly: 3 / 14,
+      earnedPerSettlement: 3 / 7,
       peakSquaresHeld: { count: 1, ply: 2 },
-      zeroPlies: 8,
-      longestZeroRun: { length: 7, startPly: 8 },
+      zeroSettlements: 4,
+      longestZeroRun: { length: 4, startPly: 8, endPly: 14 },
       objectiveMoves: { count: 1, total: 2, ratio: 0.5 },
       distinctPiecesMoved: 1,
       longestSinglePieceRun: { length: 2, startPly: 2 },
-      bombsSpent: 2,
-      bombPlies: [9, 11],
+      bombsLost: { known: 0, knownPlies: [], actual: 2 },
     })
     // 貼目 is in the score but is not a scoring square: the two rates differ.
-    expect(stats.sides.black.pointsPerPly).toBeCloseTo(0.4643, 4)
-    expect(stats.sides.black.earnedPerPly).toBeCloseTo(0.4286, 4)
+    expect(stats.sides.black.pointsPerPly).toBeCloseTo(0.25, 4)
+    expect(stats.sides.black.earnedPerPly).toBeCloseTo(0.2143, 4)
+  })
+
+  it('a side is never credited on the opponent’s ply (§7 mover-only 結算)', () => {
+    // The structural fact every counter above is built on. Differencing the
+    // public `scoreAfter` column, exactly one side moves on any ply, and it is
+    // always the side that just played.
+    const json = exportJson(asBlackDone) as RecordJson
+    expect(json.moves.map((m) => m.income.white)).toEqual(
+      [0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+    )
+    expect(json.moves.map((m) => m.income.black)).toEqual(
+      [0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    )
+    for (const m of json.moves) {
+      const idle = m.color === 'white' ? m.income.black : m.income.white
+      expect(idle, `ply ${m.ply} credited the side that did not move`).toBe(0)
+    }
+    // …so both sides settle the same number of times over a full-turn game
+    expect(stats.sides.white.settlements).toBe(7)
+    expect(stats.sides.black.settlements).toBe(7)
+    expect(stats.sides.white.settlements + stats.sides.black.settlements)
+      .toBe(stats.pliesPlayed)
   })
 
   it('counts a PASS as an action, never as a move (§3④)', () => {
@@ -249,54 +290,84 @@ describe('gameStats over the public log', () => {
     expect(blackPlies).toHaveLength(7)
     expect(blackPlies.filter((e) => e.move.kind === 'pass')).toHaveLength(5)
     expect(stats.sides.black.objectiveMoves.total).toBe(2)
+    // A pass still SETTLES, though — the passer is the mover — so it is one of
+    // Black's seven settlements even while it is none of its two moves.
+    expect(stats.sides.black.settlements).toBe(7)
     // and the five passes sit BETWEEN Black's two moves without breaking the
     // one-piece run: a pass moves nobody, so there is nobody else to break it
     expect(stats.sides.black.longestSinglePieceRun).toEqual({ length: 2, startPly: 2 })
   })
 
-  it('is identical from every viewer — the numbers are public by construction', () => {
+  it('is identical from every viewer at 終局 — the numbers are public by construction', () => {
     const asWhite = stateForViewer(DONE, { kind: 'player', color: 'white' })
-    const asOmniscient = stateForViewer(DONE, { kind: 'replay-omniscient' })
+    const asOmniscient = stateForViewer(DONE, { kind: 'omniscient' })
+    const asPublic = stateForViewer(DONE, { kind: 'spectator-public' })
     expect(gameStats(asWhite)).toEqual(stats)
     expect(gameStats(asOmniscient)).toEqual(stats)
-    // and mid-game, before 終局公開全部兵種 hands out the ranks
-    expect(gameStats(asBlackMid)).toEqual(stats)
+    expect(gameStats(asPublic)).toEqual(stats)
+  })
+
+  it('and mid-game it differs in exactly one field: the true 爆裂物 count', () => {
+    // Everything else is read off the log, which is complete at ply 14 and does
+    // not change when Black resigns. The one figure that is NOT in the log is
+    // how many 爆裂物 each side really spent, and it stays null until 終局 opens
+    // the 兵種 (§10.5) — for every viewer, including the one whose bombs they are.
+    const live = gameStats(asBlackMid)
+    expect(withoutTrueBombCount(live)).toEqual(withoutTrueBombCount(stats))
+    expect(live.sides.white.bombsLost.actual).toBeNull()
+    expect(live.sides.black.bombsLost.actual).toBeNull()
+    expect(stats.sides.white.bombsLost.actual).toBe(2)
+    expect(stats.sides.black.bombsLost.actual).toBe(2)
+    // …and while it is live, every seat agrees, including Black about its own
+    expect(gameStats(stateForViewer(MID, { kind: 'player', color: 'white' }))).toEqual(live)
+    expect(gameStats(stateForViewer(MID, { kind: 'omniscient' }))).toEqual(live)
+  })
+
+  it('the log cannot see a 爆裂物 that worked — only one that fizzled', () => {
+    // Four bombs were spent in this game. Three of them (BF ply 9, BG and WG
+    // ply 11) announced 同歸於盡, which carries nothing; only WH, which fizzled
+    // against the 工兵 on ply 13, is in the record as a bomb at all.
+    expect(stats.contactsByOutcome['mutual-destruction']).toBe(3)
+    expect(stats.sides.white.bombsLost.known + stats.sides.black.bombsLost.known).toBe(1)
+    expect(stats.sides.white.bombsLost.actual! + stats.sides.black.bombsLost.actual!).toBe(4)
+    // the three 同歸於盡 events carry no field at all beyond the discriminator
+    for (const e of asBlackDone.log) {
+      if (e.combat?.outcome.kind !== 'mutual-destruction') continue
+      expect(e.combat.outcome).toEqual({ kind: 'mutual-destruction' })
+      expect(Object.keys(e.combat.outcome)).toEqual(['kind'])
+    }
   })
 
   it('survives a game with no plies at all', () => {
     const fresh = stateForViewer(createGame('empty'), { kind: 'player', color: 'white' })
     const s = gameStats(fresh)
     expect(s.pliesPlayed).toBe(0)
-    expect(s.tiesPerContest).toEqual({
-      ties: 0,
-      contests: 0,
-      ratio: null,
-      rankDuels: 0,
-      duelRatio: null,
-    })
+    expect(s.mutualDestruction).toEqual({ mutual: 0, contests: 0, ratio: null })
     expect(s.sides.white.pointsPerPly).toBe(0)
     expect(s.sides.white.earnedPerPly).toBe(0)
-    expect(s.sides.black.longestZeroRun).toEqual({ length: 0, startPly: null })
+    expect(s.sides.white.earnedPerSettlement).toBe(0)
+    expect(s.sides.white.settlements).toBe(0)
     // nothing happened, so every "when" is null rather than a fabricated ply 0
+    expect(s.sides.black.longestZeroRun).toEqual({ length: 0, startPly: null, endPly: null })
     expect(s.sides.white.peakSquaresHeld).toEqual({ count: 0, ply: null })
     expect(s.sides.black.peakSquaresHeld).toEqual({ count: 0, ply: null })
     expect(s.sides.white.objectiveMoves).toEqual({ count: 0, total: 0, ratio: null })
     expect(s.sides.black.distinctPiecesMoved).toBe(0)
     expect(s.sides.black.longestSinglePieceRun).toEqual({ length: 0, startPly: null })
+    // not started, so the true bomb count is not derivable either
+    expect(s.sides.white.bombsLost).toEqual({ known: 0, knownPlies: [], actual: null })
   })
 
-  it('ships ONE name for the held-squares rate, not two', () => {
-    // The bug this replaced: `scoringSquaresPerPly` and `pointsPerPly` were the
-    // same measurement under two names — one piece on one 結算格 scores exactly
-    // one point per ply — so the table printed the same fact twice and the game
-    // 3 export read 3.478 / 3.478 for White. `earnedPerPly` is kept because it
-    // is the same series with 貼目 removed, which is what makes it comparable
-    // across games; for White, who has no 貼目, it is identical by definition
-    // and that identity is the point, not a duplicate row.
+  it('keeps the two scoring rates apart, because they are two measurements', () => {
+    // They used to be one under two names: when both sides settled every ply, a
+    // piece on a 結算格 scored a point per ply, so "squares held" and "points per
+    // ply" differed only by 貼目/plies and the table printed the same fact twice.
+    // Mover-only settlement separates them by a factor of two — a side settles on
+    // half the plies — so both are carried and neither is a synonym.
     expect(stats.sides.white).not.toHaveProperty('scoringSquaresPerPly')
-    expect(stats.sides.black).not.toHaveProperty('scoringSquaresPerPly')
     expect(stats.sides.white.earnedPerPly).toBe(stats.sides.white.pointsPerPly)
-    expect(stats.sides.black.earnedPerPly).not.toBe(stats.sides.black.pointsPerPly)
+    expect(stats.sides.white.earnedPerSettlement).toBe(2 * stats.sides.white.earnedPerPly)
+    expect(stats.sides.black.earnedPerSettlement).toBe(2 * stats.sides.black.earnedPerPly)
     expect(stats.sides.black.pointsPerPly - stats.sides.black.earnedPerPly)
       .toBeCloseTo(asBlackDone.config.komi / 14, 12)
   })
@@ -308,8 +379,8 @@ describe('gameStats over the public log', () => {
 // Fixture A never lets either side hold two 結算格 at once, which is exactly the
 // case the headline number exists for (notebook §3.3b: White reached six of
 // eight simultaneously and it had to be hand-derived from the score column).
-// This one builds the peak on purpose, reaches it FOUR times, and gives Black a
-// side that scores nothing and moves nothing at all.
+// This one builds the peak on purpose, reaches it TWICE, and gives Black a side
+// that scores nothing and moves nothing at all.
 //
 //     1  a1 —          d1 WD rook   e1 WE rook
 //     8  a8 BA rook
@@ -350,28 +421,32 @@ const PEAK_SCRIPT: Move[] = [
 
 const PEAK: ViewerState = stateForViewer(
   PEAK_SCRIPT.reduce(applyMove, peakStart()),
-  { kind: 'replay-omniscient' },
+  { kind: 'omniscient' },
 )
 
 describe('peakSquaresHeld — the most squares held at once', () => {
   const stats = gameStats(PEAK)
 
-  it('the fixture scores what the script says: income [0,0,1,1,1,1,2,2,2,2]', () => {
+  it('the fixture scores what the script says: White [0,1,1,2,2], Black nothing', () => {
     expect(stats.pliesPlayed).toBe(10)
     const json = exportJson(PEAK) as RecordJson
-    expect(json.moves.map((m) => m.income.white)).toEqual([0, 0, 1, 1, 1, 1, 2, 2, 2, 2])
+    // interleaved with Black's passes, which credit Black and never White
+    expect(json.moves.map((m) => m.income.white)).toEqual([0, 0, 1, 0, 1, 0, 2, 0, 2, 0])
     expect(json.moves.map((m) => m.income.black)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-    expect(PEAK.score).toEqual({ white: 12, black: 0.5 })
+    expect(PEAK.score).toEqual({ white: 6, black: 0.5 })
   })
 
   it('white peaked at TWO on ply 7 — the first ply at the peak, not the last', () => {
-    // The maximum of the income series is 2, and 2 is reached on plies 7, 8, 9
-    // and 10. The record keeps the ply the peak was first reached, the same
-    // tie-break `longestZeroRun` uses, because "when did it get there" is the
-    // question and the last ply at the peak answers nothing.
+    // The maximum of White's settlement series is 2, reached at the settlements
+    // of plies 7 and 9. The record keeps the ply the peak was first reached, the
+    // same tie-break `longestZeroRun` uses, because "when did it get there" is
+    // the question and the last ply at the peak answers nothing.
     expect(stats.sides.white.peakSquaresHeld).toEqual({ count: 2, ply: 7 })
-    // and it is genuinely more than the mean of the same series, 12/10
-    expect(stats.sides.white.earnedPerPly).toBe(1.2)
+    // and it is genuinely more than the mean of the same series, 6/5
+    expect(stats.sides.white.earnedPerSettlement).toBe(1.2)
+    // while the per-PLY rate is half of that, because White settles on half the
+    // plies. Same points, two denominators, and only one of them is the series.
+    expect(stats.sides.white.earnedPerPly).toBe(0.6)
   })
 
   it('a side that never scores gets a peak of zero and no ply', () => {
@@ -379,10 +454,23 @@ describe('peakSquaresHeld — the most squares held at once', () => {
     // the field is null — never 0, which would read as "peaked on ply 0".
     expect(stats.sides.black.peakSquaresHeld).toEqual({ count: 0, ply: null })
     expect(stats.sides.black.earned).toBe(0)
-    expect(stats.sides.black.zeroPlies).toBe(10)
+    // five settlements of its own, all empty — not ten, which would be counting
+    // White's plies as Black's droughts
+    expect(stats.sides.black.settlements).toBe(5)
+    expect(stats.sides.black.zeroSettlements).toBe(5)
+    expect(stats.sides.black.longestZeroRun).toEqual({ length: 5, startPly: 2, endPly: 10 })
     expect(exportMarkdown(PEAK)).toContain(
       '| Peak scoring squares held at once | 2 (first on ply 7) | 0 — never held one |',
     )
+    expect(exportMarkdown(PEAK)).toContain('| Own 結算 scoring zero | 1 of 5 | 5 of 5 |')
+  })
+
+  it('a zero run is spanned by its plies, not by its length', () => {
+    // Black's five zero settlements are plies 2, 4, 6, 8, 10 — a run of 5 that
+    // spans NINE plies. Deriving the end as start + length - 1 would print
+    // "plies 2–6" and quietly halve the drought.
+    const md = exportMarkdown(PEAK)
+    expect(md).toContain('| Longest zero-income run (own 結算) | 1 (plies 1–1) | 5 (plies 2–10) |')
   })
 
   it('a side that only ever passes moved no pieces at all', () => {
@@ -451,7 +539,7 @@ const SURVIVOR_SCRIPT: Move[] = [
 ]
 
 const SURVIVOR_RAW: GameState = SURVIVOR_SCRIPT.reduce(applyMove, survivorStart())
-const SURVIVOR: ViewerState = stateForViewer(SURVIVOR_RAW, { kind: 'replay-omniscient' })
+const SURVIVOR: ViewerState = stateForViewer(SURVIVOR_RAW, { kind: 'omniscient' })
 
 describe('a survivor is still the same piece', () => {
   const stats = gameStats(SURVIVOR)
@@ -459,7 +547,9 @@ describe('a survivor is still the same piece', () => {
   it('the fixture is the two contacts it claims to be', () => {
     expect(stats.contactsByOutcome['attacker-wins']).toBe(1)
     expect(stats.contactsByOutcome['defender-wins']).toBe(1)
-    expect(SURVIVOR.score).toEqual({ white: 4, black: 0.5 })
+    // White's rook reaches d4 on ply 3 and is paid at its own settlements on
+    // plies 3 and 5 — losing the h1 rook on ply 5 costs it nothing on d4.
+    expect(SURVIVOR.score).toEqual({ white: 2, black: 0.5 })
   })
 
   it('a winning ATTACKER that moves on again is not counted twice', () => {
@@ -513,7 +603,7 @@ function castleGame(scoring: string[]): ViewerState {
   )
   // 1 W O-O (king e1→g1, rook h1→f1) · 2 B pass
   const played = [{ kind: 'castle', side: 'king' } as Move, PASS].reduce(applyMove, start)
-  return stateForViewer(played, { kind: 'replay-omniscient' })
+  return stateForViewer(played, { kind: 'omniscient' })
 }
 
 describe('王車易位 counts once, by the king (§3②)', () => {
@@ -524,18 +614,19 @@ describe('王車易位 counts once, by the king (§3②)', () => {
     expect(stats.sides.white.objectiveMoves).toEqual({ count: 1, total: 1, ratio: 1 })
     // it scored, so the peak sees it too — one square, from ply 1
     expect(stats.sides.white.peakSquaresHeld).toEqual({ count: 1, ply: 1 })
-    expect(stats.sides.white.score).toBe(2)   // +1 on ply 1 and again on ply 2
+    // +1 at White's own settlement on ply 1, and nothing on Black's ply 2
+    expect(stats.sides.white.score).toBe(1)
   })
 
   it('does NOT land on one when only the ROOK does', () => {
     // Same castle, but now f1 — where the rook lands — is the 結算格 and g1 is
-    // not. White still scores +1 a ply off the rook, so the move plainly
-    // reached the objective in points; it is still not an objective MOVE,
-    // because the move is the king's and the king landed on g1.
+    // not. White still scores +1 off the rook, so the move plainly reached the
+    // objective in points; it is still not an objective MOVE, because the move
+    // is the king's and the king landed on g1.
     const stats = gameStats(castleGame(['f1']))
     expect(stats.sides.white.objectiveMoves).toEqual({ count: 0, total: 1, ratio: 0 })
     expect(stats.sides.white.peakSquaresHeld).toEqual({ count: 1, ply: 1 })
-    expect(stats.sides.white.score).toBe(2)
+    expect(stats.sides.white.score).toBe(1)
   })
 
   it('is ONE mover, not two — the rook rides along', () => {
@@ -554,12 +645,19 @@ describe('王車易位 counts once, by the king (§3②)', () => {
 // Markdown
 // ---------------------------------------------------------------------------
 
+/** The announced-outcome column of one logged ply. */
+function outcomeCell(md: string, ply: number): string {
+  const row = md.split('\n').find((l) => l.startsWith(`| ${ply} | `))
+  expect(row, `no log row for ply ${ply}`).toBeDefined()
+  return row!.split('|')[4]!.trim()
+}
+
 describe('exportMarkdown — the thing you paste into a chat', () => {
   const md = exportMarkdown(asBlackDone)
 
   it('names the win condition, not just the score', () => {
     expect(md).toContain('**White wins** — 認輸')
-    expect(md).toContain('Final score: White 8 – Black 6.5.')
+    expect(md).toContain('Final score: White 4 – Black 3.5.')
     expect(md).toContain('Won on 認輸; White also led on points.')
   })
 
@@ -576,16 +674,33 @@ describe('exportMarkdown — the thing you paste into a chat', () => {
   it('logs one line per ply: ply, colour, coordinate move, outcome, running score', () => {
     expect(md).toContain('| 1 | W | a1a8 | a8: White wins — 翻明 司令(1)')
     expect(md).toContain('| 2 | B | d8d5 | — | 0 – 1.5 |')
-    expect(md).toContain('| 3 | W | b1b8 | b8: 同階雙亡 — both 旅長(4), both removed | 0 – 2.5 |')
-    expect(md).toContain('| 4 | B | pass | — | 0 – 3.5 |')
+    expect(md).toContain('| 3 | W | b1b8 | b8: 同歸於盡 — both removed, nobody is 翻明')
+    expect(md).toContain('| 4 | B | pass | — | 0 – 2.5 |')
     expect(md).toContain('| 5 | W | c1c8 | c8: Black holds — 翻明 司令(1)')
-    expect(md).toContain("| 9 | W | f1f8 | f8: Black's 爆裂物 detonates")
-    expect(md).toContain('| 11 | W | g1g8 | g8: 爆裂物 vs 爆裂物 — both removed | 5 – 6.5 |')
+    expect(md).toContain('| 9 | W | f1f8 | f8: 同歸於盡 — both removed, nobody is 翻明')
+    expect(md).toContain('| 11 | W | g1g8 | g8: 同歸於盡 — both removed, nobody is 翻明')
     expect(md).toContain('| 13 | W | h1h8 | h8: 有煙無傷 — White\'s 爆裂物 is lost')
-    expect(md).toContain('| 14 | B | pass | — | 8 – 6.5 |')
+    expect(md).toContain('| 14 | B | pass | — | 4 – 3.5 |')
     // one row per ply, plus header and separator
     const rows = md.split('\n').filter((l) => /^\| \d+ \| [WB] \|/.test(l))
     expect(rows).toHaveLength(14)
+  })
+
+  it('reads the three 同歸於盡 contacts as ONE announcement, word for word', () => {
+    // Ply 3 was an equal 兵種, ply 9 a 爆裂物 taking an ordinary piece, ply 11 a
+    // 爆裂物 against a 爆裂物. Three engine paths; strip the square each happened
+    // on and the record must not distinguish them by a single character.
+    const said = [3, 9, 11].map((ply) => outcomeCell(md, ply).replace(/^[a-h][1-8]: /, ''))
+    expect(new Set(said).size).toBe(1)
+    // …and it says outright that it is ambiguous, rather than staying quiet and
+    // letting a reader take it for a rank tie
+    expect(said[0]).toContain('同歸於盡')
+    expect(said[0]).toContain('cannot say which')
+    // the tied 階級 is gone from the line: it used to print "both 旅長(4)"
+    for (const rank of ALL_RANKS) {
+      if (rank === 'bomb') continue
+      expect(said[0], `${rank} named on a 同歸於盡`).not.toContain(RANK_NAMES_ZH[rank])
+    }
   })
 
   it('never offers the 有煙無傷 deduction — that is 解算, not 紀錄', () => {
@@ -596,31 +711,43 @@ describe('exportMarkdown — the thing you paste into a chat', () => {
     expect(md).not.toContain('工兵 或 軍旗')
   })
 
-  it('carries the stats block, ties as a raw fraction', () => {
+  it('carries the stats block, 同歸於盡 as a raw fraction with a warning', () => {
     expect(md).toContain('14 plies · 6 contacts.')
-    expect(md).toContain('**同階雙亡 1/3 階級對決**')
-    expect(md).toContain('1/6 全部接觸')
-    expect(md).toContain('| 同階雙亡 mutual-rank | 1 |')
-    expect(md).toContain('| Plies scoring zero | 6 of 14 | 8 of 14 |')
-    expect(md).toContain('| Longest zero-income run | 6 (plies 1–6) | 7 (plies 8–14) |')
-    expect(md).toContain('| 爆裂物 spent | 2 | 2 |')
-    expect(md).toContain('| …on plies | 11, 13 | 9, 11 |')
+    expect(md).toContain('**同歸於盡 3/6 全部接觸** (0.5)')
+    expect(md).toContain('| 同歸於盡 mutual-destruction | 3 |')
+    // the old fraction and the expectation it was quoted against are both named,
+    // so nobody reads this number as that one
+    expect(md).toContain('NOT the 同階雙亡/階級對決 tie rate')
+    expect(md).toContain('~18%')
+    expect(md).toContain('| Own 結算 scoring zero | 3 of 7 | 4 of 7 |')
+    expect(md).toContain('| Longest zero-income run (own 結算) | 3 (plies 1–5) | 4 (plies 8–14) |')
   })
 
-  it('puts peak-held next to points/ply, and prints each rate once', () => {
-    // 8/14 = 0.571 and 6.5/14 = 0.464; the 貼目-free means are 8/14 and 6/14.
-    expect(md).toContain('| Points per ply (貼目 included) | 0.571 | 0.464 |')
+  it('labels the two 爆裂物 rows so a live figure is never read as a count', () => {
+    expect(md).toContain('| 爆裂物 KNOWN lost (有煙無傷 only) | 1 | 0 |')
+    expect(md).toContain('| …on plies | 13 | — |')
+    expect(md).toContain('| 爆裂物 truly lost (終局 only) | 2 | 2 |')
+    expect(md).toContain('a FLOOR,')
+    expect(md).toContain('Never read a live figure against a finished one.')
+
+    // and mid-game the true row says so rather than printing a number
+    const live = exportMarkdown(asBlackMid)
+    expect(live).toContain('| 爆裂物 truly lost (終局 only) | not derivable yet | not derivable yet |')
+    expect(live).toContain('| 爆裂物 KNOWN lost (有煙無傷 only) | 1 | 0 |')
+  })
+
+  it('puts peak-held next to the two rates, and says which is which', () => {
+    // 4/14 = 0.286 and 3.5/14 = 0.25 per PLY; 4/7 = 0.571 and 3/7 = 0.429 per
+    // own 結算. The pair is a factor of two apart because each side settles on
+    // half the plies — that is the rule, not the play, and the note says so.
+    expect(md).toContain('| Points per ply (貼目 included) | 0.286 | 0.25 |')
+    expect(md).toContain('| Mean squares held per own 結算 | 0.571 | 0.429 |')
     expect(md).toContain('| Peak scoring squares held at once | 1 (first on ply 7) | 1 (first on ply 2) |')
-    // White's komi-free mean is ALSO 0.571 — identical to its points/ply. That is
-    // the redundancy being removed: one square = one point per ply, so the two
-    // rates only ever differ by 貼目/plies.
-    expect(md).not.toContain('Mean scoring squares held per ply')
-    // the row that used to restate points-per-ply under another name is gone
-    expect(md).not.toContain('Scoring squares held, per ply')
+    expect(md).toContain('credits only the side that just moved')
+    expect(md).not.toContain('| Plies scoring zero |')
 
     const rows = md.split('\n').filter((l) => l.startsWith('| Points per ply'))
     expect(rows).toHaveLength(1)
-    expect(md.split(String.fromCharCode(10)).filter((l) => l.includes('squares held per ply'))).toHaveLength(0)
   })
 
   it('prints the move counters: objective, distinct pieces, longest one-piece run', () => {
@@ -650,7 +777,7 @@ describe('the win condition is always named (§7 勝負條件)', () => {
       ],
       { status: { kind: 'over', result }, score: { white: 30, black: 12.5 }, ply: 21 },
     )
-    return stateForViewer(s, { kind: 'replay-omniscient' })
+    return stateForViewer(s, { kind: 'omniscient' })
   }
 
   it.each([
@@ -697,7 +824,7 @@ describe('the promotion suffix comes from GameEvent.promoted, never from Move.pr
   }
 
   function logRow(s: GameState): string {
-    const md = exportMarkdown(stateForViewer(s, { kind: 'replay-omniscient' }))
+    const md = exportMarkdown(stateForViewer(s, { kind: 'omniscient' }))
     const row = md.split('\n').find((l) => l.startsWith('| 1 | W |'))
     expect(row).toBeDefined()
     return row!
@@ -714,7 +841,7 @@ describe('the promotion suffix comes from GameEvent.promoted, never from Move.pr
     const row = logRow(s)
     expect(row).toContain('| b7a8 |')
     expect(row).not.toContain('b7a8q')
-    expect(row).toContain('同階雙亡')
+    expect(row).toContain('同歸於盡')
   })
 
   it('a pawn that WINS on the 8th rank did promote, so the suffix is there', () => {
@@ -733,7 +860,7 @@ describe('the promotion suffix comes from GameEvent.promoted, never from Move.pr
 
   it('the JSON says the same thing', () => {
     const tie = exportJson(
-      stateForViewer(eighthRank('brigade', 'brigade'), { kind: 'replay-omniscient' }),
+      stateForViewer(eighthRank('brigade', 'brigade'), { kind: 'omniscient' }),
     ) as RecordJson
     expect(tie.moves[0]!.notation).toBe('b7a8')
     expect(tie.moves[0]!.promoted).toBeNull()
@@ -754,12 +881,13 @@ const DISTRIBUTION_PREFIX = '- 兵種 distribution (§2, per side):'
 
 describe('§10 — a mid-game export leaks no 兵種 the viewer is not entitled to', () => {
   // From Black's seat after ply 14, Black may see: its own seven pieces
-  // (司令 旅長 團長 工兵 爆裂物) and White's 翻明 pieces — a1's 司令 (ply 1),
-  // b1's 旅長 (同階雙亡, ply 3) and g1's 爆裂物 (對爆, ply 11).
+  // (司令 旅長 團長 工兵 爆裂物) and White's 翻明 pieces — which is now a1's 司令
+  // (ply 1) and nothing else. b1's 旅長 died in a 同歸於盡 and g1's 爆裂物 in
+  // another, and neither announcement 翻明s anybody.
   const VISIBLE: Rank[] = ['commander', 'brigade', 'regiment', 'engineer', 'bomb']
-  // Everything else. White's 排長 (lost as attacker), 營長 (bomb victim, never
-  // 翻明), 連長 (never in contact) and the fizzled 爆裂物-killer, plus the three
-  // ranks nobody deployed at all.
+  // Everything else. White's 排長 (lost as attacker), 營長 (died in a 同歸於盡),
+  // 連長 (never in contact) and both 爆裂物, plus the three ranks nobody
+  // deployed at all.
   const HIDDEN: Rank[] = ALL_RANKS.filter((r) => !VISIBLE.includes(r))
 
   it('the premise holds: those ranks really are absent from the ViewerState', () => {
@@ -769,6 +897,12 @@ describe('§10 — a mid-game export leaks no 兵種 the viewer is not entitled 
     for (const rank of VISIBLE) expect(carried.has(rank)).toBe(true)
     // white's 排長/營長/連長/爆裂物 are still on the authoritative state
     expect(MID.pieces.find((p) => p.id === 'WP')!.rank).toBe('company')
+    // and a 同歸於盡 翻明s nobody, so White's 旅長 and 爆裂物 are not public
+    // through the piece list either — the record only sees the ply-1 司令
+    expect(MID.pieces.find((p) => p.id === 'WA')!.revealed).toBe(true)
+    for (const id of ['WB', 'WF', 'WG', 'WH']) {
+      expect(MID.pieces.find((p) => p.id === id)!.revealed, id).toBe(false)
+    }
   })
 
   it('greps the RENDERED MARKDOWN and finds none of them', () => {
@@ -784,9 +918,12 @@ describe('§10 — a mid-game export leaks no 兵種 the viewer is not entitled 
     }
     // …while the ranks it IS entitled to are present, so the grep is not
     // passing merely because the record is empty.
-    expect(text).toContain('司令')
-    expect(text).toContain('旅長')
-    expect(text).toContain('爆裂物')
+    expect(text).toContain('司令')      // 翻明 on ply 1, and again on ply 5
+    expect(text).toContain('爆裂物')    // announced by the 有煙無傷 on ply 13
+    // 旅長 is NOT here, though Black holds two of them and knows perfectly well
+    // what died on b8: the record prints a 兵種 only where the GAME announced
+    // one, and 同歸於盡 announces none.
+    expect(text).not.toContain('旅長')
   })
 
   it('greps the RENDERED JSON and finds none of them either', () => {
@@ -806,8 +943,10 @@ describe('§10 — a mid-game export leaks no 兵種 the viewer is not entitled 
   it('is INDISTINGUISHABLE across the hidden ranks — the strongest form', () => {
     // A grep can only catch a rank string that appears. This catches a record
     // that *varies* with a 兵種 the viewer may not see, however indirectly:
-    // permute White's four unrevealed ranks into a different, equally legal
-    // world and the exported bytes must not move by one character.
+    // permute White's unrevealed ranks into a different, equally legal world and
+    // the exported bytes must not move by one character. The rotation moves a
+    // 爆裂物 onto a piece that is still standing, so a bomb count taken off the
+    // piece list mid-game would move with it — which is why there is not one.
     const viewer: Viewer = { kind: 'player', color: 'black' }
     const alt = permuteHiddenRanks(MID, viewer)
     expect(alt.changed).toBe(true)
@@ -874,6 +1013,16 @@ describe('deployments are exported when — and only when — the view carries t
     expect(JSON.stringify(json)).not.toContain(WHITE_CODE)
   })
 
+  it('and does not count the exporter’s own 爆裂物 either, for the same reason', () => {
+    // White can see all sixteen of its own 兵種 mid-game, so the true count is
+    // sitting right there in the ViewerState. Publishing it would tell the
+    // opponent how many 爆裂物 White has left, which is precisely what 同歸於盡
+    // was made silent to withhold.
+    const stats = gameStats(stateForViewer(played, { kind: 'player', color: 'white' }))
+    expect(stats.sides.white.bombsLost.actual).toBeNull()
+    expect(stats.sides.black.bombsLost.actual).toBeNull()
+  })
+
   it('at game end both are there, round-tripping the codes they were deployed with', () => {
     const finished = resign(played, 'white')
     const vs = stateForViewer(finished, { kind: 'player', color: 'white' })
@@ -891,6 +1040,11 @@ describe('deployments are exported when — and only when — the view carries t
       carrier: 'rook',
       rank: 'battalion',
     })
+    // 終局 opens every 兵種, so the true bomb count is derivable now — and it is
+    // zero, because nobody ever made contact in this fixture
+    const stats = gameStats(vs)
+    expect(stats.sides.white.bombsLost).toEqual({ known: 0, knownPlies: [], actual: 0 })
+    expect(stats.sides.black.bombsLost.actual).toBe(0)
   })
 
   it('never reaches for the opponent’s: permuting all 16 of Black’s changes nothing', () => {
@@ -923,21 +1077,19 @@ describe('exportJson — arrays of records, for a script', () => {
       winner: 'white',
       draw: false,
     })
-    expect(json.score).toEqual({ white: 8, black: 6.5 })
+    expect(json.score).toEqual({ white: 4, black: 3.5 })
     expect(json.config.scoring_squares).toEqual([
       { square: 27, name: 'd4' },
       { square: 28, name: 'e4' },
       { square: 35, name: 'd5' },
       { square: 36, name: 'e5' },
     ])
-    expect(json.stats.ties_per_contest).toEqual({
-      ties: 1,
-      contests: 6,
-      ratio: 1 / 6,
-      rankDuels: 3,
-      duelRatio: 1 / 3,
-    })
-    expect(json.stats.contacts_by_outcome).toContainEqual({ outcome: 'mutual-rank', count: 1 })
+    expect(json.stats.mutual_destruction).toEqual({ mutual: 3, contests: 6, ratio: 0.5 })
+    // the key that used to be here measured something no longer observable, so
+    // it is gone rather than quietly repurposed
+    expect(JSON.stringify(json)).not.toContain('ties_per_contest')
+    expect(json.stats.contacts_by_outcome)
+      .toContainEqual({ outcome: 'mutual-destruction', count: 3 })
     expect(json.stats.sides.map((s) => s.color)).toEqual(['white', 'black'])
   })
 
@@ -948,31 +1100,32 @@ describe('exportJson — arrays of records, for a script', () => {
     const [w, b] = json.stats.sides
     expect(w).toMatchObject({
       color: 'white',
-      earnedPerPly: 8 / 14,
+      settlements: 7,
+      earnedPerPly: 4 / 14,
+      earnedPerSettlement: 4 / 7,
       peakSquaresHeld: { count: 1, ply: 7 },
       objectiveMoves: { count: 1, total: 7, ratio: 1 / 7 },
       distinctPiecesMoved: 7,
       longestSinglePieceRun: { length: 1, startPly: 1 },
+      bombsLost: { known: 1, knownPlies: [13], actual: 2 },
     })
     expect(b).toMatchObject({
       color: 'black',
-      earnedPerPly: 6 / 14,
+      settlements: 7,
+      earnedPerPly: 3 / 14,
+      earnedPerSettlement: 3 / 7,
       peakSquaresHeld: { count: 1, ply: 2 },
       objectiveMoves: { count: 1, total: 2, ratio: 0.5 },
       distinctPiecesMoved: 1,
       longestSinglePieceRun: { length: 2, startPly: 2 },
+      bombsLost: { known: 0, knownPlies: [], actual: 2 },
     })
     expect(JSON.stringify(json)).not.toContain('scoringSquaresPerPly')
+    expect(JSON.stringify(json)).not.toContain('zeroPlies')
   })
 
   it('gives one record per ply, with the per-ply income spelled out', () => {
     expect(json.moves).toHaveLength(14)
-    expect(json.moves.map((m) => m.income.white)).toEqual(
-      [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1],
-    )
-    expect(json.moves.map((m) => m.income.black)).toEqual(
-      [0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
-    )
     expect(json.moves[0]).toEqual({
       ply: 1,
       color: 'white',
@@ -997,6 +1150,14 @@ describe('exportJson — arrays of records, for a script', () => {
       income: { white: 0, black: 0 },
     })
     expect(json.moves[3]).toMatchObject({ ply: 4, notation: 'pass', move_kind: 'pass', combat: null })
+  })
+
+  it('carries a 同歸於盡 as a bare kind — there is nothing else in it', () => {
+    // No colour, no rank, no discriminator for anyone downstream to strip. The
+    // three of them are byte-identical.
+    const three = [2, 8, 10].map((i) => json.moves[i]!.combat!.outcome)
+    for (const o of three) expect(o).toEqual({ kind: 'mutual-destruction' })
+    expect(new Set(three.map((o) => JSON.stringify(o))).size).toBe(1)
   })
 
   it('is JSON-serialisable and holds no live reference into the ViewerState', () => {

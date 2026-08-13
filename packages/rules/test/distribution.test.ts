@@ -567,7 +567,7 @@ describe('how many deployments exist moves with the table', () => {
 
 describe('the 棋譜 records the table the game was actually played with', () => {
   const line = (s: GameState): string => {
-    const md = exportMarkdown(stateForViewer(s, { kind: 'replay-omniscient' }))
+    const md = exportMarkdown(stateForViewer(s, { kind: 'omniscient' }))
     const found = md.split('\n').filter((l) => l.startsWith('- 兵種 distribution (§2, per side):'))
     expect(found).toHaveLength(1)
     return found[0]!
@@ -589,7 +589,7 @@ describe('the 棋譜 records the table the game was actually played with', () =>
 
   it('the JSON carries the same table', () => {
     const json = exportJson(
-      stateForViewer(deployedGame('r3', TOP_HEAVY), { kind: 'replay-omniscient' }),
+      stateForViewer(deployedGame('r3', TOP_HEAVY), { kind: 'omniscient' }),
     ) as { config: { distribution: { rank: Rank; count: number }[] } }
     const counts = Object.fromEntries(json.config.distribution.map((e) => [e.rank, e.count]))
     expect(counts).toEqual({ ...DISTRIBUTION_TOP_HEAVY })

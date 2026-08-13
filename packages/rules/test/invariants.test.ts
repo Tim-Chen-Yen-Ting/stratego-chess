@@ -76,7 +76,7 @@ describe('§4 every contact removes at least one piece', () => {
   })
 })
 
-describe('§4.3/§4.4 翻明 — winner always, loser never, fizzle nobody', () => {
+describe('§4.3 翻明 — only a WINNER is ever revealed, and only when there is one', () => {
   it.each(PAIRS)('%s vs %s', (a, d) => {
     const r = resolveCombat(a, d, 'white', 'black')
 
@@ -95,21 +95,31 @@ describe('§4.3/§4.4 翻明 — winner always, loser never, fizzle nobody', () 
       case 'defender-wins':
         expect(r.revealDefender).toBe(true)
         break
-      case 'mutual-rank':
-      case 'bomb-vs-bomb':
-        expect(r.revealAttacker).toBe(true)
-        expect(r.revealDefender).toBe(true)
-        break
-      case 'bomb-detonate':
-        // 爆裂物身分公告；對方兵種不公開
-        expect(r.revealAttacker).toBe(a === 'bomb')
-        expect(r.revealDefender).toBe(d === 'bomb')
-        break
-      case 'fizzle':
-        // 附錄 A 唯一例外
+      case 'mutual-destruction':
+        // Nobody, for any of the three cases this one announcement covers.
+        // 翻明 is not a second, milder announcement: a revealed piece hands its
+        // rank to every viewer through the piece list, dead or alive, so a
+        // reveal flag here would republish through `stateForViewer` precisely
+        // what the contentless outcome exists to withhold.
         expect(r.revealAttacker).toBe(false)
         expect(r.revealDefender).toBe(false)
         break
+      case 'fizzle':
+        // 附錄 A 唯一例外 — the winning 工兵/軍旗 is not revealed either, because
+        // revealing it would name it and destroy the two-way ambiguity.
+        expect(r.revealAttacker).toBe(false)
+        expect(r.revealDefender).toBe(false)
+        break
+    }
+  })
+
+  it('every both-die contact in the whole matrix reveals nobody', () => {
+    for (const [a, d] of PAIRS) {
+      const r = resolveCombat(a, d, 'white', 'black')
+      if (r.attackerSurvives || r.defenderSurvives) continue
+      expect(r.outcome, `${a} vs ${d}`).toEqual({ kind: 'mutual-destruction' })
+      expect(r.revealAttacker, `${a} vs ${d}`).toBe(false)
+      expect(r.revealDefender, `${a} vs ${d}`).toBe(false)
     }
   })
 })
@@ -124,14 +134,10 @@ describe('附錄 A — what each announcement is allowed to carry', () => {
       case 'defender-wins':
         expect(keysOf(outcome)).toEqual(['kind', 'winnerRank'])
         break
-      case 'mutual-rank':
-        expect(keysOf(outcome)).toEqual(['kind', 'rank'])
-        break
-      case 'bomb-detonate':
-        // MUST NOT carry the victim's 兵種, and MUST NOT look like mutual-rank.
-        expect(keysOf(outcome)).toEqual(['bombColor', 'kind'])
-        break
-      case 'bomb-vs-bomb':
+      case 'mutual-destruction':
+        // The whole announcement. No rank, no colour, and no discriminator for
+        // a redaction layer to strip — the distinction between an equal-兵種
+        // trade, a detonation and 爆裂物 vs 爆裂物 must not exist in the event.
         expect(keysOf(outcome)).toEqual(['kind'])
         break
       case 'fizzle':
@@ -141,10 +147,28 @@ describe('附錄 A — what each announcement is allowed to carry', () => {
     }
   })
 
-  it('a bomb victim cannot mistake the detonation for 同階雙亡', () => {
-    const detonate = resolveCombat('bomb', 'division', 'white', 'black').outcome
-    const mutual = resolveCombat('division', 'division', 'white', 'black').outcome
-    expect(detonate.kind).not.toBe(mutual.kind)
+  /**
+   * Inverted from the v02 constraint, which required exactly the opposite.
+   *
+   * Making a detonation distinguishable protected the victim from concluding
+   * "so it was my own 階級" — but it did so by publishing that a 爆裂物 had been
+   * spent, which let an opponent count both of a side's bombs off the log and
+   * then treat a revealed 司令 as provably unkillable. Collapsing the three
+   * announcements costs the victim that one inference and takes the whole
+   * counting attack off the table with it.
+   */
+  it('a bomb victim CANNOT tell a detonation from 同階雙亡 — one announcement, both ways', () => {
+    const detonateAttacking = resolveCombat('bomb', 'division', 'white', 'black').outcome
+    const detonateDefending = resolveCombat('division', 'bomb', 'white', 'black').outcome
+    const bombVsBomb = resolveCombat('bomb', 'bomb', 'white', 'black').outcome
+    const rankTie = resolveCombat('division', 'division', 'white', 'black').outcome
+
+    for (const o of [detonateAttacking, detonateDefending, bombVsBomb, rankTie]) {
+      expect(JSON.stringify(o)).toBe(JSON.stringify(rankTie))
+    }
+
+    // …and a fizzle is still its own event, because a piece visibly survives it.
+    expect(resolveCombat('bomb', 'engineer', 'white', 'black').outcome.kind).toBe('fizzle')
   })
 
   it('the winner rank announced is exactly the survivor rank', () => {

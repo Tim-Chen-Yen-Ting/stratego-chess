@@ -17,8 +17,9 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { applyMove } from '../src/game.js'
+import { applyMove, resign } from '../src/game.js'
 import { legalMoves } from '../src/moves.js'
+import { stateForViewer } from '../src/redact.js'
 import { opposite } from '../src/board.js'
 import type { Color, GameState, Rank, Square } from '../src/types.js'
 import { at, isEmpty, lastEvent, mv, pieceById, position, rankSeenBy, sq } from './helpers.js'
@@ -121,8 +122,13 @@ describe.each(DIRECTIONS)('§4 combat matrix — $attacker attacks $defender', (
     })
   })
 
-  describe('同階相遇 — equal ranks (§4.5)', () => {
-    const d = duel(dir, 'brigade', 'brigade')
+  describe.each([
+    ['同階相遇 — equal ranks', 'brigade', 'brigade'],
+    ['爆裂物 vs 一般兵種 — bomb is the attacker', 'bomb', 'division'],
+    ['爆裂物 vs 一般兵種 — bomb is the defender (§5「主動或被動觸發皆同」)', 'division', 'bomb'],
+    ['爆裂物 vs 爆裂物', 'bomb', 'bomb'],
+  ] as [string, Rank, Rank][])('同歸於盡: %s', (_label, attackerRank, defenderRank) => {
+    const d = duel(dir, attackerRank, defenderRank)
 
     it('removes both; the target square is left empty (目標格淨空)', () => {
       expect(pieceById(d.after, ATT).square).toBeNull()
@@ -131,92 +137,24 @@ describe.each(DIRECTIONS)('§4 combat matrix — $attacker attacks $defender', (
       expect(isEmpty(d.after, toName)).toBe(true)
     })
 
-    it('announces mutual-rank with no survivor square', () => {
+    it('announces a bare mutual-destruction — no rank, no colour, no discriminator', () => {
       expect(lastEvent(d.after).combat).toEqual({
-        outcome: { kind: 'mutual-rank', rank: 'brigade' },
+        outcome: { kind: 'mutual-destruction' },
         attackerSquare: d.from,
         defenderSquare: d.to,
         survivorSquare: null,
       })
+      // The outcome carries exactly one field. A discriminator that redaction
+      // then had to strip would already be a leak: GameEvent is public by
+      // construction (techspec §3).
+      expect(Object.keys(lastEvent(d.after).combat!.outcome)).toEqual(['kind'])
     })
 
-    it('公開s both 階級', () => {
-      expect(rankSeenBy(d.after, defender, ATT)).toBe('brigade')
-      expect(rankSeenBy(d.after, attacker, DEF)).toBe('brigade')
-    })
-  })
-
-  describe('爆裂物 vs 一般兵種 — bomb is the attacker', () => {
-    const d = duel(dir, 'bomb', 'division')
-
-    it('removes both; target square 淨空', () => {
-      expect(pieceById(d.after, ATT).square).toBeNull()
-      expect(pieceById(d.after, DEF).square).toBeNull()
-      expect(isEmpty(d.after, fromName)).toBe(true)
-      expect(isEmpty(d.after, toName)).toBe(true)
-    })
-
-    it('announces bomb-detonate — distinct from mutual-rank (§4「必須是兩種可區分的公告」)', () => {
-      expect(lastEvent(d.after).combat).toEqual({
-        outcome: { kind: 'bomb-detonate', bombColor: attacker },
-        attackerSquare: d.from,
-        defenderSquare: d.to,
-        survivorSquare: null,
-      })
-    })
-
-    it('公告s the bomb only — the victim 兵種 stays secret (對方兵種不公開)', () => {
-      expect(rankSeenBy(d.after, defender, ATT)).toBe('bomb')
-      expect(rankSeenBy(d.after, attacker, DEF)).toBeNull()
-      expect(pieceById(d.after, DEF).revealed).toBe(false)
-    })
-  })
-
-  describe('爆裂物 vs 一般兵種 — bomb is the defender (§5「主動或被動觸發皆同」)', () => {
-    const d = duel(dir, 'division', 'bomb')
-
-    it('removes both; target square 淨空', () => {
-      expect(pieceById(d.after, ATT).square).toBeNull()
-      expect(pieceById(d.after, DEF).square).toBeNull()
-      expect(isEmpty(d.after, fromName)).toBe(true)
-      expect(isEmpty(d.after, toName)).toBe(true)
-    })
-
-    it('announces bomb-detonate naming the defending bomb colour', () => {
-      expect(lastEvent(d.after).combat).toEqual({
-        outcome: { kind: 'bomb-detonate', bombColor: defender },
-        attackerSquare: d.from,
-        defenderSquare: d.to,
-        survivorSquare: null,
-      })
-    })
-
-    it('公告s the bomb only — the attacker 兵種 stays secret', () => {
-      expect(rankSeenBy(d.after, attacker, DEF)).toBe('bomb')
-      expect(rankSeenBy(d.after, defender, ATT)).toBeNull()
+    it('翻明s NOBODY — neither side learns what it traded with', () => {
       expect(pieceById(d.after, ATT).revealed).toBe(false)
-    })
-  })
-
-  describe('爆裂物 vs 爆裂物', () => {
-    const d = duel(dir, 'bomb', 'bomb')
-
-    it('removes both; target square 淨空', () => {
-      expect(pieceById(d.after, ATT).square).toBeNull()
-      expect(pieceById(d.after, DEF).square).toBeNull()
-      expect(isEmpty(d.after, fromName)).toBe(true)
-      expect(isEmpty(d.after, toName)).toBe(true)
-    })
-
-    it('announces bomb-vs-bomb and 公告s both as 爆裂物', () => {
-      expect(lastEvent(d.after).combat).toEqual({
-        outcome: { kind: 'bomb-vs-bomb' },
-        attackerSquare: d.from,
-        defenderSquare: d.to,
-        survivorSquare: null,
-      })
-      expect(rankSeenBy(d.after, defender, ATT)).toBe('bomb')
-      expect(rankSeenBy(d.after, attacker, DEF)).toBe('bomb')
+      expect(pieceById(d.after, DEF).revealed).toBe(false)
+      expect(rankSeenBy(d.after, defender, ATT)).toBeNull()
+      expect(rankSeenBy(d.after, attacker, DEF)).toBeNull()
     })
   })
 
@@ -322,6 +260,90 @@ describe.each(DIRECTIONS)('§4 combat matrix — $attacker attacks $defender', (
   })
 })
 
+// ---------------------------------------------------------------------------
+// The three both-die cases are ONE observation
+// ---------------------------------------------------------------------------
+
+describe('§4 同歸於盡 — rank tie, detonation and bomb-vs-bomb are indistinguishable', () => {
+  const DIR = DIRECTIONS[0]!
+
+  /** The three ways a contact takes both pieces, plus the fourth spelling of one. */
+  const BOTH_DIE: [string, Rank, Rank][] = [
+    ['同階相遇', 'brigade', 'brigade'],
+    ['爆裂物 attacks', 'bomb', 'division'],
+    ['爆裂物 defends', 'division', 'bomb'],
+    ['爆裂物 vs 爆裂物', 'bomb', 'bomb'],
+  ]
+
+  const played = BOTH_DIE.map(([label, a, b]) => ({ label, after: duel(DIR, a, b).after }))
+  const fizzled = duel(DIR, 'bomb', 'engineer').after
+
+  it('produces a byte-identical outcome object', () => {
+    const outcomes = played.map((p) => JSON.stringify(lastEvent(p.after).combat!.outcome))
+    for (const [i, s] of outcomes.entries()) {
+      expect(s, `${played[i]!.label} announces something different`).toBe('{"kind":"mutual-destruction"}')
+    }
+  })
+
+  it('produces a byte-identical LOG ENTRY — same geometry, same score, same everything', () => {
+    const entries = played.map((p) => JSON.stringify(lastEvent(p.after)))
+    for (const [i, s] of entries.entries()) {
+      expect(s, `${played[i]!.label} logs something different`).toBe(entries[0])
+    }
+  })
+
+  it('produces a byte-identical view for the strictest viewer (§10.1 公開觀戰者)', () => {
+    // The real claim, made through the real boundary: an observer holding no
+    // private information cannot tell the four positions apart at all — not from
+    // the log, and not from the piece list either, which is where a lingering
+    // 翻明 flag would have republished what the outcome withheld.
+    const views = played.map((p) =>
+      JSON.stringify(stateForViewer(p.after, { kind: 'spectator-public' })),
+    )
+    for (const [i, s] of views.entries()) {
+      expect(s, `${played[i]!.label} is visibly different to a 公開觀戰者`).toBe(views[0])
+    }
+  })
+
+  it('tells NEITHER player what they traded with', () => {
+    for (const p of played) {
+      expect(rankSeenBy(p.after, DIR.defender, ATT), p.label).toBeNull()
+      expect(rankSeenBy(p.after, DIR.attacker, DEF), p.label).toBeNull()
+    }
+  })
+
+  it('leaves 爆裂物 uncountable during play, and countable only at 終局 (§10.5)', () => {
+    const detonated = duel(DIR, 'bomb', 'division').after
+    const bomb = () => stateForViewer(detonated, { kind: 'spectator-public' })
+      .pieces.find((p) => p.id === ATT)!
+
+    // Mid-game: the spent 爆裂物 is a dead piece of unknown 兵種, exactly like
+    // the 旅長 that died in a rank tie.
+    expect(bomb().rank).toBeNull()
+    expect(bomb().square).toBeNull()
+
+    // 終局: every 兵種 opens, so the true count is derivable from the piece list
+    // — bomb-ranked pieces with square === null.
+    const over = resign(detonated, DIR.defender)
+    const spent = stateForViewer(over, { kind: 'spectator-public' })
+      .pieces.filter((p) => p.rank === 'bomb' && p.square === null)
+    expect(spent).toHaveLength(1)
+    expect(spent[0]!.id).toBe(ATT)
+  })
+
+  it('does NOT collapse 有煙無傷 — a fizzle stays a separate, visible event', () => {
+    // A piece SURVIVES a fizzle, so it is observably different whatever the
+    // announcement says. It stays the one event that identifies a 爆裂物: a bomb
+    // that works keeps its secret, a bomb that fizzles announces itself.
+    expect(lastEvent(fizzled).combat!.outcome.kind).toBe('fizzle')
+    expect(JSON.stringify(lastEvent(fizzled))).not.toBe(JSON.stringify(lastEvent(played[0]!.after)))
+    expect(lastEvent(fizzled).combat!.survivorSquare).not.toBeNull()
+    expect(
+      JSON.stringify(stateForViewer(fizzled, { kind: 'spectator-public' })),
+    ).not.toBe(JSON.stringify(stateForViewer(played[0]!.after, { kind: 'spectator-public' })))
+  })
+})
+
 describe('§4 — the full ordinary rank ladder, 一律大吃小', () => {
   const LADDER: Exclude<Rank, 'bomb'>[] = [
     'commander', 'general', 'division', 'brigade', 'regiment',
@@ -337,7 +359,7 @@ describe('§4 — the full ordinary rank ladder, 一律大吃小', () => {
         const kind = lastEvent(attackerWins.after).combat!.outcome.kind
         if (i < j) expect(kind, `${high} attacks ${low}`).toBe('attacker-wins')
         else if (i > j) expect(kind, `${high} attacks ${low}`).toBe('defender-wins')
-        else expect(kind, `${high} attacks ${low}`).toBe('mutual-rank')
+        else expect(kind, `${high} attacks ${low}`).toBe('mutual-destruction')
       }
     }
   })

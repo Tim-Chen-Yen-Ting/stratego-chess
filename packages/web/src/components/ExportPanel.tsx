@@ -18,9 +18,9 @@ import { colorLabel, formatScore, resultText } from '../format.js'
  * enter the output, because there is no path here that reads a rank at all.
  *
  * The stats table is history, not inference: counts over the PUBLIC log (how
- * many contacts happened, how many were 同階雙亡, how many plies scored nothing)
- * and over the PUBLIC carrier layer (how many squares were held, where moves
- * landed, which piece moved — all of it on the board for both sides to see).
+ * many contacts happened, how many were announced 同歸於盡, how many of a side's
+ * own 結算 paid nothing) and over the PUBLIC carrier layer (how many squares were
+ * held, where moves landed, which piece moved — all on the board for both sides).
  * Those are facts about what was announced, not claims about who anyone is. No
  * figure here ranges over 兵種: none narrows a candidate set, none eliminates
  * one, and nothing here is a solver. The table shows the headline numbers only
@@ -48,9 +48,10 @@ export type ExportFormat = 'markdown' | 'json'
 const OUTCOME_SHORT: Record<CombatOutcome['kind'], string> = {
   'attacker-wins': '攻方勝',
   'defender-wins': '守方勝',
-  'mutual-rank': '同階雙亡',
-  'bomb-detonate': '爆裂物引爆',
-  'bomb-vs-bomb': '爆裂物對爆',
+  // ONE label for all three both-die contacts — 同階雙亡, 爆裂物引爆 and
+  // 爆裂物對爆 share a single contentless announcement (規則書 §4.3), and the
+  // record must not name a distinction the event does not carry.
+  'mutual-destruction': '同歸於盡',
   fizzle: '有煙無傷',
 }
 
@@ -281,7 +282,8 @@ export function ExportPanel({ view, onClose }: ExportPanelProps) {
               <StatsTable stats={stats.value} />
             )}
             <p className="muted small xy-ex-note">
-              以上為公開紀錄的統計（發生過幾次接觸、幾次同階雙亡…），不是推論輔助。
+              以上為公開紀錄的統計（發生過幾次接觸、幾次同歸於盡…），不是推論輔助。
+              同歸於盡不分辨同階與爆裂物，兩者公告完全相同。
             </p>
           </section>
 
@@ -395,13 +397,17 @@ function StatsTable({ stats }: { stats: GameStats }) {
                   .join(' · ')}
           </td>
         </tr>
+        {/* 同歸於盡 over ALL contacts — not the old 同階雙亡／階級對決 rate.
+            The numerator now also holds every 爆裂物 contact and the denominator
+            can no longer exclude them, so this figure runs higher and must not
+            be read against the old ~18% expectation. */}
         <tr>
-          <th scope="row">同階雙亡／接觸</th>
+          <th scope="row">同歸於盡／接觸</th>
           <td colSpan={2}>
             {fractionText(
-              stats.tiesPerContest.ties,
-              stats.tiesPerContest.contests,
-              stats.tiesPerContest.ratio,
+              stats.mutualDestruction.mutual,
+              stats.mutualDestruction.contests,
+              stats.mutualDestruction.ratio,
             )}
           </td>
         </tr>
@@ -415,23 +421,35 @@ function StatsTable({ stats }: { stats: GameStats }) {
           <td>{num(w.earned)}</td>
           <td>{num(b.earned)}</td>
         </tr>
+        {/* 每手得分 keeps GAME LENGTH as its denominator — it is the rate 分數線
+            X is checked against. Under mover-only 結算 a side is credited on
+            half the plies, so it runs at about half the mean below; the two are
+            different measurements, not the same one twice. */}
         <tr>
           <th scope="row">每手得分</th>
           <td>{num(w.pointsPerPly)}</td>
           <td>{num(b.pointsPerPly)}</td>
         </tr>
         <tr>
+          <th scope="row">每次結算平均佔格</th>
+          <td>{num(w.earnedPerSettlement)}</td>
+          <td>{num(b.earnedPerSettlement)}</td>
+        </tr>
+        <tr>
           <th scope="row">最高同時佔格</th>
           <td>{peakText(w.peakSquaresHeld)}</td>
           <td>{peakText(b.peakSquaresHeld)}</td>
         </tr>
+        {/* Own 結算, not plies: §7 settles after every ply but credits only the
+            mover, so every opponent ply is a structural zero for this side and
+            counting them would bury a real drought under an artefact. */}
         <tr>
-          <th scope="row">零分手數</th>
-          <td>{w.zeroPlies}</td>
-          <td>{b.zeroPlies}</td>
+          <th scope="row">零分結算</th>
+          <td>{fractionText(w.zeroSettlements, w.settlements, zeroRate(w))}</td>
+          <td>{fractionText(b.zeroSettlements, b.settlements, zeroRate(b))}</td>
         </tr>
         <tr>
-          <th scope="row">最長零分連續</th>
+          <th scope="row">最長零分連續（自身結算）</th>
           <td>{runText(w.longestZeroRun)}</td>
           <td>{runText(b.longestZeroRun)}</td>
         </tr>
@@ -454,19 +472,42 @@ function StatsTable({ stats }: { stats: GameStats }) {
           <td>{runText(w.longestSinglePieceRun)}</td>
           <td>{runText(b.longestSinglePieceRun)}</td>
         </tr>
+        {/* TWO bomb rows, and the top one is a FLOOR. 同歸於盡 announces nothing,
+            so a 爆裂物 that worked never appears in the log at all; only 有煙無傷
+            still names one. The true count exists only at 終局, where §10.5 has
+            already opened every 兵種 to every viewer. */}
         <tr>
-          <th scope="row">爆裂物損失</th>
-          <td title={plyListText(w.bombPlies)}>{w.bombsSpent}</td>
-          <td title={plyListText(b.bombPlies)}>{b.bombsSpent}</td>
+          <th scope="row">爆裂物已知損失（僅有煙無傷）</th>
+          <td title={plyListText(w.bombsLost.knownPlies)}>{w.bombsLost.known}</td>
+          <td title={plyListText(b.bombsLost.knownPlies)}>{b.bombsLost.known}</td>
+        </tr>
+        <tr>
+          <th scope="row">爆裂物實際損失（終局才可得）</th>
+          <td>{bombsActualText(w.bombsLost.actual)}</td>
+          <td>{bombsActualText(b.bombsLost.actual)}</td>
         </tr>
       </tbody>
     </table>
   )
 }
 
-/** Tooltip for a bomb count: which plies spent them. Announced, all of them. */
+/** Tooltip for a bomb count: which plies announced one. All 有煙無傷. */
 function plyListText(plies: readonly number[]): string | undefined {
   return plies.length === 0 ? undefined : `第 ${plies.join('、')} 手`
+}
+
+/**
+ * The true 爆裂物 loss, or an explicit "not yet". Never a 0 — a blank count and
+ * a count of zero are different claims, and printing the second for the first
+ * would say the side still holds every bomb it started with.
+ */
+function bombsActualText(actual: number | null): string {
+  return actual === null ? '終局後才可得' : String(actual)
+}
+
+/** Share of a side's OWN 結算 that credited nothing; null when it never settled. */
+function zeroRate(s: { zeroSettlements: number; settlements: number }): number | null {
+  return s.settlements === 0 ? null : s.zeroSettlements / s.settlements
 }
 
 /**

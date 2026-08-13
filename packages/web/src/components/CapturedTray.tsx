@@ -31,10 +31,18 @@ import { RankPicker, isAnnotatable } from './PencilPanel.js'
  *
  * A fact appears on a captured piece EXACTLY when the payload carries a rank for
  * it, and never otherwise. The redaction layer already decided that: your own
- * dead pieces always carry one, an enemy dead piece carries one only when the
- * event that killed it made the rank public (同階雙亡, 爆裂物 vs 爆裂物), and at
- * game end everything is open. `rank === null` renders no fact — a missing label
- * is itself public information (the loser is never revealed, §4).
+ * dead pieces always carry one, an enemy dead piece carries one only if it was
+ * already 翻明 while it stood on the board (§4 — winning a fight is the only way
+ * that happens), and at game end everything is open (§10.5). `rank === null`
+ * renders no fact — a missing label is itself public information (the loser is
+ * never revealed, §4).
+ *
+ * No killing event reveals anything any more: mutual destruction is a single
+ * announcement covering both 同階雙亡 and 爆裂物, and it names neither piece. So
+ * a piece removed that way shows 「？」 for the rest of the game, exactly like a
+ * piece that simply lost. That is the point — an enemy who trades into you must
+ * not be able to tell which of the two it met, and must not be able to count
+ * your 爆裂物 down to zero. Do not add a range, a hint, or a 「至少是…」 here.
  *
  * ── The player's own handwriting ───────────────────────────────────────────
  *
@@ -215,17 +223,16 @@ export function captureLine(rec: CaptureRecord, me: Color | null): string {
       return `由 ${here} 攻擊 ${contact} 落敗 — ${ownerLabel(other(mover), me)}${
         RANK_LABEL[outcome.winnerRank]
       }守住並翻明`
-    case 'mutual-rank':
-      // both are removed, so 「接觸於」 rather than 「於」: the attacker died at
-      // its own origin and never entered the contact square (§4 位置結算)
-      return `接觸於 ${contact} 同階雙亡 — 雙方皆為 ${RANK_LABEL[outcome.rank]}`
-    case 'bomb-vs-bomb':
-      return `接觸於 ${contact} 爆裂物對爆裂物 — 雙方皆公告為爆裂物`
-    case 'bomb-detonate':
-      // only the bomb is announced; the piece it took stays hidden (§4 翻明總表)
-      return deadColorOf(rec) === outcome.bombColor
-        ? `接觸於 ${contact} 引爆（${RANK_LABEL.bomb}）— 對方兵種不公開`
-        : `於 ${here} 被${ownerLabel(outcome.bombColor, me)}${RANK_LABEL.bomb}炸掉`
+    case 'mutual-destruction':
+      // Both are removed, so 「接觸於」 rather than 「於」: the attacker died at
+      // its own origin and never entered the contact square (§4 位置結算).
+      //
+      // 同階雙亡 and 爆裂物 are ONE announcement now, and it names nobody. This
+      // card therefore states the removal and says outright that which kind it
+      // was is not public — the piece it is attached to could be either half of
+      // either story. Writing 「同階雙亡」 here would hand the reader a rank
+      // equality the server never announced.
+      return `接觸於 ${contact} 雙方同時移除 — 同階或爆裂物，公開紀錄不區分（雙方兵種皆不公開）`
     case 'fizzle':
       // 有煙無傷 (§5): the 爆裂物 is the piece removed, and 附錄 A(a) keeps BOTH
       // sides unrevealed — which is why this card still shows「？」. What the

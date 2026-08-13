@@ -60,9 +60,34 @@ export type Move =
 export type CombatOutcome =
   | { kind: 'attacker-wins'; winnerRank: Rank }
   | { kind: 'defender-wins'; winnerRank: Rank }
-  | { kind: 'mutual-rank'; rank: Rank }
-  | { kind: 'bomb-detonate'; bombColor: Color }
-  | { kind: 'bomb-vs-bomb' }
+  /**
+   * 同歸於盡 — both pieces removed, and this is the WHOLE announcement.
+   *
+   * One variant covers all three ways a contact can take both pieces: an equal
+   * 階級 trade, a 爆裂物 against an ordinary 兵種, and 爆裂物 against 爆裂物. The
+   * engine still tells them apart — it must, a 爆裂物 is spent and a 軍旗 leaving
+   * the board still loses on the spot — but the event carries no field that
+   * separates them, on purpose:
+   *
+   *   • naming the tied 階級 handed BOTH players an exact rank for free;
+   *   • announcing a detonation made 爆裂物 publicly countable, and an opponent
+   *     who has counted both of yours knows a revealed 司令 is unkillable.
+   *
+   * With the three indistinguishable, a player who trades into you cannot tell
+   * whether they met their own rank or a bomb, and cannot run your bomb count
+   * down to zero. `fizzle` stays separate because a piece SURVIVES there — that
+   * is observable on the board whatever the announcement says, so it remains the
+   * one event that identifies a 爆裂物: a bomb that works stays secret, a bomb
+   * that fizzles announces itself.
+   *
+   * There is deliberately NO discriminator for a redaction layer to strip. Every
+   * `GameEvent` is public by construction (techspec §3) and stays that way; the
+   * distinction does not exist in the event at all. 爆裂物 spent is therefore not
+   * derivable from the log during play. At 終局 §10.5 opens every 兵種, so the
+   * true count becomes derivable from the piece list instead — bomb-ranked
+   * pieces with `square === null`.
+   */
+  | { kind: 'mutual-destruction' }
   /** 有煙無傷 — reveals nothing. Survivor is 工兵 or 軍旗. */
   | { kind: 'fizzle'; survivorColor: Color }
 
@@ -84,9 +109,27 @@ export interface GameEvent {
 }
 
 export interface GameConfig {
-  scoreTarget: number        // X, default 40
+  /**
+   * X — 先達 X 分者獲勝 (§7④②). Default 40, for EVERY 結算格 preset.
+   *
+   * A settlement credits only the side that just moved (§7), so one piece
+   * holding one scoring square earns 1 point per FULL TURN no matter how many
+   * squares the board has. Widening the board raises how much a turn can pay,
+   * not how often it pays, so the wide-8 preset takes the same 40 rather than
+   * double it.
+   */
+  scoreTarget: number
   noProgressTurns: number    // N, default 30
-  komi: number               // default 0.5, credited to black
+  /**
+   * 貼目 (§7③), credited to black at ply 0. Default 0.5.
+   *
+   * Its one job is making an exact tie impossible, so every score-decided ending
+   * has a winner. It is NOT compensation for a first-move scoring edge: under
+   * mover-only settlement each side banks once per turn, before the opponent can
+   * reply, so neither the number of settlements nor the exposure between them
+   * favours white.
+   */
+  komi: number
   /**
    * ② 結算階段 scoring squares (§7). Default `SCORING_CENTRE_4` — d4/e4/d5/e5,
    * the gamebook's 中央四格. `SCORING_WIDE_8` adds the a/h flanks.
@@ -163,7 +206,7 @@ export type Viewer =
   | { kind: 'player'; color: Color }
   | { kind: 'spectator'; bound: Color }
   | { kind: 'spectator-public' }
-  | { kind: 'replay-omniscient' }
+  | { kind: 'omniscient' }
   | { kind: 'replay-player'; color: Color }
 
 export interface ViewerPiece {

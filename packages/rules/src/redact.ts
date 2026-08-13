@@ -35,11 +35,11 @@ export function viewerColor(v: Viewer): Color | null {
     // 現場觀戰者: "與其進入時所綁定玩家的視角完全相同" — exactly the bound
     // player's view, no more.
     case 'spectator': return v.bound
-    // Neither of these owns an army. The omniscient replay viewer needs no
+    // Neither of these owns an army. The omniscient viewer needs no
     // colour because it sees every colour; the public observer needs none
     // because it sees no hidden 兵種 at all.
     case 'spectator-public': return null
-    case 'replay-omniscient': return null
+    case 'omniscient': return null
   }
 }
 
@@ -49,15 +49,15 @@ export function viewerColor(v: Viewer): Color | null {
  * A rank is disclosed when, and only when:
  *   1. the viewer owns the piece,                       (§10 玩家/觀戰者)
  *   2. the piece has been 翻明,                          (§4.3)
- *   3. the viewer is the omniscient replay viewer,      (§10 回放)
+ *   3. the viewer is the omniscient viewer,             (§10.1 全知者視角)
  *   4. the game is over — 終局公開全部兵種.               (§10 其他)
  *
  * The 公開觀戰者 is entitled by (2) and (4) alone. It is deliberately the
  * narrowest set any viewer can have: strictly less than a player, strictly less
- * than a bound 現場觀戰者, and nowhere near the omniscient replay viewer.
+ * than a bound 現場觀戰者, and nowhere near the omniscient viewer.
  */
 export function entitledToRank(s: GameState, v: Viewer, piece: Piece): boolean {
-  if (v.kind === 'replay-omniscient') return true
+  if (v.kind === 'omniscient') return true
   if (s.status.kind === 'over') return true
   if (piece.revealed) return true
   // 公開觀戰者 holds no seat and owns no colour, so the two disclosures above —
@@ -133,7 +133,7 @@ function copyViewer(v: Viewer): Viewer {
     case 'player': return { kind: 'player', color: v.color }
     case 'spectator': return { kind: 'spectator', bound: v.bound }
     case 'spectator-public': return { kind: 'spectator-public' }
-    case 'replay-omniscient': return { kind: 'replay-omniscient' }
+    case 'omniscient': return { kind: 'omniscient' }
     case 'replay-player': return { kind: 'replay-player', color: v.color }
   }
 }

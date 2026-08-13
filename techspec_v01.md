@@ -1,15 +1,15 @@
 # 行軍西洋棋 — Technical Specification v01
 
-Implementation contract for `gamebook_v03.md`. Where this document and the gamebook disagree about **rules**, the gamebook wins. This document is authoritative for **structure, types and APIs**.
+Implementation contract for `gamebook_v04.md`. Where this document and the gamebook disagree about **rules**, the gamebook wins. This document is authoritative for **structure, types and APIs**.
 
 Document set:
 | File | Role |
 |---|---|
-| `gamebook_v03.md` | **The rules.** What is legal. Normative. |
+| `gamebook_v04.md` | **The rules.** What is legal. Normative. |
 | `notebook_v01.md` | Derivations, emergent interactions, playtest data. Never normative. |
 | `strategy_v01.md` | Player-facing攻略 — how to play well. No data, no hedging. Never normative. |
 | `techspec_v01.md` | This file — structure, types, APIs. |
-| `gamebook.md`, `gamebook_v02.md`, `plan_v01.md` | Superseded. Kept for history. |
+| `gamebook.md`, `gamebook_v02.md`, `gamebook_v03.md`, `plan_v01.md` | Superseded. Kept for history. |
 
 ---
 
@@ -152,10 +152,16 @@ export type Move =
 export type CombatOutcome =
   | { kind: 'attacker-wins'; winnerRank: Rank }
   | { kind: 'defender-wins'; winnerRank: Rank }
-  | { kind: 'mutual-rank'; rank: Rank }
-  | { kind: 'bomb-detonate'; bombColor: Color }
-  | { kind: 'bomb-vs-bomb' }
-  /** 有煙無傷 — reveals nothing. Survivor is 工兵 or 軍旗. */
+  /**
+   * Both pieces removed. Covers an equal-rank meeting, a 爆裂物 detonation and
+   * 爆裂物-vs-爆裂物 — deliberately indistinguishable (gamebook v04 §4.3).
+   * Carries NO rank and NO colour: the engine still resolves the three cases
+   * differently, but the emitted event must not let anyone tell them apart, or
+   * 爆裂物 inventory becomes publicly countable.
+   */
+  | { kind: 'mutual-destruction' }
+  /** 有煙無傷 — reveals nothing. Survivor is 工兵 or 軍旗. The ONLY event that
+   *  still identifies a 爆裂物, because a piece visibly survives. */
   | { kind: 'fizzle'; survivorColor: Color }
 
 /** One public log entry. Everything here is visible to every viewer. */
@@ -176,7 +182,7 @@ export interface GameEvent {
 }
 
 export interface GameConfig {
-  scoreTarget: number        // X, default 40 (80 under the wide-8 preset)
+  scoreTarget: number        // X, default 40 on EVERY 結算格 preset
   noProgressTurns: number    // N, default 30
   komi: number               // default 0.5, credited to black
   /** §7 settlement squares. Default SCORING_CENTRE_4; SCORING_WIDE_8 adds a/h flanks.
@@ -332,8 +338,8 @@ Cross-reference the gamebook section given; do not reimplement from memory.
 1. **Combat occupancy (§4).** Attacker wins → attacker occupies the target square. Attacker loses → attacker removed *from its origin*, defender unmoved, target square unchanged. Tie → both removed, square empty.
 2. **En passant (§4).** Retained. Attacker wins → captured pawn removed from *its* square, attacker lands on the *skipped* square. Attacker loses → attacker removed from origin, skipped square stays empty.
 3. **Bomb (§5).** Ties with everything except 工兵/軍旗, against which it **loses** in both directions. A surviving 工兵/軍旗 attacker **advances onto the target square** and is **not revealed**. If it reaches the 8th rank this way it **promotes** (§6).
-4. **Reveal (§4 table).** Winner revealed. Loser never. Mutual-rank announces both. Bomb detonation announces the bomb only. Fizzle announces nothing. `mutual-rank` and `bomb-detonate` **must be distinct** event kinds — collapsing them makes a bomb victim wrongly infer the attacker's rank.
-5. **Settlement (§7).** After **every ply**, both players score +1 per own piece on a centre square. Black's score starts at `komi`.
+4. **Reveal (§4.3 table).** Only the WINNER is revealed; the loser never is. Every both-die contact emits a bare `mutual-destruction` carrying no rank and no colour — an equal-rank meeting, a detonation and bomb-vs-bomb MUST be indistinguishable (gamebook v04 §4.3). `fizzle` announces nothing either, but is observably different because a piece survives, which makes it the only event that still identifies a 爆裂物. Reveal flags must be OFF for all three both-die cases: a revealed rank is republished through the piece list to every viewer, which would undo the opaque outcome.
+5. **Settlement (§7.1).** After every ply, ONLY the side that just moved scores +1 per own piece on a 結算格 (gamebook v04). A pass settles too — the passer is the mover. Crediting both sides gave White one extra settlement per acquiring move; crediting once per full turn fixes the count but breaks exposure instead. Black's score starts at `komi`.
 6. **Flag (§5, §7①).** Any 軍旗 leaving the board loses instantly, resolved in the ACTION sub-step before settlement. Both flags leaving simultaneously is a draw. Promotion and castling do **not** count as leaving the board.
 7. **Pass (§3④).** Always legal. Increment is granted on a move, or on a pass when the player had **zero** other legal moves; never on a voluntary pass (§8).
 8. **No-progress (§7③).** Increment `noProgressTurns` after a full turn in which no capture occurred and neither score changed. Any capture or any point resets it to 0. At N, higher score wins.

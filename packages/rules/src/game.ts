@@ -5,8 +5,16 @@
  *
  *   ① 行動階段 — move / capture / castle / pass. 奪旗 is decided HERE and
  *      ends the game immediately, before any scoring happens.
- *   ② 結算階段 — both sides score the centre, then the score target (§7②) and
- *      the stagnation counter (§7③) are checked.
+ *   ② 結算階段 — the SIDE THAT JUST MOVED scores its 結算格, then the score
+ *      target (§7②) and the stagnation counter (§7③) are checked.
+ *
+ * Settlement crediting the mover alone is what keeps the two sides even. Score
+ * both every ply and white banks a square from ply 2m-1 where black banks the
+ * mirror-image square from ply 2m — one extra settlement per acquiring move,
+ * compounding all game. Settle once per FULL TURN instead and the counting
+ * evens out but the exposure does not: white's placement can be evicted before
+ * it is ever counted, black's never can. Mover-only is neutral on both axes,
+ * because each side banks once before the opponent can reply.
  *
  * `applyMove` is pure: the input state is never mutated, and every mutable
  * sub-object of the returned state is freshly allocated.
@@ -37,6 +45,10 @@ function initialScore(s: GameState): { white: number; black: number } {
 /**
  * ② 結算 (§7): +1 per own piece standing on a scoring square.
  *
+ * Answers "what would `color` bank right now", for any colour — `applyMove`
+ * asks it about the mover only (§7), but a UI previewing either side's holdings
+ * is a fair use of it. It reads the position it is given and nothing else.
+ *
  * The square list is a PARAMETER, never a module constant — callers pass
  * `state.config.scoringSquares` (附錄 B: 必須為設定值，不得寫死), so a game
  * scores the shape it was created with. This counts PIECES, not squares, so a
@@ -60,7 +72,13 @@ export function scoringPoints(
  */
 export const centerPoints = scoringPoints
 
-/** Did the given ply move the needle for §7③ — a capture, or any point scored? */
+/**
+ * Did the given ply move the needle for §7③ — a capture, or any point scored?
+ *
+ * Reads the difference between consecutive `scoreAfter` entries rather than
+ * asking who was to move, so it does not care that a settlement now touches one
+ * side: whichever number moved, it moved.
+ */
 function plyHadProgress(
   log: readonly GameEvent[],
   index: number,
@@ -204,11 +222,15 @@ export function applyMove(s: GameState, move: Move): GameState {
   let noProgressTurns = s.noProgressTurns
 
   if (!result) {
-    // Both players score, every single ply (§7). A piece captured in ① is
-    // already off the board and does not score for this ply. The board shape
-    // comes from THIS game's config, never from a constant.
-    score.white += scoringPoints(pieces, 'white', s.config.scoringSquares)
-    score.black += scoringPoints(pieces, 'black', s.config.scoringSquares)
+    // §7 — settlement runs after every ply, and credits ONLY the side that just
+    // moved. The opponent's 結算格 are not counted here; they were counted at
+    // its own last ply and will be again at its next. A piece captured in ① is
+    // already off the board and does not score for this ply — including the
+    // mover's own piece, if it attacked and lost. The board shape comes from
+    // THIS game's config, never from a constant.
+    //
+    // A pass settles like anything else (§3④): the passer is the mover.
+    score[mover] += scoringPoints(pieces, mover, s.config.scoringSquares)
   }
 
   const event: GameEvent = {
@@ -222,14 +244,31 @@ export function applyMove(s: GameState, move: Move): GameState {
   const log = [...s.log, event]
 
   if (!result) {
+    // §7② 先達 X 分者獲勝. Only one score moved in this settlement, and the other
+    // side was already tested against X at its own last ply, so at most one side
+    // can be at or past X here: `leader` necessarily names the side that just
+    // crossed it.
+    //
+    // §7② also covers 「若雙方於同一次結算同時越過 X」 — both sides crossing at
+    // once, decided by the higher score. That case is UNREACHABLE by
+    // construction now that one settlement moves one score: for both to be at or
+    // past X here, the idle side would have had to arrive there without a
+    // settlement of its own, which only a degenerate config can do (貼目 alone
+    // already meeting X). The handling stays anyway — it is the rule as written,
+    // and it costs nothing, because `leader` answers both questions with the
+    // same expression.
     if (score.white >= s.config.scoreTarget || score.black >= s.config.scoreTarget) {
       result = { kind: 'score', winner: leader(score) }
     }
   }
 
   // §7③ 停滯. The counter measures FULL TURNS (white ply + black ply) in which
-  // nothing was captured and neither side scored. Any capture or any point
-  // zeroes it. Turns close on even plies, because ply 1 is white's.
+  // nothing was captured and neither side scored. Unchanged in meaning by
+  // mover-only settlement: each side now settles exactly once per turn, so a
+  // turn with no captured piece and no point is still a turn in which neither
+  // side scored — it just takes one settlement per side to say so instead of
+  // two. Any capture or any point zeroes it. Turns close on even plies, because
+  // ply 1 is white's.
   const thisIndex = log.length - 1
   const base = initialScore(s)
   const progressNow = plyHadProgress(log, thisIndex, base)
@@ -271,7 +310,11 @@ export function applyMove(s: GameState, move: Move): GameState {
 function flagIsOff(pieces: readonly Piece[], color: Color): boolean {
   const flags = pieces.filter((p) => p.color === color && p.rank === 'flag')
   if (flags.length === 0) return false
-  return flags.every((p) => p.square === null)
+  // §5.3 is「軍旗以任何方式離開棋盤，該方立即判負」— ANY, not all. `every` was
+  // indistinguishable from `some` while every preset dealt exactly one 軍旗, but
+  // 附錄 B made the 兵種 table a per-game setting and checkDistribution accepts
+  // any table summing to 16, so a two-flag game is reachable from the API.
+  return flags.some((p) => p.square === null)
 }
 
 // ---------------------------------------------------------------------------

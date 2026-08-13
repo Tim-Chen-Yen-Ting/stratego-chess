@@ -99,8 +99,13 @@ async function postCreateGame(options: CreateOptions): Promise<CreatedGame> {
  * Which colour a link sits in. The server flips a fair coin at creation
  * (gamebook §9) and returns both colours, but the screen used to discard them —
  * so the host discovered their colour only by entering, and could not choose.
- * Being able to choose matters: testing whether 貼目 0.5 covers the first-move
- * advantage requires deliberately taking Black, not waiting for the coin.
+ * Being able to choose matters: measuring what is left of the first-move
+ * advantage means deliberately taking Black, not waiting for the coin.
+ *
+ * 貼目 0.5 is NOT that compensation and is not advertised as such. Settlement
+ * credits only the side that just moved, which is what makes the counting even;
+ * the half point exists so the score can never tie, so every score-decided
+ * ending has a winner (§7.3/§7.4). The seat label says "+0.5" and nothing more.
  */
 function seatLabel(color: Color): string {
   return color === 'white' ? '執白（先手）' : '執黑（後手，貼目 +0.5）'
@@ -151,11 +156,31 @@ export function Create() {
   const setupMinutesShown =
     setupMinutes ?? String(clockEnabled ? SETUP_MINUTES_TIMED : SETUP_MINUTES_UNTIMED)
 
-  // same touched-flag pattern: the scoring-area preset moves the default X
-  // (twice the area, twice the rate) until the player types their own number
+  /*
+   * X no longer moves with the scoring area: BOTH presets default to
+   * DEFAULT_CONFIG.scoreTarget.
+   *
+   * The wide-8 preset used to double it, because settlement credited both
+   * players after every ply and twice the area meant twice the rate. Settlement
+   * now credits only the side that just moved, so every game banks half as
+   * often as the number 80 was built for; 40 — the figure the centre-four
+   * default was already set at for a once-per-turn rate — is the sane default
+   * for both areas. The wide area still fills faster per settlement, so an
+   * eight-square game does run shorter at the same X; the hint below says so,
+   * and the field is right there for anyone who wants the longer game back.
+   *
+   * `ScoringAreaPreset.scoreTargetFactor` in constants.ts is what used to apply
+   * that doubling and is deliberately NOT read here any more. It is dead; do not
+   * multiply by it again on the strength of the field still existing.
+   *
+   * Same touched-flag pattern as 佈署時限: null until the player types, so the
+   * defaults keep applying without ever discarding something they chose.
+   */
   const [scoreTarget, setScoreTarget] = useState<string | null>(null)
-  const scoreTargetDefault = DEFAULT_CONFIG.scoreTarget * scoringArea.scoreTargetFactor
+  const scoreTargetDefault = DEFAULT_CONFIG.scoreTarget
   const scoreTargetShown = scoreTarget ?? String(scoreTargetDefault)
+  /** wider than the centre preset — read off the squares, not off a preset id */
+  const wideArea = scoringArea.squares.length > SCORING_AREAS.center.squares.length
 
   async function onCreate() {
     /*
@@ -229,8 +254,8 @@ export function Create() {
       <style>{CREATE_CSS}</style>
       <h1>行軍西洋棋</h1>
       <p className="muted">
-        西洋棋的載體，行軍棋的兵種。載體公開、兵種隱藏，一律大吃小；中央四格每手計分，
-        軍旗離場即判負。
+        西洋棋的載體，行軍棋的兵種。載體公開、兵種隱藏，一律大吃小；中央四格每手結算，
+        只有剛行動的一方計分，軍旗離場即判負。
       </p>
 
       {!created && (
@@ -287,8 +312,8 @@ export function Create() {
                   </span>
                 </div>
                 <p className="muted small c-hint">
-                  每一手結束時，己方棋子每佔一格得 1 分。目前選的是{' '}
-                  <code className="c-sq">{squareList(scoringArea.squares)}</code>。
+                  每一手結束時結算，<strong>只有剛行動的一方</strong>計分：該方棋子每佔一格得 1
+                  分。目前選的是 <code className="c-sq">{squareList(scoringArea.squares)}</code>。
                 </p>
                 <p className="muted small c-hint">
                   八格版把 a、h 兩條 rook 直線與兩側翼也變成有分可搶的地方，讓中央以外的半盤有東西可爭。
@@ -358,9 +383,10 @@ export function Create() {
                   />
                 </label>
                 <p className="muted small c-hint">
-                  先達到 X 分者獲勝（此計分區預設 {scoreTargetDefault}）。
-                  {scoringArea.scoreTargetFactor > 1
-                    ? '兩倍的計分區大約以兩倍速度累積，預設值因此同步加倍；覺得太長就自己改。'
+                  先達到 X 分者獲勝（兩種計分區的預設皆為 {scoreTargetDefault}）。每一手只有
+                  <strong>剛行動的一方</strong>結算，因此每方每個完整回合恰好結算一次。
+                  {wideArea
+                    ? '八格版每次結算能拿的分較多，同樣的 X 會早一點結束；想要跟四格版差不多長就把 X 調高。'
                     : '試玩短局時調低。'}
                 </p>
 

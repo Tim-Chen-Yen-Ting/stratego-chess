@@ -131,8 +131,8 @@ export function pencilSeatKey(viewer: Viewer): string {
       return 'public'
     case 'replay-player':
       return `replay-${viewer.color}`
-    case 'replay-omniscient':
-      return 'replay-omniscient'
+    case 'omniscient':
+      return 'omniscient'
   }
 }
 
@@ -357,7 +357,7 @@ export function viewerColor(viewer: Viewer): Color | null {
       return null
     case 'replay-player':
       return viewer.color
-    case 'replay-omniscient':
+    case 'omniscient':
       return null
   }
 }
@@ -443,10 +443,11 @@ function survivors(
       return { attacker: true, defender: false }
     case 'defender-wins':
       return { attacker: false, defender: true }
-    // 同階雙亡 and both bomb announcements clear the square (§4 位置結算)
-    case 'mutual-rank':
-    case 'bomb-detonate':
-    case 'bomb-vs-bomb':
+    // 同歸於盡 — one announcement covering an equal 兵種, a 爆裂物 taking an
+    // ordinary piece, and 爆裂物 vs 爆裂物. Which of the three it was is not in
+    // the event and must not be guessed; it makes no difference here, because
+    // all three clear the square (§4 位置結算).
+    case 'mutual-destruction':
       return { attacker: false, defender: false }
     case 'fizzle': {
       // 有煙無傷: the 爆裂物 is the one removed, so the announced survivor colour

@@ -32,6 +32,21 @@ export function rankOrder(rank: Exclude<Rank, 'bomb'>): number {
 }
 
 /**
+ * 同歸於盡 — the single announcement every both-die contact makes.
+ *
+ * A FRESH object per call, never a shared singleton: `game.ts` puts the outcome
+ * straight into the log, and an aliased literal would put one object in every
+ * event of every game at once.
+ *
+ * The three cases below that use it — 同階相遇, 爆裂物 vs 一般兵種, 爆裂物 vs
+ * 爆裂物 — are resolved differently and correctly; they simply announce the same
+ * thing. See `CombatOutcome` in types.ts for why.
+ */
+function mutualDestruction(): CombatOutcome {
+  return { kind: 'mutual-destruction' }
+}
+
+/**
  * Resolve a contact between two 兵種.
  *
  * §2  一律大吃小 — the lower RANK_ORDER number wins, no exceptions.
@@ -39,10 +54,17 @@ export function rankOrder(rank: Exclude<Rank, 'bomb'>): number {
  *     except against 工兵/軍旗, where the bomb simply LOSES — in BOTH
  *     directions, whether the bomb attacked or was attacked.
  *
- * The 'mutual-rank' and 'bomb-detonate' outcomes are deliberately distinct
- * (§4「翻明總表」): if a bomb's victim saw the same announcement as an
- * equal-rank trade, it would wrongly conclude that the attacker shared its
- * own 階級.
+ * Three of the branches below are separate decisions with one announcement:
+ * every contact that removes both pieces returns a bare `mutual-destruction`
+ * and 翻明s NOBODY. Both halves of that are load-bearing. Announcing the tied
+ * 階級 gave both players a free exact rank; announcing a detonation made 爆裂物
+ * publicly countable. And 翻明 is not merely a second announcement — a revealed
+ * piece hands its rank to every viewer through `entitledToRank`, alive or dead,
+ * so leaving the reveal flags set would republish through the piece list exactly
+ * what the opaque outcome withholds.
+ *
+ * 附錄 A is satisfied more strictly than before, not less: all three cases are
+ * now literally the same observation.
  */
 export function resolveCombat(
   attackerRank: Rank,
@@ -53,19 +75,19 @@ export function resolveCombat(
   const aBomb = attackerRank === 'bomb'
   const dBomb = defenderRank === 'bomb'
 
-  // 爆裂物 vs 爆裂物 — both removed, both announced (§4 table row 4).
+  // 爆裂物 vs 爆裂物 — both removed. Two bombs are spent and the log says only
+  // that two pieces died; nothing announces that either was a 爆裂物.
   if (aBomb && dBomb) {
     return {
-      outcome: { kind: 'bomb-vs-bomb' },
+      outcome: mutualDestruction(),
       attackerSurvives: false,
       defenderSurvives: false,
-      revealAttacker: true,
-      revealDefender: true,
+      revealAttacker: false,
+      revealDefender: false,
     }
   }
 
   if (aBomb || dBomb) {
-    const bombColor = aBomb ? attackerColor : defenderColor
     const otherRank = aBomb ? defenderRank : attackerRank
 
     // 爆裂物 vs 工兵／軍旗 — 有煙無傷. Only the bomb is removed and NOTHING is
@@ -82,13 +104,15 @@ export function resolveCombat(
       }
     }
 
-    // 爆裂物 vs 一般兵種 — both removed, only the bomb is announced.
+    // 爆裂物 vs 一般兵種 — both removed. The bomb IS consumed, but which side
+    // spent it is not announced and the bomb is not 翻明: that is the whole of
+    // what stops 爆裂物 from being counted down to zero from the log.
     return {
-      outcome: { kind: 'bomb-detonate', bombColor },
+      outcome: mutualDestruction(),
       attackerSurvives: false,
       defenderSurvives: false,
-      revealAttacker: aBomb,
-      revealDefender: dBomb,
+      revealAttacker: false,
+      revealDefender: false,
     }
   }
 
@@ -115,13 +139,15 @@ export function resolveCombat(
     }
   }
 
-  // 同階相遇 — both removed, both 階級 announced.
+  // 同階相遇 — both removed. The shared 階級 is NOT announced: it would hand
+  // both players an exact rank, and it would tell a bomb's victim that it was
+  // not a bomb.
   return {
-    outcome: { kind: 'mutual-rank', rank: attackerRank },
+    outcome: mutualDestruction(),
     attackerSurvives: false,
     defenderSurvives: false,
-    revealAttacker: true,
-    revealDefender: true,
+    revealAttacker: false,
+    revealDefender: false,
   }
 }
 

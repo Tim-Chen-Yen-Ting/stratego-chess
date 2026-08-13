@@ -7,6 +7,14 @@ import { eventLine } from '../format.js'
  * The public event record (gamebook §10 — 紀錄給，解算不給). Every line here is
  * a restatement of something the server already announced to both sides. No
  * candidate-rank set is ever shown to a player; reading the board is the game.
+ *
+ * A contact line may legitimately carry NO tag on either side: a mutual
+ * destruction announces neither a rank nor a colour, because 同階雙亡 and a
+ * 爆裂物 are deliberately one indistinguishable event. Do not "repair" that with
+ * a badge naming one of them — 「同階雙亡」 next to such a line is a claim the
+ * server never made, and a false one half the time. What that line legitimately
+ * shows is what the board shows: both pieces went. The hover sentence
+ * (`combatText`) states the ambiguity in words.
  */
 
 export interface EventLogProps {

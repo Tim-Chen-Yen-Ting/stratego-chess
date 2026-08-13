@@ -162,7 +162,9 @@ describe('§7 settlement reads config.scoringSquares', () => {
     expect(applyMove(sameBoardCentreOnly, mv('a1', 'b1')).score).toEqual({ white: 4, black: 0.5 })
   })
 
-  it('both sides settle on the wide board, every ply (§7)', () => {
+  it('each side settles on its OWN ply on the wide board too (§7)', () => {
+    // Mover-only settlement is not a property of the board shape: a flank square
+    // pays its holder on the holder's ply, exactly as a 中央格 does.
     const s0 = position(
       [
         { at: 'a4', color: 'white', carrier: 'knight', rank: 'general', id: 'WN' },
@@ -172,11 +174,16 @@ describe('§7 settlement reads config.scoringSquares', () => {
       ],
       { config: WIDE },
     )
-    const p1 = applyMove(s0, mv('a1', 'b1'))
-    expect(p1.score).toEqual({ white: 1, black: 1.5 })
-    const p2 = applyMove(p1, mv('a8', 'b8'))
-    expect(p2.score).toEqual({ white: 2, black: 2.5 })
-    expect(lastEvent(p2).scoreAfter).toEqual({ white: 2, black: 2.5 })
+    const p1 = applyMove(s0, mv('a1', 'b1'))       // white settles, black's h5 idle
+    expect(p1.score).toEqual({ white: 1, black: 0.5 })
+    const p2 = applyMove(p1, mv('a8', 'b8'))       // black settles, white's a4 idle
+    expect(p2.score).toEqual({ white: 1, black: 1.5 })
+    expect(lastEvent(p2).scoreAfter).toEqual({ white: 1, black: 1.5 })
+
+    const p3 = applyMove(p2, mv('b1', 'a1'))
+    expect(p3.score).toEqual({ white: 2, black: 1.5 })
+    const p4 = applyMove(p3, mv('b8', 'a8'))
+    expect(p4.score).toEqual({ white: 2, black: 2.5 })
   })
 
   it('「棋子若在①被吃掉，該手不計入其佔領分」 holds on a flank square too', () => {
@@ -257,7 +264,7 @@ function trace(seed: number, maxPlies: number, config?: Partial<GameConfig>): Ga
   return states
 }
 
-/** The pre-change settlement, transcribed: +1 per own piece on 27/28/35/36. */
+/** The settlement, transcribed against literals: +1 per own piece on 27/28/35/36. */
 function oldCentrePoints(s: GameState, color: Color): number {
   return s.pieces.filter(
     (p) => p.color === color && p.square !== null && OLD_CENTER_SQUARES.includes(p.square),
@@ -266,7 +273,7 @@ function oldCentrePoints(s: GameState, color: Color): number {
 
 describe('a default game is unchanged', () => {
   it.each([1, 2, 3, 4, 5])(
-    'seed %i: every ply pays exactly what the hard-coded centre four paid',
+    'seed %i: every ply pays the mover exactly what the hard-coded centre four hold',
     (seed) => {
       const states = trace(seed, 120)
       expect(states.length).toBeGreaterThan(20)
@@ -274,18 +281,21 @@ describe('a default game is unchanged', () => {
       for (let i = 1; i < states.length; i++) {
         const before = states[i - 1]!
         const after = states[i]!
+        const mover = before.toMove
+        const idle: Color = mover === 'white' ? 'black' : 'white'
         // §7①: 奪旗 ends the game inside ① and settlement never runs.
         const flagEnded = after.status.kind === 'over'
           && (after.status.result.kind === 'flag' || after.status.result.kind === 'flag-both')
-        const paid = flagEnded
-          ? { white: 0, black: 0 }
-          : { white: oldCentrePoints(after, 'white'), black: oldCentrePoints(after, 'black') }
+        // §7: the settlement credits the MOVER alone. The idle side's holdings
+        // are not counted here — they were at its own last ply and will be at
+        // its next — so its column must be byte-identical across this ply, even
+        // when it is standing on all four 中央格.
+        const paid = flagEnded ? 0 : oldCentrePoints(after, mover)
 
-        expect(after.score).toEqual({
-          white: before.score.white + paid.white,
-          black: before.score.black + paid.black,
-        })
+        expect(after.score[mover]).toBe(before.score[mover] + paid)
+        expect(after.score[idle]).toBe(before.score[idle])
         expect(lastEvent(after).scoreAfter).toEqual(after.score)
+        expect(lastEvent(after).color).toBe(mover)
       }
     },
   )
@@ -348,10 +358,12 @@ describe('§7③ 停滯 keys off "no capture and no point", under either preset'
       { at: 'a8' as const, color: 'black' as Color, carrier: 'king' as const, rank: 'battalion' as Rank, id: 'BK' },
     ]
 
-    // wide-8: a4 pays white a point every ply, so 「雙方皆未得分」 is false.
+    // wide-8: a4 pays white a point on every WHITE ply — one per full turn, since
+    // §7 credits the mover alone — so 「雙方皆未得分」 is false in every turn.
     const wide = shuffle(position(pieces, { config: WIDE }), 5)
     expect(wide.noProgressTurns).toBe(0)
-    expect(wide.score.white).toBe(10)
+    expect(wide.score.white).toBe(5)
+    expect(wide.score.black).toBe(0.5)
 
     // default: a4 is an ordinary square. Nobody scores, so the counter runs.
     const centre = shuffle(position(pieces), 5)

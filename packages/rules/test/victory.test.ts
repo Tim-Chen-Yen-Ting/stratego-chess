@@ -25,23 +25,39 @@ describe('§7② 計分 — first to X wins', () => {
   )
 
   it('ends the moment the target is reached exactly', () => {
+    // §7 settles after every ply but credits ONLY the mover, so white's knight
+    // on d4 pays on white's plies and on no others. Three points therefore take
+    // three WHITE plies — ply 1, 3, 5 — not three plies.
     const p1 = applyMove(before, mv('a1', 'b1'))
     expect(p1.score.white).toBe(1)
     expect(p1.status).toEqual({ kind: 'playing' })
 
+    // black's settlement credits black, who holds nothing: white's total is
+    // untouched by the opponent's ply.
     const p2 = applyMove(p1, mv('a8', 'b8'))
-    expect(p2.score.white).toBe(2)
+    expect(p2.score.white).toBe(1)
+    expect(p2.score.black).toBe(before.config.komi)
     expect(p2.status).toEqual({ kind: 'playing' })
 
     const p3 = applyMove(p2, mv('b1', 'a1'))
-    expect(p3.score.white).toBe(3)
-    expect(p3.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
-    expect(legalMoves(p3, 'black')).toEqual([])
+    expect(p3.score.white).toBe(2)
+    expect(p3.status).toEqual({ kind: 'playing' })
+
+    const p4 = applyMove(p3, mv('b8', 'a8'))
+    expect(p4.score.white).toBe(2)
+    expect(p4.status).toEqual({ kind: 'playing' })
+
+    const p5 = applyMove(p4, mv('a1', 'b1'))
+    expect(p5.score.white).toBe(3)
+    expect(p5.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
+    expect(legalMoves(p5, 'black')).toEqual([])
   })
 })
 
 describe('§7② 同一次結算同時越過 X — 分數高者獲勝', () => {
-  /** All four 中央格 held, two apiece, so both sides cross on the same ply. */
+  /** All four 中央格 held, two apiece — the closest a position can get to both
+   *  sides scoring at once. Under mover-only settlement it still cannot: the
+   *  two black knights pay black on BLACK's plies. */
   function contested(score: { white: number; black: number }): GameState {
     return position(
       [
@@ -56,8 +72,34 @@ describe('§7② 同一次結算同時越過 X — 分數高者獲勝', () => {
     )
   }
 
+  /**
+   * The premise of the rule, restated for mover-only settlement: a settlement
+   * moves exactly ONE score. Both sides holding two 結算格 each is the position
+   * that used to make them cross together; now white's two pay on white's ply
+   * and black's two sit idle until black's.
+   *
+   * This is what makes 「雙方於同一次結算同時越過 X」 unreachable in real play —
+   * for the idle side to be at X already, it would have had to arrive there
+   * without a settlement of its own, and its own settlement would have ended the
+   * game the moment it did.
+   */
+  it('moves exactly one score per settlement, even with both sides holding two', () => {
+    const before = contested({ white: 10, black: 10.5 })
+    const w = applyMove(before, mv('a1', 'b1'))
+    expect(w.score).toEqual({ white: 12, black: 10.5 })
+
+    const b = applyMove(w, mv('a8', 'b8'))
+    expect(b.score).toEqual({ white: 12, black: 12.5 })
+  })
+
+  /**
+   * The 分數高者 tie-break itself, exercised on the only score pair that can
+   * still reach it: one side already at or past X when the other crosses. The
+   * branch is unreachable from a real game (see above) but it is the rule as
+   * written, and it must not silently award the game to the side that just moved.
+   */
   it('gives it to black when black ends higher', () => {
-    const s = applyMove(contested({ white: 38, black: 38.5 }), mv('a1', 'b1'))
+    const s = applyMove(contested({ white: 38, black: 40.5 }), mv('a1', 'b1'))
     expect(s.score).toEqual({ white: 40, black: 40.5 })
     expect(s.score.white).toBeGreaterThanOrEqual(40)
     expect(s.score.black).toBeGreaterThanOrEqual(40)
@@ -65,8 +107,9 @@ describe('§7② 同一次結算同時越過 X — 分數高者獲勝', () => {
   })
 
   it('gives it to white when white ends higher', () => {
-    const s = applyMove(contested({ white: 39, black: 38.5 }), mv('a1', 'b1'))
+    const s = applyMove(contested({ white: 39, black: 40.5 }), mv('a1', 'b1'))
     expect(s.score).toEqual({ white: 41, black: 40.5 })
+    expect(s.score.black).toBeGreaterThanOrEqual(40)
     expect(s.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
   })
 
@@ -148,13 +191,15 @@ describe('§7③ 停滯 — the no-progress counter', () => {
       ],
       { config: { noProgressTurns: 2, scoreTarget: 1000 } },
     )
-    s = applyMove(s, mv('b1', 'a1'))       // ply 1: white scores → counter 0
-    s = applyMove(s, mv('b8', 'a8'))       // ply 2: white scores → counter 0
-    expect(s.score).toEqual({ white: 2, black: 0.5 })
+    s = applyMove(s, mv('b1', 'a1'))       // ply 1: white settles, +1 → counter 0
+    s = applyMove(s, mv('b8', 'a8'))       // ply 2: black settles, +0 — but ply 1
+    //                                     //   scored, so the turn is not quiet
+    expect(s.score).toEqual({ white: 1, black: 0.5 })
     expect(s.noProgressTurns).toBe(0)
 
-    s = applyMove(s, mv('d4', 'b5'))       // ply 3: knight leaves the centre
-    expect(s.score).toEqual({ white: 2, black: 0.5 })
+    s = applyMove(s, mv('d4', 'b5'))       // ply 3: knight leaves the centre, so
+    //                                     //   white's own settlement pays 0
+    expect(s.score).toEqual({ white: 1, black: 0.5 })
     s = applyMove(s, mv('a8', 'b8'))       // ply 4 — first quiet turn closes
     expect(s.noProgressTurns).toBe(1)
     s = applyMove(s, mv('a1', 'b1'))       // ply 5

@@ -75,7 +75,7 @@ describe('undeployed ranks are never disclosed during setup', () => {
 
   it('omniscient replay still sees everything, setup included', () => {
     const s = createGame('t5')
-    const view = stateForViewer(s, { kind: 'replay-omniscient' })
+    const view = stateForViewer(s, { kind: 'omniscient' })
     expect(view.pieces.every((p) => p.rank !== null)).toBe(true)
   })
 })

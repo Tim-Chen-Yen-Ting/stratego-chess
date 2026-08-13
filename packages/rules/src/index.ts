@@ -155,12 +155,16 @@ export type { RenderOptions } from './render/text.js'
 // Pure functions over a ViewerState, so the server can reuse them as-is.
 export { exportJson, exportMarkdown, gameStats } from './render/record.js'
 export type {
+  BombsLost,
   Deployment,
   DeploymentPiece,
   GameStats,
+  MutualDestruction,
+  ObjectiveMoves,
+  PeakHold,
+  PieceRun,
   RecordJson,
   RecordMoveJson,
   SideStats,
-  TiesPerContest,
   ZeroRun,
 } from './render/record.js'

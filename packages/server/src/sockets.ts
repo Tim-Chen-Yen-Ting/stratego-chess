@@ -102,7 +102,7 @@ function viewerRoomName(gameId: string, viewer: Viewer): string {
       return `${gameId}#spectator:public`
     case 'replay-player':
       return `${gameId}#replay:${viewer.color}`
-    case 'replay-omniscient':
+    case 'omniscient':
       return `${gameId}#replay:omniscient`
   }
 }

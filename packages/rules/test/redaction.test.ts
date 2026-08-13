@@ -52,7 +52,7 @@ const RENDER_OPTS = { baseUrl: 'http://localhost:3000', token: 'tok' }
 
 const WHITE: Viewer = { kind: 'player', color: 'white' }
 const BLACK: Viewer = { kind: 'player', color: 'black' }
-const OMNISCIENT: Viewer = { kind: 'replay-omniscient' }
+const OMNISCIENT: Viewer = { kind: 'omniscient' }
 
 function lastEvent(s: GameState): GameEvent {
   const e = s.log[s.log.length - 1]
@@ -233,7 +233,7 @@ describe('entitledToRank — gamebook §10', () => {
     expect(stateForViewer(after, BLACK).legalMoves).toBeUndefined()
   })
 
-  it('DOCUMENTS: 終局公開 collapses replay-player into replay-omniscient', () => {
+  it('DOCUMENTS: 終局公開 collapses replay-player into omniscient', () => {
     // §10 offers the replay viewer a switch: 「全知者視角／任一方玩家視角」.
     // `entitledToRank` short-circuits on `status.kind === 'over'` before it
     // ever looks at the viewer, and a replay is by definition of a finished
@@ -506,62 +506,92 @@ describe('有煙無傷 — §5, 附錄 A(a): the fizzle survivor stays hidden', 
 })
 
 // ===========================================================================
-// 6. 同階雙亡 vs 爆裂物引爆 must be distinguishable
+// 6. 同階雙亡 and 爆裂物引爆 must be INDISTINGUISHABLE
+//
+// This block used to assert the exact opposite, and every assertion in it is
+// inverted rather than deleted — the old ones now describe leaks. Announcing
+// the tied 階級 handed both players a free exact rank; announcing a detonation
+// published that a 爆裂物 had been spent, so an opponent could count both of a
+// side's bombs off the log and treat its revealed 司令 as unkillable.
 // ===========================================================================
 
-describe('§4「翻明總表」— mutual-rank and bomb detonation are distinct announcements', () => {
-  const mutual = contactGame('ev-mutual', 'brigade', 'brigade')
-  const detonated = contactGame('ev-bomb', 'bomb', 'brigade')
+describe('§4「翻明總表」— 同歸於盡 is ONE announcement covering three cases', () => {
+  // The SAME game id in both: the two are meant to be two worlds that differ
+  // only in white's e2 兵種, and `id` is part of the payload.
+  const mutual = contactGame('ev-both-die', 'brigade', 'brigade')
+  const detonated = contactGame('ev-both-die', 'bomb', 'brigade')
 
-  it('produces two different outcome kinds', () => {
+  it('produces one outcome kind, carrying nothing', () => {
     const m = lastEvent(mutual).combat!.outcome
     const d = lastEvent(detonated).combat!.outcome
-    expect(m.kind).toBe('mutual-rank')
-    expect(d.kind).toBe('bomb-detonate')
-    expect(m.kind).not.toBe(d.kind)
-    expect(JSON.stringify(m)).not.toBe(JSON.stringify(d))
+    expect(m).toEqual({ kind: 'mutual-destruction' })
+    expect(d).toEqual({ kind: 'mutual-destruction' })
+    expect(JSON.stringify(m)).toBe(JSON.stringify(d))
+    // No discriminator anywhere for a redaction layer to have to strip:
+    // GameEvent is public by construction (techspec §3).
+    expect(Object.keys(m)).toEqual(['kind'])
+    expect(Object.keys(d)).toEqual(['kind'])
   })
 
-  it('mutual-rank announces the shared 階級; detonation announces only the 爆裂物', () => {
-    expect(lastEvent(mutual).combat!.outcome).toEqual({ kind: 'mutual-rank', rank: 'brigade' })
-    expect(lastEvent(detonated).combat!.outcome).toEqual({ kind: 'bomb-detonate', bombColor: 'white' })
-    // The victim's 兵種 appears nowhere in the detonation event.
+  it('names no 階級 — not the tie, not the victim', () => {
+    expect(JSON.stringify(lastEvent(mutual))).not.toContain('brigade')
     expect(JSON.stringify(lastEvent(detonated))).not.toContain('brigade')
+    expect(JSON.stringify(lastEvent(detonated))).not.toContain('bomb')
   })
 
-  it('the bomb\'s victim is not 翻明 and its rank never crosses the boundary', () => {
+  it('翻明s neither the bomb nor its victim, so nothing leaks via the piece list', () => {
     const victim = detonated.pieces.find((p) => p.id === 'b-d7')!
     expect(victim.rank).toBe('brigade')
     expect(victim.square).toBeNull()
     expect(victim.revealed).toBe(false)
     expect(viewOf(stateForViewer(detonated, WHITE), 'b-d7').rank).toBeNull()
 
-    // The bomb itself IS announced (§4 table row 3).
+    // The bomb is NOT announced either. A 翻明 flag republishes the rank through
+    // `entitledToRank` to every viewer, dead piece or not — which would undo the
+    // opaque outcome completely.
     const bomb = detonated.pieces.find((p) => p.id === 'w-e2')!
-    expect(bomb.revealed).toBe(true)
-    expect(viewOf(stateForViewer(detonated, BLACK), 'w-e2').rank).toBe('bomb')
+    expect(bomb.revealed).toBe(false)
+    expect(viewOf(stateForViewer(detonated, BLACK), 'w-e2').rank).toBeNull()
   })
 
-  it('the victim cannot mistake a detonation for an equal-rank trade', () => {
-    // Black lost a 旅長 in both games. If the two announcements collapsed,
-    // black would read the detonation as "the attacker was also 旅長".
+  it('the victim cannot tell a detonation from an equal-rank trade, anywhere', () => {
+    // Black lost a 旅長 in both games. The two worlds must be identical to black
+    // in every artefact it receives — the payload and the render alike.
+    expect(JSON.stringify(stateForViewer(mutual, BLACK)))
+      .toBe(JSON.stringify(stateForViewer(detonated, BLACK)))
+
     const asMutual = renderForLLM(stateForViewer(mutual, BLACK), RENDER_OPTS)
     const asBomb = renderForLLM(stateForViewer(detonated, BLACK), RENDER_OPTS)
-    expect(asMutual).not.toBe(asBomb)
-    expect(section(asMutual, '## Public log')).toContain('同階雙亡')
-    expect(section(asBomb, '## Public log')).toContain('爆裂物')
-    expect(section(asBomb, '## Public log')).not.toContain('同階雙亡')
+    expect(asMutual).toBe(asBomb)
     expect(section(asBomb, '## Public log')).not.toContain(RANK_NAMES_ZH.brigade)
+
+    // …and the two worlds really are different, so this is not passing by
+    // accident: white's e2 piece is a 旅長 in one and a 爆裂物 in the other.
+    expect(JSON.stringify(stateForViewer(mutual, OMNISCIENT)))
+      .not.toBe(JSON.stringify(stateForViewer(detonated, OMNISCIENT)))
   })
 
-  it('爆裂物 vs 爆裂物 announces both, and is its own kind', () => {
+  it('爆裂物 vs 爆裂物 announces nothing either, and 翻明s nobody', () => {
     const both = contactGame('ev-bb', 'bomb', 'bomb')
-    expect(lastEvent(both).combat!.outcome).toEqual({ kind: 'bomb-vs-bomb' })
+    expect(lastEvent(both).combat!.outcome).toEqual({ kind: 'mutual-destruction' })
     for (const id of ['w-e2', 'b-d7']) {
-      expect(both.pieces.find((p) => p.id === id)!.revealed).toBe(true)
-      expect(viewOf(stateForViewer(both, WHITE), id).rank).toBe('bomb')
-      expect(viewOf(stateForViewer(both, BLACK), id).rank).toBe('bomb')
+      expect(both.pieces.find((p) => p.id === id)!.revealed).toBe(false)
+      expect(viewOf(stateForViewer(both, WHITE), id).rank).toBe(id.startsWith('w') ? 'bomb' : null)
+      expect(viewOf(stateForViewer(both, BLACK), id).rank).toBe(id.startsWith('b') ? 'bomb' : null)
     }
+  })
+
+  it('leaves 爆裂物 uncountable from the log — only 有煙無傷 still names one', () => {
+    // The attack the collapse exists to kill: run the opponent's bomb count to
+    // zero off the log, then a revealed 司令 is provably unkillable.
+    for (const g of [detonated, contactGame('ev-bb2', 'bomb', 'bomb')]) {
+      const log = JSON.stringify(stateForViewer(g, BLACK).log)
+      expect(log).not.toContain('bomb')
+      expect(log).not.toContain('fizzle')
+    }
+    // A fizzle is the exception, and stays one: a piece visibly survives it.
+    const fizzled = contactGame('ev-fz', 'engineer', 'bomb')
+    expect(lastEvent(fizzled).combat!.outcome).toEqual({ kind: 'fizzle', survivorColor: 'white' })
   })
 
   it('the loser of an ordinary capture is never 翻明', () => {
@@ -573,16 +603,24 @@ describe('§4「翻明總表」— mutual-rank and bomb detonation are distinct 
     expect(JSON.stringify(stateForViewer(s, WHITE).log)).not.toContain('platoon')
   })
 
-  it('all five §4 outcomes stay pairwise distinct on the wire', () => {
-    const shapes = [
-      contactGame('d1', 'commander', 'platoon'),
-      contactGame('d2', 'platoon', 'commander'),
+  it('the four §4 announcements are exactly four — the three both-die cases share one', () => {
+    const decisive = [
+      contactGame('d1', 'commander', 'platoon'),   // attacker-wins
+      contactGame('d2', 'platoon', 'commander'),   // defender-wins
+      contactGame('d6', 'bomb', 'engineer'),       // fizzle
+    ].map((g) => JSON.stringify(lastEvent(g).combat!.outcome))
+    const bothDie = [
       contactGame('d3', 'brigade', 'brigade'),
       contactGame('d4', 'bomb', 'brigade'),
+      contactGame('d4b', 'brigade', 'bomb'),
       contactGame('d5', 'bomb', 'bomb'),
-      contactGame('d6', 'bomb', 'engineer'),
     ].map((g) => JSON.stringify(lastEvent(g).combat!.outcome))
-    expect(new Set(shapes).size).toBe(shapes.length)
+
+    // the decisive three stay pairwise distinct…
+    expect(new Set(decisive).size).toBe(decisive.length)
+    // …and the four both-die 兵種 pairings collapse to exactly one announcement
+    expect(new Set(bothDie).size).toBe(1)
+    expect(new Set([...decisive, ...bothDie]).size).toBe(4)
   })
 })
 
@@ -734,13 +772,11 @@ describe('the public log announces only what §4 says it may', () => {
         if (!o) continue
         if (o.kind === 'attacker-wins' || o.kind === 'defender-wins') {
           expect(revealed.has(o.winnerRank)).toBe(true)
-        } else if (o.kind === 'mutual-rank') {
-          expect(revealed.has(o.rank)).toBe(true)
         } else {
-          // 爆裂物 outcomes name a colour, never a 階級.
-          expect(JSON.stringify(o)).not.toMatch(
-            new RegExp(`"(${ALL_RANKS.filter((r) => r !== 'bomb').join('|')})"`),
-          )
+          // 同歸於盡 names nothing at all; 有煙無傷 names a colour and no 階級.
+          // Every rank identifier is checked here, 'bomb' included — a spent
+          // 爆裂物 is no longer announced, which is what keeps them uncountable.
+          expect(JSON.stringify(o)).not.toMatch(new RegExp(`"(${ALL_RANKS.join('|')})"`))
         }
       }
     }

@@ -45,7 +45,10 @@ describe('§7① 奪旗 — instant loss', () => {
 
   it('is a DRAW when both 軍旗 leave together — the only draw in the game', () => {
     const s = applyMove(duel('flag', 'flag'), mv('b2', 'b7'))
-    expect(lastEvent(s).combat?.outcome).toEqual({ kind: 'mutual-rank', rank: 'flag' })
+    // The announcement says only that both pieces went. That the two were 軍旗
+    // is公開 by the result itself (§7① ends the game), not by the outcome — and
+    // the outcome must stay opaque, or every OTHER 同歸於盡 becomes readable too.
+    expect(lastEvent(s).combat?.outcome).toEqual({ kind: 'mutual-destruction' })
     expect(s.status).toEqual({ kind: 'over', result: { kind: 'flag-both' } })
     expect(pieceById(s, W).square).toBeNull()
     expect(pieceById(s, B).square).toBeNull()
