@@ -7,6 +7,7 @@ Document set:
 |---|---|
 | `gamebook_v03.md` | **The rules.** What is legal. Normative. |
 | `notebook_v01.md` | Derivations, emergent interactions, playtest data. Never normative. |
+| `strategy_v01.md` | Player-facing攻略 — how to play well. No data, no hedging. Never normative. |
 | `techspec_v01.md` | This file — structure, types, APIs. |
 | `gamebook.md`, `gamebook_v02.md`, `plan_v01.md` | Superseded. Kept for history. |
 

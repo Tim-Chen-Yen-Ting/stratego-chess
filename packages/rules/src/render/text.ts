@@ -466,6 +466,50 @@ function setupOwnLines(
 // renderForLLM
 // ---------------------------------------------------------------------------
 
+/**
+ * Who is standing on each scoring square, right now.
+ *
+ * This is board state, not 解算 — occupancy is the carrier layer, which is
+ * public to everyone (gamebook §1), and it is exactly what the web client
+ * already draws by highlighting those squares. Naming the squares without
+ * saying who holds them left the model to re-derive occupancy from the ASCII
+ * board every single ply, and across two LLM-vs-LLM games it stopped doing so:
+ * a5 sat empty for 26 plies with a one-move pawn push available, unplayed.
+ *
+ * The EMPTY count is called out last because that is the actionable half —
+ * an unoccupied scoring square is free income for whoever steps on it.
+ */
+function scoringOccupancy(
+  vs: ViewerState,
+  scoring: readonly Square[],
+  self: Color | null,
+): string[] {
+  const bySquare = new Map<Square, ViewerPiece>()
+  for (const p of vs.pieces) if (p.square !== null) bySquare.set(p.square, p)
+
+  const cells: string[] = []
+  let mine = 0
+  let empty = 0
+  for (const sq of scoring) {
+    const piece = bySquare.get(sq)
+    if (piece === undefined) {
+      empty += 1
+      cells.push(`${squareName(sq)} EMPTY`)
+      continue
+    }
+    if (self !== null && piece.color === self) mine += 1
+    cells.push(`${squareName(sq)} ${colorLabel(piece.color)} ${piece.carrier}`)
+  }
+
+  const out = chunkJoin(cells, 4)
+  const tally =
+    self === null
+      ? `${empty} of ${scoring.length} EMPTY.`
+      : `You hold ${mine} of ${scoring.length}. ${empty} EMPTY — free to take.`
+  out.push(tally)
+  return out
+}
+
 export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   const self = viewerColor(vs.viewer)
   const base = opts.baseUrl.replace(/\/+$/, '')
@@ -599,12 +643,16 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   // The board shape is tunable (附錄 B), and a model told the wrong squares
   // would play a different game than the one it is sitting in.
   const scoring = vs.config.scoringSquares
-  lines.push(
-    scoring.length === 0
-      ? 'No scoring squares are configured for this game — no piece scores by standing anywhere.'
-      : `Scoring squares ${scoring.map(squareName).join(' ')} — each own piece standing on one scores 1 point EVERY ply, for both players.`,
-  )
-  lines.push('')
+  if (scoring.length === 0) {
+    lines.push('No scoring squares are configured for this game — no piece scores by standing anywhere.')
+    lines.push('')
+  } else {
+    lines.push(
+      `Scoring squares — each own piece standing on one scores 1 point EVERY ply, for both players.`,
+    )
+    lines.push(...scoringOccupancy(vs, scoring, self))
+    lines.push('')
+  }
 
   const replay = replayLog(vs.log)
 

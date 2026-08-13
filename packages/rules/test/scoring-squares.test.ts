@@ -419,25 +419,42 @@ describe('§7③ 停滯 keys off "no capture and no point", under either preset'
 
 const RENDER_OPTS = { baseUrl: 'https://example.test', token: 'tok' }
 
-function scoringLine(s: GameState): string {
+function scoringBlock(s: GameState): string {
   const text = renderForLLM(stateForViewer(s, { kind: 'player', color: 'white' }), RENDER_OPTS)
-  const line = text.split('\n').find((l) => l.startsWith('Scoring squares'))
-  expect(line).toBeDefined()
-  return line!
+  const lines = text.split(String.fromCharCode(10))
+  const start = lines.findIndex((l) => l.startsWith('Scoring squares'))
+  expect(start).toBeGreaterThanOrEqual(0)
+  const end = lines.findIndex((l, i) => i > start && l.trim() === '')
+  return lines.slice(start, end).join('|')
 }
 
 describe('renderForLLM names the actual scoring squares', () => {
   it('a default game is told the four 中央格', () => {
-    expect(scoringLine(parked('d4'))).toContain('Scoring squares d4 e4 d5 e5 —')
+    for (const n of ['d4', 'e4', 'd5', 'e5']) expect(scoringBlock(parked('d4'))).toContain(n)
+    expect(scoringBlock(parked('d4'))).toContain('of 4')
   })
 
   it('a wide-8 game is told all eight, flanks included', () => {
-    expect(scoringLine(parked('a4', WIDE))).toContain('Scoring squares d4 e4 d5 e5 a4 h4 a5 h5 —')
+    for (const n of ['d4', 'e4', 'd5', 'e5', 'a4', 'h4', 'a5', 'h5'])
+      expect(scoringBlock(parked('a4', WIDE))).toContain(n)
+    expect(scoringBlock(parked('a4', WIDE))).toContain('of 8')
+  })
+
+  it('marks an unoccupied scoring square EMPTY and counts them', () => {
+    // The actionable half. In a real LLM-vs-LLM game a5 sat empty for 26 plies
+    // with a one-move pawn push available and never got taken — the view named
+    // the squares but never said which were free.
+    const b = scoringBlock(parked('d4', WIDE))
+    expect(b).toContain('d4 White')
+    expect(b).toContain('e4 EMPTY')
+    expect(b).toContain('You hold 1 of 8')
+    expect(b).toContain('7 EMPTY')
   })
 
   it('a custom shape is named too — the render never falls back to the default', () => {
     const odd = parked('b2', { scoringSquares: [sq('b2'), sq('g7')] })
-    expect(scoringLine(odd)).toContain('Scoring squares b2 g7 —')
-    expect(scoringLine(odd)).not.toContain('d4')
+    expect(scoringBlock(odd)).toContain('b2')
+    expect(scoringBlock(odd)).toContain('g7')
+    expect(scoringBlock(odd)).not.toContain('d4')
   })
 })
