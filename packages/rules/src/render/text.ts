@@ -21,7 +21,7 @@ import {
 } from '../board.js'
 import {
   CARRIER_LETTER,
-  DISTRIBUTION,
+  DEFAULT_CONFIG,
   RANK_NAMES_ZH,
   RANK_ORDER,
 } from '../constants.js'
@@ -29,11 +29,11 @@ import { moveToNotation } from '../moves.js'
 import { STARTING_LAYOUT } from '../setup.js'
 import {
   SETUP_CODE_ALPHABET,
-  SETUP_CODE_COMBINATIONS,
-  SETUP_CODE_EXAMPLE,
-  SETUP_CODE_LEGEND,
-  SETUP_CODE_LENGTH,
   encodeSetupCode,
+  setupCodeCombinations,
+  setupCodeExample,
+  setupCodeLegend,
+  setupCodeLength,
   setupCodeSlots,
 } from '../setupcode.js'
 import { viewerColor } from '../redact.js'
@@ -42,6 +42,7 @@ import type {
   Color,
   GameEvent,
   Rank,
+  RankDistribution,
   Result,
   Square,
   ViewerPiece,
@@ -329,7 +330,7 @@ function slotLines(color: Color): string[] {
 }
 
 /**
- * What SETUP_CODE_EXAMPLE means, position by position.
+ * What the worked example means, position by position.
  *
  * Deliberately labelled by SLOT NUMBER, never by square name. An example line
  * reading `a1='6' 營長` sits on the page beside a board where a1 is the reader's
@@ -338,11 +339,12 @@ function slotLines(color: Color): string[] {
  * mistaken for a deployment; the numbered piece-order list above already tells
  * the reader which square each slot is.
  */
-function exampleLines(color: Color): string[] {
-  const chars = Array.from(SETUP_CODE_EXAMPLE)
+function exampleLines(color: Color, distribution: RankDistribution): string[] {
+  const legend = setupCodeLegend(distribution)
+  const chars = Array.from(setupCodeExample(distribution))
   const items = setupCodeSlots(color).map((_slot, i) => {
     const ch = chars[i] ?? '?'
-    const entry = SETUP_CODE_LEGEND.find((e) => e.letter === ch)
+    const entry = legend.find((e) => e.letter === ch)
     return `#${String(i + 1).padStart(2, '0')}='${ch}' ${entry ? entry.zh : '?'}`
   })
   return chunkJoin(items, 4)
@@ -357,13 +359,30 @@ function tryEncodeSetupCode(vs: ViewerState, color: Color): string | null {
   }
 }
 
-function deployLines(self: Color, base: string, token: string): string[] {
+/**
+ * The deployment instructions, for the 數量配置 of THIS game.
+ *
+ * Every number below — the code length, the ×counts in the table, the worked
+ * example, how many deployments are legal — is read off `distribution`. A model
+ * is told nothing else about the format, so a table copied from the default
+ * preset into a game that was retuned (附錄 B) would have it write codes the
+ * server then rejects, with no way to find out why.
+ */
+function deployLines(
+  self: Color,
+  base: string,
+  token: string,
+  distribution: RankDistribution,
+): string[] {
   const url = (tail: string): string => `${base}/llm/${encodeURIComponent(token)}/setup/${tail}`
+  const legend = setupCodeLegend(distribution)
+  const length = setupCodeLength(distribution)
+  const example = setupCodeExample(distribution)
   const out: string[] = []
 
   out.push('## Deploy — how to put your army on the board')
   out.push(
-    `A deployment is a SETUP CODE: ${SETUP_CODE_LENGTH} characters, one per piece, in the order`,
+    `A deployment is a SETUP CODE: ${length} characters, one per piece, in the order`,
   )
   out.push(`listed above. Case does not matter. The alphabet is ${SETUP_CODE_ALPHABET} —`)
   out.push('one character per 兵種:')
@@ -371,29 +390,32 @@ function deployLines(self: Color, base: string, token: string): string[] {
   // 兵種 names are CJK, so pad by display columns (2 each) rather than by
   // String#length, or the table steps sideways on 爆裂物.
   const cols = (zh: string): number => Array.from(zh).length * 2
-  const zhWidth = Math.max(...SETUP_CODE_LEGEND.map((e) => cols(e.zh)))
-  const enWidth = Math.max(...SETUP_CODE_LEGEND.map((e) => e.rank.length))
-  for (const e of SETUP_CODE_LEGEND) {
+  const zhWidth = Math.max(...legend.map((e) => cols(e.zh)))
+  const enWidth = Math.max(...legend.map((e) => e.rank.length))
+  for (const e of legend) {
     const zh = e.zh + ' '.repeat(zhWidth - cols(e.zh))
     out.push(`  ${e.letter}  ${zh}  ${e.rank.padEnd(enWidth)}  ×${e.count}`)
   }
   out.push('')
   out.push(
-    `Every code must use each character exactly that many times. ${groupDigits(SETUP_CODE_COMBINATIONS)} deployments`,
+    `Every code must use each character exactly that many times. ${groupDigits(setupCodeCombinations(distribution))} deployments`,
   )
   out.push(
-    `are valid out of ${SETUP_CODE_ALPHABET.length}^${SETUP_CODE_LENGTH} possible strings, so most strings are NOT a deployment;`,
+    `are valid out of ${SETUP_CODE_ALPHABET.length}^${length} possible strings, so most strings are NOT a deployment;`,
   )
   out.push('a rejected code comes back with the reason (bad length / bad character / wrong counts).')
   out.push('')
-  out.push(`Worked example — ${SETUP_CODE_EXAMPLE} reads as:`)
-  out.push(...exampleLines(self).map((line) => `  ${line}`))
-  out.push(`  ${url(SETUP_CODE_EXAMPLE)}`)
-  out.push('That example is the 階級 ladder in order and every reader of every game sees the')
-  out.push('same string. It is here to show the shape, not to be played.')
+  out.push('Those counts are this game\'s setting (附錄 B), not a universal table — read them')
+  out.push('off the list above rather than from anything you remember about the game.')
+  out.push('')
+  out.push(`Worked example — ${example} reads as:`)
+  out.push(...exampleLines(self, distribution).map((line) => `  ${line}`))
+  out.push(`  ${url(example)}`)
+  out.push('That example is the 階級 ladder in order, so every reader of a game with these')
+  out.push('counts sees the same string. It is here to show the shape, not to be played.')
   out.push('')
   out.push('Deploy a code of your own — replace the last part of the URL:')
-  out.push(`  ${url(SETUP_CODE_EXAMPLE.replace(/./g, '?'))}`)
+  out.push(`  ${url(example.replace(/./g, '?'))}`)
   out.push('Or have the server roll a uniformly random legal deployment for you:')
   out.push(`  ${url('random')}`)
   out.push('')
@@ -426,7 +448,7 @@ function setupOwnLines(
     out.push('piece each position of a setup code refers to:')
     out.push(...slotLines(self))
     out.push('')
-    if (isPlayer) out.push(...deployLines(self, base, token))
+    if (isPlayer) out.push(...deployLines(self, base, token, vs.config.distribution))
     else out.push('(Watching only — deploying is up to that player.)')
     return out
   }
@@ -629,11 +651,24 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
 // Rules primer — GET /llm/:token/rules (techspec §6)
 // ---------------------------------------------------------------------------
 
-export function renderRulesForLLM(opts: RenderOptions): string {
+/**
+ * The rules primer.
+ *
+ * `distribution` is the 數量配置 of the game the reader is in. It is optional
+ * only because a caller may genuinely have no game in hand (a bare
+ * documentation route); anyone rendering this FOR a game must pass
+ * `state.config.distribution`, or the ×counts in the 階級 table will describe a
+ * different army than the one the reader is deploying (附錄 B).
+ */
+export function renderRulesForLLM(
+  opts: RenderOptions,
+  distribution: RankDistribution = DEFAULT_CONFIG.distribution,
+): string {
   const base = opts.baseUrl.replace(/\/+$/, '')
+  const total = setupCodeLength(distribution)
   const table = (Object.keys(RANK_ORDER) as Exclude<Rank, 'bomb'>[])
     .sort((a, b) => RANK_ORDER[a] - RANK_ORDER[b])
-    .map((r) => `  ${String(RANK_ORDER[r]).padStart(2, ' ')}  ${RANK_NAMES_ZH[r]}  ${r}  ×${DISTRIBUTION[r]}`)
+    .map((r) => `  ${String(RANK_ORDER[r]).padStart(2, ' ')}  ${RANK_NAMES_ZH[r]}  ${r}  ×${distribution[r]}`)
     .join('\n')
 
   return `# 行軍西洋棋 — rules primer
@@ -648,8 +683,9 @@ The layers are independent: 軍旗 can ride a queen, 司令 can ride a pawn.
 
 ## Ranks — lower number beats higher number
 ${table}
-   —  爆裂物  bomb  ×${DISTRIBUTION.bomb}
-Each side has exactly these 16.
+   —  爆裂物  bomb  ×${distribution.bomb}
+Each side has exactly these ${total}. The ×counts are a setting of the game you are
+in (附錄 B), so read them off the deployment screen rather than assuming.
 
 ## Movement overrides vs chess
 - The king is an ORDINARY piece. No check, no checkmate. Capturing a king is

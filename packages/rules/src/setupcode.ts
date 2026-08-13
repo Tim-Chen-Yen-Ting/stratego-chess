@@ -16,17 +16,24 @@
  * disagree; there is exactly one of each function and both live here.
  *
  * It decides nothing about the game. Whether a decoded assignment is *legal* is
- * answered by the existing `validateAssignment` (§9 一對一 bijection onto
- * DISTRIBUTION) — this file never re-implements that check, it only reports what
- * that function said. Whether a deployment may be *submitted* (still in setup,
- * not already submitted) is the caller's question, not this file's.
+ * answered by the existing `validateAssignment` (§9 一對一 bijection onto the
+ * game's 數量配置) — this file never re-implements that check, it only reports
+ * what that function said. Whether a deployment may be *submitted* (still in
+ * setup, not already submitted) is the caller's question, not this file's.
+ *
+ * The ALPHABET is fixed: eleven characters, one per 兵種, the same in every
+ * game. The COUNTS are not — 兵種數量配置 is a 附錄 B tunable, so how many of
+ * each character a code must carry comes from `config.distribution`. Everything
+ * here that quotes a count therefore takes a distribution, and the exported
+ * constants are the DEFAULT preset's values, kept for display code that has no
+ * game in hand.
  */
 
 import { fileOf, rankOf } from './board.js'
-import { ALL_RANKS, DISTRIBUTION, RANK_NAMES_ZH } from './constants.js'
+import { ALL_RANKS, DEFAULT_CONFIG, RANK_NAMES_ZH } from './constants.js'
 import { STARTING_LAYOUT, validateAssignment } from './setup.js'
 import type { StartingSlot } from './setup.js'
-import type { Color, GameState, PieceId, Rank, Square } from './types.js'
+import type { Color, GameState, PieceId, Rank, RankDistribution, Square } from './types.js'
 
 // ---------------------------------------------------------------------------
 // alphabet
@@ -60,56 +67,99 @@ if (RANK_BY_LETTER.size !== ALL_RANKS.length) {
   throw new Error('setup code alphabet: two 兵種 share a letter')
 }
 
-/** The code alphabet, in 階級 order — for display. */
+/**
+ * The code alphabet, in 階級 order — for display.
+ *
+ * `123456789FX`, and it does not move with the 數量配置: a 兵種 that a given
+ * game happens to deploy zero of still has its letter, because the alphabet is
+ * a property of the RANK LADDER (§2), not of any one game's counts. Only how
+ * many times each character must appear is a setting.
+ */
 export const SETUP_CODE_ALPHABET: string = ALL_RANKS.map((rank) => LETTER_BY_RANK[rank]).join('')
-
-/** Characters in a setup code = pieces per side. Derived from DISTRIBUTION (§2). */
-export const SETUP_CODE_LENGTH: number = ALL_RANKS.reduce((n, rank) => n + DISTRIBUTION[rank], 0)
 
 export interface SetupCodeLegendEntry {
   readonly letter: string
   readonly rank: Rank
   /** 兵種 name, gamebook §2 */
   readonly zh: string
-  /** how many of this 兵種 every code must contain */
+  /** how many of this 兵種 every code must contain, in the game asked about */
   readonly count: number
 }
 
+/** Characters in a setup code = pieces per side, i.e. the distribution's total. */
+export function setupCodeLength(distribution: RankDistribution): number {
+  return ALL_RANKS.reduce((n, rank) => n + distribution[rank], 0)
+}
+
 /** The alphabet with names and required counts, in 階級 order — for display. */
-export const SETUP_CODE_LEGEND: readonly SetupCodeLegendEntry[] = ALL_RANKS.map((rank) => ({
-  letter: LETTER_BY_RANK[rank],
-  rank,
-  zh: RANK_NAMES_ZH[rank],
-  count: DISTRIBUTION[rank],
-}))
+export function setupCodeLegend(distribution: RankDistribution): readonly SetupCodeLegendEntry[] {
+  return ALL_RANKS.map((rank) => ({
+    letter: LETTER_BY_RANK[rank],
+    rank,
+    zh: RANK_NAMES_ZH[rank],
+    count: distribution[rank],
+  }))
+}
 
 /**
- * A valid code, built by walking the 階級 ladder in order. Illustrative only:
- * it is the same string for every reader of every game, so playing it verbatim
- * hands the opponent the whole army. Derived from DISTRIBUTION, so it is valid
- * by construction rather than by a comment promising it is.
+ * A valid code for `distribution`, built by walking the 階級 ladder in order.
+ * Illustrative only: it is the same string for every reader of every game with
+ * this table, so playing it verbatim hands the opponent the whole army. Derived
+ * from the table, so it is valid by construction rather than by a comment
+ * promising it is.
  */
-export const SETUP_CODE_EXAMPLE: string = SETUP_CODE_LEGEND.map((e) =>
-  e.letter.repeat(e.count),
-).join('')
+export function setupCodeExample(distribution: RankDistribution): string {
+  return setupCodeLegend(distribution).map((e) => e.letter.repeat(e.count)).join('')
+}
 
-/**
- * How many distinct deployments exist: 16! / ∏(count!) — 653,837,184,000 for the
- * §2 table. The code space is 11^16, vastly larger, which is why most strings
- * are rejected.
- */
-export const SETUP_CODE_COMBINATIONS: number = countDeployments()
-
-function countDeployments(): number {
-  const factorial = (n: number): number => {
-    let out = 1
-    for (let i = 2; i <= n; i++) out *= i
-    return out
-  }
-  let out = factorial(SETUP_CODE_LENGTH)
-  for (const rank of ALL_RANKS) out /= factorial(DISTRIBUTION[rank])
+function factorial(n: number): number {
+  let out = 1
+  for (let i = 2; i <= n; i++) out *= i
   return out
 }
+
+/**
+ * How many distinct deployments exist: 16! / ∏(nᵣ!).
+ *
+ * It MOVES with the 數量配置 and is not a constant of the game: 653,837,184,000
+ * for the §2 table (five doubled 兵種), 217,945,728,000 with 工兵4, and
+ * 1,307,674,368,000 for the top-heavy variant. The code space is 11^16 either
+ * way, vastly larger, which is why most strings are rejected.
+ *
+ * 16! is 2.09e13 and every division below is exact, so this stays an exact
+ * integer in a double for any table summing to 16.
+ */
+export function setupCodeCombinations(distribution: RankDistribution): number {
+  let out = factorial(setupCodeLength(distribution))
+  for (const rank of ALL_RANKS) out /= factorial(distribution[rank])
+  return out
+}
+
+/**
+ * The DEFAULT preset's code length — 16, and 16 for every legal table, since
+ * §2 合計 is an invariant `checkDistribution` enforces.
+ *
+ * @deprecated Prefer `setupCodeLength(config.distribution)` where a game is in
+ * hand; this is here for display code that has none.
+ */
+export const SETUP_CODE_LENGTH: number = setupCodeLength(DEFAULT_CONFIG.distribution)
+
+/**
+ * The DEFAULT preset's legend.
+ *
+ * @deprecated The counts are a setting (附錄 B) — anything telling a PLAYER what
+ * to type must use `setupCodeLegend(config.distribution)`, or it will state the
+ * wrong counts and every code the player writes from them will be rejected.
+ */
+export const SETUP_CODE_LEGEND: readonly SetupCodeLegendEntry[] =
+  setupCodeLegend(DEFAULT_CONFIG.distribution)
+
+/** @deprecated The DEFAULT preset's worked example — see `setupCodeExample`. */
+export const SETUP_CODE_EXAMPLE: string = setupCodeExample(DEFAULT_CONFIG.distribution)
+
+/** @deprecated The DEFAULT preset's figure — see `setupCodeCombinations`. */
+export const SETUP_CODE_COMBINATIONS: number =
+  setupCodeCombinations(DEFAULT_CONFIG.distribution)
 
 // ---------------------------------------------------------------------------
 // piece order
@@ -209,9 +259,13 @@ function showCode(code: string): string {
   return printable.length <= 32 ? printable : `${printable.slice(0, 32)}...`
 }
 
-/** "1×司令 1×軍長 …" — the counts every code must hit exactly. */
-export function setupCodeCountsText(): string {
-  return SETUP_CODE_LEGEND.map((e) => `${e.count}×${e.zh}(${e.letter})`).join(' ')
+/**
+ * "1×司令 1×軍長 …" — the counts every code must hit exactly, in the game asked
+ * about. Takes the table rather than reading a constant: this string is what a
+ * rejected player is told to type next, so it has to describe THEIR game.
+ */
+export function setupCodeCountsText(distribution: RankDistribution): string {
+  return setupCodeLegend(distribution).map((e) => `${e.count}×${e.zh}(${e.letter})`).join(' ')
 }
 
 /**
@@ -220,24 +274,32 @@ export function setupCodeCountsText(): string {
  * Case-insensitive; surrounding or embedded whitespace is ignored. Rejection is
  * a returned `{ error }`, never a throw — the message names what was wrong so a
  * model can fix its own string without a second round trip.
+ *
+ * Every count quoted here comes from `state.config.distribution`, so the same
+ * string can be a legal deployment in one game and a named rejection in another
+ * ("rank engineer: expected 4, got 2") without either game being wrong.
  */
 export function decodeSetupCode(
   code: string,
   color: Color,
   state: GameState,
 ): SetupCodeResult {
+  const distribution = state.config.distribution
+  const length = setupCodeLength(distribution)
+  const counts = setupCodeCountsText(distribution)
+
   if (typeof code !== 'string') {
-    return { error: `bad setup code: expected ${SETUP_CODE_LENGTH} characters, got nothing.` }
+    return { error: `bad setup code: expected ${length} characters, got nothing.` }
   }
 
   // Split by code point, so one astral character counts as one character rather
   // than skewing the length arithmetic into a misleading complaint.
   const chars = Array.from(code.replace(/\s+/g, '').toUpperCase())
 
-  if (chars.length !== SETUP_CODE_LENGTH) {
+  if (chars.length !== length) {
     return {
       error:
-        `bad length: a setup code is exactly ${SETUP_CODE_LENGTH} characters, ` +
+        `bad length: a setup code is exactly ${length} characters, ` +
         `one per piece — got ${chars.length}` +
         (chars.length === 0 ? '.' : ` ("${showCode(chars.join(''))}").`),
     }
@@ -251,7 +313,7 @@ export function decodeSetupCode(
       return {
         error:
           `bad character "${showChar(ch)}" at position ${i + 1}: ` +
-          `the alphabet is ${SETUP_CODE_ALPHABET} (${setupCodeCountsText()}).`,
+          `the alphabet is ${SETUP_CODE_ALPHABET} (${counts}).`,
       }
     }
     ranks.push(rank)
@@ -262,12 +324,14 @@ export function decodeSetupCode(
     assignment[slot.id] = ranks[i]!
   })
 
-  // The one validator. §9's bijection-onto-DISTRIBUTION question is answered
-  // where it is already answered; this only relays the verdict.
+  // The one validator. §9's bijection-onto-數量配置 question is answered where it
+  // is already answered — and `validateAssignment` reads the same
+  // `state.config.distribution`, so the rank it names in `problem` is the rank
+  // THIS game is short of or over on.
   const problem = validateAssignment(assignment, color, state)
   if (problem !== null) {
     return {
-      error: `wrong counts — ${problem}. A code must use exactly ${setupCodeCountsText()}.`,
+      error: `wrong counts — ${problem}. A code must use exactly ${counts}.`,
     }
   }
 

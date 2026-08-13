@@ -173,7 +173,12 @@ export function registerLlmRoutes(app: FastifyInstance, baseUrl: string): void {
       return
     }
     const state = serialiseFor(session.room, session.viewer)
-    const primer = renderRulesForLLM({ baseUrl, token: session.token })
+    // the primer prints §2 counts, which are per-game (附錄 B) — hand it this
+    // game's table or it teaches the model the wrong army
+    const primer = renderRulesForLLM(
+      { baseUrl, token: session.token },
+      state.config.distribution,
+    )
     plain(reply, `${primer}\n${settingsBlock(state)}`)
   })
 

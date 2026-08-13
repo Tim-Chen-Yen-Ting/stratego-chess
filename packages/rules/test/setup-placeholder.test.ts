@@ -64,7 +64,10 @@ describe('undeployed ranks are never disclosed during setup', () => {
 
   it('leaks nothing through a serialised payload during setup', () => {
     const s = createGame('t4')
-    const raw = JSON.stringify(stateForViewer(s, { kind: 'spectator', bound: 'white' }))
+    // §2 count table lifted out — its keys are rank identifiers but it names
+    // nobody and is identical for every viewer (see redaction.property.ts)
+    const vs = stateForViewer(s, { kind: 'spectator', bound: 'white' })
+    const raw = JSON.stringify({ ...vs, config: { ...vs.config, distribution: {} } })
     for (const rank of ['commander', 'flag', 'bomb', 'engineer', 'platoon']) {
       expect(raw).not.toContain(rank)
     }

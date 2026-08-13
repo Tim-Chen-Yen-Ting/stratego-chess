@@ -1,5 +1,16 @@
-import { CENTER_SQUARES, DEFAULT_CONFIG, DISTRIBUTION, SCORING_WIDE_8 } from '@xiyang/rules'
-import type { Carrier, Color, GameConfig, Rank, Square } from '@xiyang/rules'
+import {
+  CENTER_SQUARES,
+  DEFAULT_CONFIG,
+  DISTRIBUTION,
+  DISTRIBUTION_SCOUTS,
+  DISTRIBUTION_STANDARD,
+  DISTRIBUTION_TOP_HEAVY,
+  PIECES_PER_SIDE,
+  SCORING_WIDE_8,
+  checkDistribution,
+  distributionTotal,
+} from '@xiyang/rules'
+import type { Carrier, Color, GameConfig, Rank, RankDistribution, Square } from '@xiyang/rules'
 
 /**
  * Display data for the client — labels and glyphs, nothing else.
@@ -13,7 +24,7 @@ import type { Carrier, Color, GameConfig, Rank, Square } from '@xiyang/rules'
  * rules" (techspec §7) — no legality, combat or scoring decision happens here.
  */
 
-export { CENTER_SQUARES, DISTRIBUTION }
+export { CENTER_SQUARES, DISTRIBUTION, PIECES_PER_SIDE, checkDistribution, distributionTotal }
 
 // ---------------------------------------------------------------------------
 // 計分區 (gamebook §7, 附錄 B)
@@ -125,6 +136,135 @@ export const RANK_NUMBER_LABEL: Record<Rank, string> = {
   engineer: '9',
   flag: '10',
   bomb: '＝',
+}
+
+// ---------------------------------------------------------------------------
+// 兵種數量配置 (gamebook §2, 附錄 B)
+// ---------------------------------------------------------------------------
+
+/**
+ * 附錄 B lists the piece counts among the tunables, exactly like the scoring
+ * squares above, so the counts are a property of the GAME and not of the build.
+ * Anything that PRINTS a count — the rank card, the setup pool — must read
+ * `config.distribution`, because a card that says 工兵×2 in a game dealt 工兵×4
+ * is not a card, it is a wrong answer with the rulebook's authority behind it.
+ *
+ * Widened for the same reason as `ScoringConfig`: a payload from a server that
+ * predates the field carries no `distribution`, and that server is dealing the
+ * §2 table — which is what the fallback returns. Reading a config field is not
+ * deciding one; `validateAssignment` on the server remains the authority.
+ */
+export type DistributionConfig = GameConfig & { readonly distribution?: RankDistribution }
+
+/**
+ * Returns the SAME object reference on every call for a given config (either the
+ * config's own table or the module constant), so this is safe inside a zustand
+ * selector — a freshly built object each render would break snapshot stability.
+ */
+export function distributionOf(config: DistributionConfig): RankDistribution {
+  return config.distribution ?? DISTRIBUTION
+}
+
+/**
+ * One rank's count, for display.
+ *
+ * NaN rather than 0 for anything that is not a finite number: a table off the
+ * wire can be missing a key, and a chip reading ×0 is a confident wrong answer
+ * while ×NaN is visibly broken. The 合計 row reaches the same verdict by the
+ * engine's own arithmetic (`distributionTotal` sums over ALL_RANKS), so the two
+ * never disagree.
+ */
+export function countOf(distribution: RankDistribution, rank: Rank): number {
+  const raw: unknown = distribution[rank]
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : Number.NaN
+}
+
+export type DistributionId = 'standard' | 'scouts' | 'top-heavy'
+
+export interface DistributionPreset {
+  id: DistributionId
+  label: string
+  /** WHAT it is — the one-phrase difference from the §2 table. */
+  what: string
+  /** WHAT IT IS FOR — the reason a playtester would pick it. */
+  why: string
+  /** The honest small print: what picking it costs, and that it is untested. */
+  note: string
+  counts: RankDistribution
+}
+
+/** Display order of the picker. */
+export const DISTRIBUTION_IDS: readonly DistributionId[] = ['standard', 'scouts', 'top-heavy']
+
+/**
+ * The numbers are the rules package's; only the prose is local. Both variants
+ * are 【猜測】 in the notebook, not findings, and the copy says so — a player who
+ * picks one is running an experiment and should know it.
+ *
+ * 合計 16 is not assumed here. The rules package proves each preset sums to 16
+ * before this module finishes loading (a bad table throws on import), and the
+ * Create screen runs `checkDistribution` again on the exact object it is about
+ * to put on the wire — the table that crosses the wire is the one that has to be
+ * playable, and a preset can be retuned in a package this one only imports.
+ */
+export const DISTRIBUTIONS: Record<DistributionId, DistributionPreset> = {
+  standard: {
+    id: 'standard',
+    label: '標準',
+    what: '規則書 §2 的原表',
+    why: '對照組。四局實測都在這張表上打完，變體的每個數字只有跟它比才有意義。',
+    note: '沒有要測什麼就用這個。',
+    counts: DISTRIBUTION_STANDARD,
+  },
+  scouts: {
+    id: 'scouts',
+    label: '偵察兵',
+    what: '工兵4，挪用一團長一營長',
+    why: '為了讓「有煙無傷」真的發生——四局零次。工兵只有在多於對手的爆裂物時才值得花掉：工兵的數量就是你能安全試探的次數。',
+    note: '筆記 §4.5，未實測。代價：工兵4＋軍旗1＝五顆基本上打不了的棋，且有煙無傷的候選從 3 個變 5 個，軍旗更難獵殺。',
+    counts: DISTRIBUTION_SCOUTS,
+  },
+  'top-heavy': {
+    id: 'top-heavy',
+    label: '高階雙份',
+    what: '雙份移到多半留守的高階',
+    why: '為了讓真正互撞的中階變成單份，減少昂貴的等價交換——同階雙亡有利於分數領先方，而被迫製造它的是落後方。',
+    note: '筆記 §4.4，未實測。高階不再唯一，同階雙亡因此可能發生在更貴的棋上。',
+    counts: DISTRIBUTION_TOP_HEAVY,
+  },
+}
+
+/** True when a table is rank-for-rank the §2 one. */
+export function isStandardDistribution(distribution: RankDistribution): boolean {
+  return RANKS_IN_ORDER.every((rank) => countOf(distribution, rank) === countOf(DISTRIBUTION, rank))
+}
+
+/** Which preset a table IS, or null when it matches none of them. */
+export function matchDistribution(distribution: RankDistribution): DistributionId | null {
+  for (const id of DISTRIBUTION_IDS) {
+    const counts = DISTRIBUTIONS[id].counts
+    if (RANKS_IN_ORDER.every((rank) => countOf(counts, rank) === countOf(distribution, rank))) {
+      return id
+    }
+  }
+  return null
+}
+
+/** Name for a table in running text. A game may be configured off-preset. */
+export function distributionName(distribution: RankDistribution): string {
+  const id = matchDistribution(distribution)
+  return id === null ? '自訂' : DISTRIBUTIONS[id].label
+}
+
+/** The ranks whose count differs from the §2 table, in display order. */
+export function distributionDiff(
+  distribution: RankDistribution,
+): { rank: Rank; count: number; standard: number }[] {
+  return RANKS_IN_ORDER.flatMap((rank) => {
+    const count = countOf(distribution, rank)
+    const standard = countOf(DISTRIBUTION, rank)
+    return count === standard ? [] : [{ rank, count, standard }]
+  })
 }
 
 export const CARRIER_LABEL: Record<Carrier, string> = {

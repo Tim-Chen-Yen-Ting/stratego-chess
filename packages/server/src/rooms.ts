@@ -252,13 +252,16 @@ function pendingColors(state: GameState): Color[] {
  * randomness is the server's business. `randomInt` is the CSPRNG — a predictable
  * army is the same failure as a published one, and this is hidden information.
  *
- * Fisher-Yates over the DISTRIBUTION multiset, so every draw is a valid
- * assignment by construction, and every valid assignment is equally likely.
+ * Fisher-Yates over THIS GAME'S 兵種 table, so every draw is a valid assignment
+ * by construction and every valid assignment is equally likely. It must read
+ * `state.config.distribution` and not the module constant: in a retuned game the
+ * constant's multiset is the wrong one, and the §9 timeout deployment would then
+ * be rejected by the game's own validator.
  */
 export function randomAssignment(state: GameState, color: Color): Record<PieceId, Rank> {
   const bag: Rank[] = []
   for (const rank of ALL_RANKS) {
-    for (let n = 0; n < DISTRIBUTION[rank]; n++) bag.push(rank)
+    for (let n = 0; n < (state.config.distribution[rank] ?? 0); n++) bag.push(rank)
   }
 
   for (let i = bag.length - 1; i > 0; i--) {

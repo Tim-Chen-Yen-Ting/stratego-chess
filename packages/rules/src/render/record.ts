@@ -40,7 +40,6 @@ import { castlePlan, opposite, squareName } from '../board.js'
 import {
   ALL_RANKS,
   CARRIER_LETTER,
-  DISTRIBUTION,
   RANK_NAMES_ZH,
   RANK_ORDER,
 } from '../constants.js'
@@ -826,7 +825,12 @@ function provenanceLines(vs: ViewerState): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * The §2 兵種 table, the same for every game.
+ * The 兵種 table THIS game was played with (§2, 附錄 B).
+ *
+ * Read off `config.distribution`, not the default preset: 兵種數量配置 is a
+ * tunable, and the whole point of recording it is that a record played under
+ * 工兵4 must not claim it was played under 工兵2. A game tuned to test a
+ * distribution is exactly the game whose record is worth keeping.
  *
  * Kept to ONE line on purpose. It names every 兵種 that exists, so it is the one
  * place in the record where a rank name appears without belonging to anybody —
@@ -835,9 +839,10 @@ function provenanceLines(vs: ViewerState): string[] {
  */
 const DISTRIBUTION_LINE_PREFIX = '- 兵種 distribution (§2, per side):'
 
-function distributionLine(): string {
-  const items = ALL_RANKS.map((r) => `${RANK_NAMES_ZH[r]}×${DISTRIBUTION[r]}`).join(' · ')
-  const total = ALL_RANKS.reduce((n, r) => n + DISTRIBUTION[r], 0)
+function distributionLine(vs: ViewerState): string {
+  const d = vs.config.distribution
+  const items = ALL_RANKS.map((r) => `${RANK_NAMES_ZH[r]}×${d[r]}`).join(' · ')
+  const total = ALL_RANKS.reduce((n, r) => n + d[r], 0)
   return `${DISTRIBUTION_LINE_PREFIX} ${items} — ${total} per side`
 }
 
@@ -866,7 +871,7 @@ function configLines(vs: ViewerState): string[] {
     `- 貼目 komi: ${fmt(c.komi)}, credited to Black before ply 1`,
     `- Scoring squares (結算格): ${squares}`,
     `- Clock (讀秒): ${clock}`,
-    distributionLine(),
+    distributionLine(vs),
   ]
 }
 
@@ -1217,7 +1222,10 @@ export function exportJson(vs: ViewerState): unknown {
       clock_initial_ms: vs.config.clockInitialMs,
       clock_increment_ms: vs.config.clockIncrementMs,
       setup_timeout_ms: vs.config.setupTimeoutMs,
-      distribution: ALL_RANKS.map((rank) => ({ rank, count: DISTRIBUTION[rank] })),
+      distribution: ALL_RANKS.map((rank) => ({
+        rank,
+        count: vs.config.distribution[rank],
+      })),
     },
     moves,
     // Withheld while the game is live, exactly as in the markdown — see

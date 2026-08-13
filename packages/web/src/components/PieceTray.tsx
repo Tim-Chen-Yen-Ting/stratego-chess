@@ -1,9 +1,21 @@
 import type { DragEvent } from 'react'
-import type { Rank } from '@xiyang/rules'
-import { DISTRIBUTION, RANKS_IN_ORDER, RANK_LABEL, RANK_NUMBER_LABEL } from '../constants.js'
+import type { Rank, RankDistribution } from '@xiyang/rules'
+import {
+  DISTRIBUTION,
+  RANKS_IN_ORDER,
+  RANK_LABEL,
+  RANK_NUMBER_LABEL,
+  countOf,
+  distributionName,
+  distributionOf,
+  isStandardDistribution,
+} from '../constants.js'
+import { useStore } from '../store.js'
 
 /**
- * The remaining pool from DISTRIBUTION (gamebook §2). Two ways in, both live:
+ * The remaining pool from THIS GAME's 兵種 table (gamebook §2, 附錄 B — the
+ * counts are a per-game parameter, so the chips read `config.distribution` and
+ * never a module constant; see `distributionOf`). Two ways in, both live:
  *
  *   · drag a rank chip onto one of your pieces on the board, or
  *   · click a chip then click one of your pieces (the touch-friendly path).
@@ -20,6 +32,11 @@ import { DISTRIBUTION, RANKS_IN_ORDER, RANK_LABEL, RANK_NUMBER_LABEL } from '../
 export interface PieceTrayProps {
   /** how many of each rank are still unassigned */
   remaining: Record<Rank, number>
+  /**
+   * 本局的兵種數量表 — the denominator of every chip. Omit it and the tray reads
+   * the config of the game on screen, which is what the Setup screen wants.
+   */
+  distribution?: RankDistribution
   selected: Rank | null
   onSelect: (rank: Rank | null) => void
   disabled?: boolean
@@ -34,6 +51,7 @@ export interface PieceTrayProps {
 
 export function PieceTray({
   remaining,
+  distribution,
   selected,
   onSelect,
   disabled = false,
@@ -43,6 +61,17 @@ export function PieceTray({
   poolDropActive = false,
 }: PieceTrayProps) {
   const acceptsDrop = onPoolDrop !== undefined && !disabled
+
+  // Same mechanism as Board.tsx: subscribed unconditionally, stable reference,
+  // and a caller holding the config may pass `distribution` instead. A chip
+  // reading "/ 2" in a game dealt four of that rank would send the player into
+  // a deployment the server then rejects.
+  const configCounts = useStore((s) => (s.view === null ? DISTRIBUTION : distributionOf(s.view.config)))
+  const counts = distribution ?? configCounts
+  // The 兵種階級表 card lives on the Game screen, so during deployment this pool
+  // is the ONLY place the counts appear. If they are not §2's, say which table
+  // this is — the player is about to commit sixteen pieces to it.
+  const isStandard = isStandardDistribution(counts)
 
   return (
     <div
@@ -67,13 +96,17 @@ export function PieceTray({
       }
     >
       <div className="tray-head">
-        <span>兵種池</span>
+        <span>兵種池{isStandard ? '' : ` · ${distributionName(counts)}配置`}</span>
         <span className="muted small">拖曳兵種到棋子上，或點兵種再點棋子</span>
       </div>
       <div className="tray-grid">
         {RANKS_IN_ORDER.map((rank) => {
           const left = remaining[rank]
-          const total = DISTRIBUTION[rank]
+          const total = countOf(counts, rank)
+          // A variant may deal none of a rank. That chip is not 已用完 — nothing
+          // was ever there to use — and saying so is the difference between a
+          // pool the player can trust and one they have to second-guess.
+          const unused = total <= 0
           const spent = left <= 0
           const isSelected = selected === rank
           const canDrag = !disabled && !spent && onRankDragStart !== undefined
@@ -94,13 +127,17 @@ export function PieceTray({
               onDragStart={canDrag && onRankDragStart ? (e) => onRankDragStart(rank, e) : undefined}
               onDragEnd={canDrag ? () => onRankDragEnd?.() : undefined}
               onClick={() => onSelect(isSelected ? null : rank)}
-              title={`${RANK_NUMBER_LABEL[rank]} ${RANK_LABEL[rank]} — 尚餘 ${Math.max(0, left)} / ${total}`}
+              title={
+                unused
+                  ? `${RANK_NUMBER_LABEL[rank]} ${RANK_LABEL[rank]} — 本局不使用`
+                  : `${RANK_NUMBER_LABEL[rank]} ${RANK_LABEL[rank]} — 尚餘 ${Math.max(0, left)} / ${total}`
+              }
             >
               <span className="tray-order">{RANK_NUMBER_LABEL[rank]}</span>
               <span className="tray-label">{RANK_LABEL[rank]}</span>
               <span className="tray-count">
-                {spent ? '已用完' : `×${left}`}
-                <span className="tray-total"> / {total}</span>
+                {unused ? '本局不使用' : spent ? '已用完' : `×${left}`}
+                {!unused && <span className="tray-total"> / {total}</span>}
               </span>
             </button>
           )

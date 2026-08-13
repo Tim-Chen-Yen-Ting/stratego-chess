@@ -1,8 +1,21 @@
 import { useState } from 'react'
 import { DEFAULT_CONFIG } from '@xiyang/rules'
-import type { Color, Square } from '@xiyang/rules'
+import type { Color, RankDistribution, Square } from '@xiyang/rules'
 import type { CreatedGame } from '../socket.js'
-import { SCORING_AREAS, SCORING_AREA_IDS, type ScoringAreaId } from '../constants.js'
+import {
+  DISTRIBUTIONS,
+  DISTRIBUTION_IDS,
+  PIECES_PER_SIDE,
+  RANK_LABEL,
+  SCORING_AREAS,
+  SCORING_AREA_IDS,
+  checkDistribution,
+  distributionDiff,
+  distributionName,
+  distributionTotal,
+  type DistributionId,
+  type ScoringAreaId,
+} from '../constants.js'
 import { formatClock, squareName } from '../format.js'
 import { localizeUrl } from '../url.js'
 
@@ -26,6 +39,8 @@ interface CreateOptions {
   setupTimeoutMs: number
   /** 計分區 (gamebook §7, 附錄 B) — which squares score, for this game only. */
   scoringSquares: readonly Square[]
+  /** 兵種數量配置 (gamebook §2, 附錄 B) — the table dealt to BOTH sides. */
+  distribution: RankDistribution
 }
 
 /**
@@ -46,6 +61,19 @@ const CLOCK_SUMMARY = `${formatClock(DEFAULT_CONFIG.clockInitialMs)} + ${Math.ro
 /** "d4 e4 d5 e5" — a plain listing of the chosen squares, for the hint line. */
 function squareList(squares: readonly Square[]): string {
   return squares.map(squareName).join(' ')
+}
+
+/**
+ * "工兵×4（標準 2） · 團長×1（標準 2）" — what this table actually moved.
+ *
+ * Read off the counts themselves rather than restated in prose, so the line
+ * cannot drift from the table being sent even if the preset is retuned in
+ * `@xiyang/rules`.
+ */
+function distributionDiffText(distribution: RankDistribution): string {
+  return distributionDiff(distribution)
+    .map(({ rank, count, standard }) => `${RANK_LABEL[rank]}×${count}（標準 ${standard}）`)
+    .join(' · ')
 }
 
 /**
@@ -110,6 +138,12 @@ export function Create() {
   const [opponentMode, setOpponentMode] = useState<OpponentMode>('human')
   const [scoringAreaId, setScoringAreaId] = useState<ScoringAreaId>('center')
   const scoringArea = SCORING_AREAS[scoringAreaId]
+  // 標準 by default: creating a game without opening 進階設定 must deal exactly
+  // the §2 table it dealt before this picker existed.
+  const [distributionId, setDistributionId] = useState<DistributionId>('standard')
+  const distributionPreset = DISTRIBUTIONS[distributionId]
+  const distributionSize = distributionTotal(distributionPreset.counts)
+  const distributionChanges = distributionDiffText(distributionPreset.counts)
 
   // null until the player types a value, so flipping the clock preset can keep
   // moving the default without ever discarding something they chose themselves
@@ -124,6 +158,22 @@ export function Create() {
   const scoreTargetShown = scoreTarget ?? String(scoreTargetDefault)
 
   async function onCreate() {
+    /*
+     * §2 合計 16, checked on the way out and never assumed. §9 makes the
+     * deployment a bijection onto this table over sixteen carriers, so a table
+     * summing to anything else creates a game nobody can deploy: every
+     * submission fails `validateAssignment`, and the setup timer then deals a
+     * random army out of the same impossible pool. The presets come from another
+     * package and can be retuned there — that is exactly why this is a check.
+     */
+    const problem = checkDistribution(distributionPreset.counts)
+    if (problem !== null) {
+      setError(
+        `兵種配置「${distributionPreset.label}」不合法：合計 ${distributionSize} 顆，必須恰好 ${PIECES_PER_SIDE} 顆（規則書 §2）。已停止建立。［${problem}］`,
+      )
+      return
+    }
+
     const options: CreateOptions = {
       clockEnabled,
       scoreTarget: readPositiveInt(scoreTargetShown, scoreTargetDefault),
@@ -132,6 +182,7 @@ export function Create() {
         readPositiveInt(setupMinutesShown, clockEnabled ? SETUP_MINUTES_TIMED : SETUP_MINUTES_UNTIMED) *
         60_000,
       scoringSquares: scoringArea.squares,
+      distribution: distributionPreset.counts,
     }
     setBusy(true)
     setError(null)
@@ -237,6 +288,57 @@ export function Create() {
                   八格版把 a、h 兩條 rook 直線與兩側翼也變成有分可搶的地方，讓中央以外的半盤有東西可爭。
                 </p>
 
+                <div className="c-num-row c-dist-row">
+                  <span className="c-num-label" id="c-dist-label">
+                    兵種配置
+                  </span>
+                  {/* Same control semantics as the 計分區 picker above — a group
+                      of aria-pressed buttons, not a role="radio" group, because
+                      nothing here implements the arrow-key navigation a
+                      radiogroup promises. Three options that each carry a
+                      sentence of justification only need the shape to change. */}
+                  <div className="c-choices" role="group" aria-labelledby="c-dist-label">
+                    {DISTRIBUTION_IDS.map((id) => {
+                      const preset = DISTRIBUTIONS[id]
+                      const active = distributionId === id
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          aria-pressed={active}
+                          className={active ? 'c-choice c-choice-on' : 'c-choice'}
+                          onClick={() => setDistributionId(id)}
+                        >
+                          <span className="c-choice-head">
+                            <span className="c-choice-name">{preset.label}</span>
+                            <span className="c-choice-what">
+                              {id === 'standard' ? '（預設）' : `— ${preset.what}`}
+                            </span>
+                          </span>
+                          {/* what it is FOR, not what it is */}
+                          <span className="c-choice-why">{preset.why}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                <p className="muted small c-hint">
+                  雙方同表，且對雙方公開——這是設定，不是暗牌。每方合計{' '}
+                  <strong className={distributionSize === PIECES_PER_SIDE ? undefined : 'c-bad'}>
+                    {distributionSize}
+                  </strong>{' '}
+                  顆
+                  {distributionSize === PIECES_PER_SIDE ? '' : `（必須是 ${PIECES_PER_SIDE}）`}
+                  {distributionChanges === '' ? (
+                    '，與規則書 §2 的表相同。'
+                  ) : (
+                    <>
+                      ，與標準不同的是 <code className="c-sq">{distributionChanges}</code>。
+                    </>
+                  )}
+                </p>
+                <p className="muted small c-hint">{distributionPreset.note}</p>
+
                 <label className="c-num-row">
                   <span className="c-num-label">目標分數 X</span>
                   <input
@@ -311,8 +413,9 @@ export function Create() {
           <p className="muted small">
             對局編號 {created.game.gameId} ·{' '}
             {created.options.clockEnabled ? `計時 ${CLOCK_SUMMARY}` : '不計時'} · 計分區{' '}
-            {created.options.scoringSquares.length} 格 · 目標 {created.options.scoreTarget} 分 ·
-            無進展 {created.options.noProgressTurns} 回合 · 佈署時限{' '}
+            {created.options.scoringSquares.length} 格 · 兵種配置{' '}
+            {distributionName(created.options.distribution)} · 目標 {created.options.scoreTarget} 分
+            · 無進展 {created.options.noProgressTurns} 回合 · 佈署時限{' '}
             {Math.round(created.options.setupTimeoutMs / 60_000)} 分
           </p>
 
@@ -444,6 +547,46 @@ const CREATE_CSS = `
    segmented pair, so it may wrap instead of squeezing the labels */
 .screen-create .c-area-row { flex-wrap: wrap; }
 .screen-create .c-area-row .c-seg { flex-wrap: wrap; }
+
+/* the 兵種配置 picker. Three options that each need a sentence of justification
+   do not fit a segmented control, so they are stacked cards; the label keeps the
+   same column as the number fields and the cards take the rest of the row. */
+.screen-create .c-dist-row { align-items: flex-start; flex-wrap: wrap; }
+.screen-create .c-dist-row .c-num-label { padding-top: 6px; }
+.screen-create .c-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 18em;
+  min-width: 0;
+}
+.screen-create .c-choice {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: #0f1114;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  color: var(--muted);
+}
+.screen-create .c-choice:hover:not(:disabled) { border-color: var(--accent); color: var(--fg); }
+.screen-create .c-choice-on {
+  background: #2a4d6e;
+  border-color: #3d6d97;
+  color: var(--fg);
+}
+.screen-create .c-choice-head { display: block; }
+.screen-create .c-choice-name { font-weight: 600; color: var(--fg); }
+.screen-create .c-choice-what { font-size: 0.8rem; margin-left: 6px; }
+.screen-create .c-choice-why {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.screen-create .c-bad { color: var(--danger); }
 .screen-create .c-sq {
   background: #0f1114;
   border: 1px solid var(--line);

@@ -501,9 +501,32 @@ const RANK_TOKEN = new RegExp(`"(${ALL_RANKS.join('|')})"`, 'g')
  * JSON round-tripped clone, so getters, `toJSON` and prototype tricks are all
  * flattened out before the search.
  */
+/**
+ * Serialise a ViewerState for a raw-text rank grep, with the §2 count table
+ * lifted out.
+ *
+ * `config.distribution` is keyed by the eleven rank identifiers, so it puts
+ * every rank name into the JSON while attributing none of them to any piece.
+ * It is public (gamebook §2), printed in the rulebook, and identical for every
+ * viewer — see the viewer-invariance test, which is what licenses this.
+ * NOTHING ELSE may be lifted out: the point of the grep is that it does not
+ * care which field dragged a rank in.
+ */
+export function greppableJson(vs: ViewerState): string {
+  return JSON.stringify({ ...vs, config: { ...vs.config, distribution: {} } })
+}
+
 export function rawJsonViolations(s: GameState, v: Viewer, vs: ViewerState): string[] {
   const entitled = entitlement(s, v)
   const clone = JSON.parse(JSON.stringify(vs)) as ViewerState
+
+  // config.distribution is the §2 count table. Its KEYS are the eleven rank
+  // identifiers, so a raw-text grep trips on it — but it attributes no rank to
+  // any piece, it is printed in the rulebook, and it is byte-identical for every
+  // viewer. `distributionIsViewerInvariant` below asserts that last property
+  // directly, which is what makes blanking it here safe rather than convenient:
+  // anything that made this table viewer-dependent would fail that test.
+  clone.config = { ...clone.config, distribution: {} as never }
 
   clone.pieces.forEach((p, i) => { if (entitled[i]) p.rank = null })
   for (const e of clone.log) {
@@ -720,7 +743,7 @@ describe('遮蔽層 property — B. raw serialised text', () => {
       for (const { label, state } of CORPUS) {
         const forbidden = forbiddenRankStrings(state, v)
         if (forbidden.length === 0) continue
-        const text = JSON.stringify(stateForViewer(state, v))
+        const text = greppableJson(stateForViewer(state, v))
         for (const r of forbidden) {
           if (text.includes(`"${r}"`)) bad.push(`[${label}] forbidden rank token "${r}" in payload`)
         }
@@ -728,6 +751,46 @@ describe('遮蔽層 property — B. raw serialised text', () => {
       expect(bad.slice(0, 6)).toEqual([])
     })
   }
+})
+
+/**
+ * The licence for lifting `config.distribution` out of every raw-text grep.
+ *
+ * Blanking a field before a leak search is exactly the move that hides a real
+ * leak, so the exemption has to be earned rather than asserted. It is earned by
+ * this: the table is byte-identical for every viewer AND unchanged by permuting
+ * the hidden 兵種. A field with both properties cannot carry information about
+ * who is who. If anything ever makes it viewer-dependent, this fails first and
+ * the exemption stops being safe — which is the whole point of having it.
+ */
+describe('遮蔽層 property — B2. the §2 table is viewer-invariant', () => {
+  it('every viewer receives byte-identical counts, on every corpus state', () => {
+    const bad: string[] = []
+    for (const { label, state } of CORPUS) {
+      const seen = ALL_VIEWERS.map((v) =>
+        JSON.stringify(stateForViewer(state, v).config.distribution),
+      )
+      const first = seen[0]!
+      seen.forEach((t, i) => {
+        if (t !== first) bad.push(`[${label}] ${viewerLabel(ALL_VIEWERS[i]!)} differs`)
+      })
+    }
+    expect(bad.slice(0, 6)).toEqual([])
+  })
+
+  it('permuting hidden 兵種 does not move it', () => {
+    const bad: string[] = []
+    for (const v of ALL_VIEWERS) {
+      for (const { label, state } of CORPUS) {
+        const { state: alt, changed } = permuteHiddenRanks(state, v)
+        if (!changed) continue
+        const a = JSON.stringify(stateForViewer(state, v).config.distribution)
+        const b = JSON.stringify(stateForViewer(alt, v).config.distribution)
+        if (a !== b) bad.push(`[${label}] ${viewerLabel(v)} table moved under permutation`)
+      }
+    }
+    expect(bad.slice(0, 6)).toEqual([])
+  })
 })
 
 describe('遮蔽層 property — C. hidden ranks are indistinguishable', () => {

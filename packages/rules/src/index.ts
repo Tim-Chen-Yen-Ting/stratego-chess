@@ -22,6 +22,7 @@ export type {
   Piece,
   PieceId,
   Rank,
+  RankDistribution,
   Result,
   Square,
   Viewer,
@@ -30,6 +31,9 @@ export type {
 } from './types.js'
 
 // ---------- constants (§3) ----------
+// 兵種數量配置 is a 附錄 B tunable: `DISTRIBUTION_*` are PRESETS to configure a
+// game with, and `DISTRIBUTION` is the default one. Anything that validates,
+// counts or explains a deployment reads `config.distribution`.
 export {
   ALL_COLORS,
   ALL_RANKS,
@@ -40,10 +44,16 @@ export {
   DEFAULT_ASSIGNMENT_BY_HOME_SQUARE,
   DEFAULT_CONFIG,
   DISTRIBUTION,
+  DISTRIBUTION_SCOUTS,
+  DISTRIBUTION_STANDARD,
+  DISTRIBUTION_TOP_HEAVY,
+  PIECES_PER_SIDE,
   RANK_NAMES_ZH,
   RANK_ORDER,
   SCORING_CENTRE_4,
   SCORING_WIDE_8,
+  checkDistribution,
+  distributionTotal,
 } from './constants.js'
 
 // ---------- board helpers ----------
@@ -73,6 +83,7 @@ export {
   STARTING_LAYOUT,
   createGame,
   defaultAssignment,
+  defaultRankByHomeKey,
   homeKeySquare,
   startingSlot,
   submitAssignment,
@@ -81,6 +92,9 @@ export {
 export type { StartingSlot } from './setup.js'
 
 // ---------- setup codes (§9) — the ONE implementation of the 16-char format ----------
+// The alphabet is fixed; the required COUNTS are per game, so the four
+// `setupCode*` functions take a distribution. The `SETUP_CODE_*` constants are
+// the default preset's values, for display code with no game in hand.
 export {
   SETUP_CODE_ALPHABET,
   SETUP_CODE_COMBINATIONS,
@@ -89,7 +103,11 @@ export {
   SETUP_CODE_LENGTH,
   decodeSetupCode,
   encodeSetupCode,
+  setupCodeCombinations,
   setupCodeCountsText,
+  setupCodeExample,
+  setupCodeLegend,
+  setupCodeLength,
   setupCodeSlots,
 } from './setupcode.js'
 export type { SetupCodeLegendEntry, SetupCodeResult, SetupCodeSource } from './setupcode.js'

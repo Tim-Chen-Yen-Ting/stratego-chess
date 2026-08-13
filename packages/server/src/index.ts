@@ -27,8 +27,8 @@ import fastifyStatic from '@fastify/static'
 import Fastify from 'fastify'
 import { Server as SocketIOServer } from 'socket.io'
 
-import { viewerColor } from '@xiyang/rules'
-import type { GameConfig, Viewer } from '@xiyang/rules'
+import { ALL_RANKS, checkDistribution, viewerColor } from '@xiyang/rules'
+import type { GameConfig, Rank, Viewer } from '@xiyang/rules'
 
 import { registerLlmRoutes } from './llm.js'
 import {
@@ -118,6 +118,23 @@ function readConfig(input: unknown): Partial<GameConfig> | undefined {
       ),
     ].sort((a, b) => a - b)
     if (squares.length > 0) config.scoringSquares = squares
+  }
+
+  // Same treatment as scoringSquares, and for the same reason: the engine trusts
+  // this table, so it is sanitised at the door. Built key-by-key over ALL_RANKS
+  // so an unknown key cannot survive, and assigned only if it is a legal §2
+  // table — checkDistribution owns the sum-16 rule, this does not restate it.
+  const rawDist = raw['distribution']
+  if (typeof rawDist === 'object' && rawDist !== null && !Array.isArray(rawDist)) {
+    const src = rawDist as Record<string, unknown>
+    const table = {} as Record<Rank, number>
+    let ok = true
+    for (const rank of ALL_RANKS) {
+      const n = src[rank]
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) { ok = false; break }
+      table[rank] = n
+    }
+    if (ok && checkDistribution(table) === null) config.distribution = table
   }
 
   return Object.keys(config).length === 0 ? undefined : config
@@ -297,6 +314,7 @@ function describeNewRoom(room: Room): Record<string, unknown> {
     noProgressTurns: config.noProgressTurns,
     clockEnabled: config.clockEnabled,
     scoringSquares: config.scoringSquares,
+    distribution: config.distribution,
   }
 }
 

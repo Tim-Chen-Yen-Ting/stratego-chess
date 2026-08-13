@@ -23,6 +23,17 @@ export type Rank =
   | 'flag'        // 軍旗  10
   | 'bomb'        // 爆裂物 —
 
+/**
+ * 兵種 counts per side — the §2 數量表, i.e. `Readonly<Record<Rank, number>>`.
+ *
+ * Exactly the type of `GameConfig.distribution`, named so the functions that
+ * take one can say what it is. It ALWAYS sums to 16 (§2 合計): that is not a
+ * convention but an invariant `checkDistribution` enforces, because the setup
+ * code is one character per piece and every deployment is a bijection onto this
+ * table (§9).
+ */
+export type RankDistribution = Readonly<Record<Rank, number>>
+
 /** 0..63, a1 = 0, h1 = 7, a8 = 56, h8 = 63. */
 export type Square = number
 
@@ -85,6 +96,20 @@ export interface GameConfig {
    * created with, whatever a later preset says.
    */
   scoringSquares: readonly Square[]
+  /**
+   * 兵種 counts per side (§2 數量表). Default `DISTRIBUTION_STANDARD` — the
+   * gamebook table, 司令1 … 工兵2 軍旗1 爆裂物2.
+   *
+   * 附錄 B lists 兵種數量配置 as a tunable, so everything that counts, validates,
+   * renders or explains a deployment reads THIS table and never the module
+   * constant. A game therefore keeps the army it was created with, whatever a
+   * later preset says, and two games with different tables can run side by side.
+   *
+   * It always sums to 16 (§2 合計) — `createGame` refuses a config where it does
+   * not. Changing it changes what `validateAssignment` accepts, so it cannot be
+   * altered mid-game without invalidating both sides' deployments.
+   */
+  distribution: Readonly<Record<Rank, number>>
   clockInitialMs: number     // default 900_000
   clockIncrementMs: number   // default 10_000
   setupTimeoutMs: number     // default 180_000

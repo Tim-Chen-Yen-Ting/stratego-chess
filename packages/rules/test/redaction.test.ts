@@ -37,6 +37,7 @@ import {
   contactGame,
   deepWalkViolations,
   entitlement,
+  greppableJson,
   listedPieceLines,
   mv,
   playAll,
@@ -281,7 +282,7 @@ describe('serialised payload — raw text search', () => {
   ])
 
   it('white\'s payload contains no black rank token at all', () => {
-    const text = JSON.stringify(stateForViewer(narrow, WHITE))
+    const text = greppableJson(stateForViewer(narrow, WHITE))
     for (const r of ['flag', 'bomb', 'commander'] as Rank[]) {
       expect(text, `black's ${r} leaked`).not.toContain(`"${r}"`)
     }
@@ -291,14 +292,14 @@ describe('serialised payload — raw text search', () => {
   })
 
   it('black\'s payload contains no white rank token at all', () => {
-    const text = JSON.stringify(stateForViewer(narrow, BLACK))
+    const text = greppableJson(stateForViewer(narrow, BLACK))
     for (const r of ['general', 'company'] as Rank[]) {
       expect(text, `white's ${r} leaked`).not.toContain(`"${r}"`)
     }
   })
 
   it('the same holds through a JSON.parse round-trip and in the LLM render', () => {
-    const round = JSON.parse(JSON.stringify(stateForViewer(narrow, WHITE))) as ViewerState
+    const round = JSON.parse(greppableJson(stateForViewer(narrow, WHITE))) as ViewerState
     expect(JSON.stringify(round)).not.toContain('"bomb"')
     const text = renderForLLM(stateForViewer(narrow, WHITE), RENDER_OPTS)
     for (const r of ['flag', 'bomb', 'commander'] as Rank[]) {
@@ -307,7 +308,7 @@ describe('serialised payload — raw text search', () => {
   })
 
   it('a spectator bound to white is bound by the same text search', () => {
-    const text = JSON.stringify(stateForViewer(narrow, { kind: 'spectator', bound: 'white' }))
+    const text = greppableJson(stateForViewer(narrow, { kind: 'spectator', bound: 'white' }))
     for (const r of ['flag', 'bomb', 'commander'] as Rank[]) expect(text).not.toContain(`"${r}"`)
   })
 })
