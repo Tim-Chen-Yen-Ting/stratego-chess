@@ -218,6 +218,12 @@ export function Create() {
         ? llmForm(created.game.guestUrl)
         : created.game.guestUrl
 
+  /**
+   * 公開觀戰連結 (gamebook §10) — empty string when the server did not issue
+   * one, which is the whole of the feature detection: no link, no row.
+   */
+  const publicUrl = created?.game.publicUrl ?? ''
+
   return (
     <main className="screen screen-create">
       <style>{CREATE_CSS}</style>
@@ -466,6 +472,33 @@ export function Create() {
             </button>
           </div>
 
+          {/*
+           * The third link, and the only one that may leave the two seats.
+           * Every other viewer is attached to somebody's army — a 綁定觀戰者
+           * inherits one player's view entire (§10.2 ①) — so until this link
+           * existed there was no way to let anyone watch a live game without
+           * handing over sixteen 兵種. This one owns no colour.
+           */}
+          {publicUrl !== '' && (
+            <div className="link-row c-public-row">
+              <div className="link-label c-label-row">
+                <span>公開觀戰 — 無陣營，不入座</span>
+                <span className="c-safe">對局進行中可安全轉發</span>
+              </div>
+              <code className="link">{publicUrl}</code>
+              <button type="button" onClick={() => void copy('public', publicUrl)}>
+                {copied === 'public' ? '已複製' : '複製'}
+              </button>
+              <p className="muted small c-hint">
+                拿到這條的人看到的是<strong>雙方本來就都知道的那些</strong>：棋盤與載體、公開事件紀錄、已翻明的兵種、比分與時鐘。任何一方未翻明的兵種都不在裡面——不是收到了不顯示，是伺服器根本不送（規則書 §10）。他也不能落子、不能認輸。終局後全部兵種對所有人公開（§10 終局公開全部兵種），這條連結也會一起看到。
+              </p>
+              <p className="muted small c-hint">
+                <strong className="c-careful">別跟「綁定觀戰連結」搞混：</strong>
+                那條綁定某一方的視角（規則書 §10.2 ①），等於把那方的整副軍容交出去，對局中不能給第三者；要轉發的是上面這條。
+              </p>
+            </div>
+          )}
+
           <p>
             <a className="primary big as-button" href={localizeUrl(created.game.hostUrl)}>
               以房主身分進入 →
@@ -491,6 +524,25 @@ const CREATE_CSS = `
 .screen-create .c-hint { margin: 6px 0 0; }
 .screen-create .link-row .c-hint { flex: 0 0 100%; }
 .screen-create .c-seat-note code { background: #0f1114; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+
+/* the one link that may be forwarded: boxed and tinted so it is not read as a
+   third copy of the two seat links above it */
+.screen-create .c-public-row {
+  border: 1px solid #2f5a45;
+  background: rgba(95, 208, 138, 0.06);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+}
+.screen-create .c-safe {
+  flex: 0 0 auto;
+  color: var(--ok);
+  border: 1px solid rgba(95, 208, 138, 0.45);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+.screen-create .c-careful { color: var(--gold); }
 
 .screen-create .c-label-row {
   display: flex;

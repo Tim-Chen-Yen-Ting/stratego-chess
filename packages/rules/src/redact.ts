@@ -35,6 +35,10 @@ export function viewerColor(v: Viewer): Color | null {
     // 現場觀戰者: "與其進入時所綁定玩家的視角完全相同" — exactly the bound
     // player's view, no more.
     case 'spectator': return v.bound
+    // Neither of these owns an army. The omniscient replay viewer needs no
+    // colour because it sees every colour; the public observer needs none
+    // because it sees no hidden 兵種 at all.
+    case 'spectator-public': return null
     case 'replay-omniscient': return null
   }
 }
@@ -47,11 +51,21 @@ export function viewerColor(v: Viewer): Color | null {
  *   2. the piece has been 翻明,                          (§4.3)
  *   3. the viewer is the omniscient replay viewer,      (§10 回放)
  *   4. the game is over — 終局公開全部兵種.               (§10 其他)
+ *
+ * The 公開觀戰者 is entitled by (2) and (4) alone. It is deliberately the
+ * narrowest set any viewer can have: strictly less than a player, strictly less
+ * than a bound 現場觀戰者, and nowhere near the omniscient replay viewer.
  */
 export function entitledToRank(s: GameState, v: Viewer, piece: Piece): boolean {
   if (v.kind === 'replay-omniscient') return true
   if (s.status.kind === 'over') return true
   if (piece.revealed) return true
+  // 公開觀戰者 holds no seat and owns no colour, so the two disclosures above —
+  // 翻明 (§4.3) and 終局公開全部兵種 (§10.5) — are the whole of what it may read.
+  // Refusing here, rather than letting it fall through the ownership test below
+  // on the strength of `viewerColor` returning null, keeps the policy legible
+  // and stops a later change to `viewerColor` from quietly widening this viewer.
+  if (v.kind === 'spectator-public') return false
   if (piece.color !== viewerColor(v)) return false
   // During setup a side that has not deployed still carries the PLACEHOLDER
   // assignment, which is deterministic and therefore publicly predictable. It is
@@ -118,6 +132,7 @@ function copyViewer(v: Viewer): Viewer {
   switch (v.kind) {
     case 'player': return { kind: 'player', color: v.color }
     case 'spectator': return { kind: 'spectator', bound: v.bound }
+    case 'spectator-public': return { kind: 'spectator-public' }
     case 'replay-omniscient': return { kind: 'replay-omniscient' }
     case 'replay-player': return { kind: 'replay-player', color: v.color }
   }
@@ -159,7 +174,9 @@ export function stateForViewer(s: GameState, v: Viewer): ViewerState {
 
   // "推論輔助不是安全邊界" (§10) — but the move list is not inference help, it
   // is the carrier layer, which both players can compute anyway. It is sent
-  // only to the player who is actually on turn.
+  // only to the player who is actually on turn: every kind of observer —
+  // 現場觀戰者, 公開觀戰者, replay — holds no seat, so no move list is ever
+  // attached to one, whatever the position.
   if (v.kind === 'player' && s.status.kind === 'playing' && v.color === s.toMove) {
     vs.legalMoves = legalMoves(s, v.color)
   }

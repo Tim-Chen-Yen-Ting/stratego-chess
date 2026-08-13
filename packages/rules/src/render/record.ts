@@ -802,6 +802,11 @@ function viewerLine(vs: ViewerState): string {
       return `Exported from ${colorLabel(self!)}'s own view (player).`
     case 'spectator':
       return `Exported from a spectator bound to ${colorLabel(self!)} — identical to that player's view (§10).`
+    case 'spectator-public':
+      // The strictest viewer there is: 翻明 兵種 and announced events, nothing
+      // else. Worth stating on the record itself, because it is the one export
+      // that is safe to hand to anyone while the game is still running.
+      return "Exported from the public spectator view — only 翻明 兵種 and announced events (§10.1). No side's hidden army is in this record."
     case 'replay-omniscient':
       return 'Exported from the omniscient replay view — every 兵種 is public here.'
     case 'replay-player':

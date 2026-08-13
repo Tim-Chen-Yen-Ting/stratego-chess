@@ -146,9 +146,23 @@ export interface GameState {
 
 // ---------- Viewer / redaction ----------
 
+/**
+ * Who is asking. Everything the redaction layer decides, it decides from this.
+ *
+ * `spectator-public` is the STRICTEST viewer in the system — strictly less than
+ * a player, strictly less than a bound 現場觀戰者. §10.1 lists three viewer
+ * types, and all three are attached to somebody's army: a 現場觀戰者 is bound to
+ * one player and sees "與其進入時所綁定玩家的視角完全相同", so its link cannot be
+ * handed to a third party mid-game without handing over that player's whole
+ * deployment. This viewer closes that gap. It owns no colour and holds no seat,
+ * and sees only what BOTH players already commonly know: 翻明 ranks (§4.3),
+ * the public 事件紀錄 (§10.3), and — once the game is over — everything, because
+ * §10.5 opens every 兵種 at 終局.
+ */
 export type Viewer =
   | { kind: 'player'; color: Color }
   | { kind: 'spectator'; bound: Color }
+  | { kind: 'spectator-public' }
   | { kind: 'replay-omniscient' }
   | { kind: 'replay-player'; color: Color }
 

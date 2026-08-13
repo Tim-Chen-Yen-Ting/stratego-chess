@@ -216,6 +216,9 @@ export function buildApp(): ReturnType<typeof Fastify> {
 
   // gamebook §10: a spectator enters through a specific player and inherits that
   // player's view, so each player needs the link that hands out their own view.
+  // Two shareable links come back, and they are not interchangeable —
+  // `spectatorUrl` is bound to a colour and carries that player's whole army,
+  // `publicUrl` is bound to nobody and carries only what has been announced.
   app.get<{ Params: { token: string } }>('/api/links/:token', async (request, reply) => {
     const session = resolveToken(request.params.token)
     if (session === undefined) {
@@ -229,12 +232,23 @@ export function buildApp(): ReturnType<typeof Fastify> {
       viewer,
       seat: session.seat ?? null,
       color: viewerColor(viewer),
-      // hand this to a friend to have them watch over your shoulder
+      // hand this to a friend to have them watch over your shoulder — it carries
+      // YOUR army, so it goes to someone you would show your hand to
+      // A bound-spectator link belongs to a seat. The public observer has none,
+      // and echoing its own token back under this name just duplicates publicUrl.
       spectatorUrl:
         viewer.kind === 'player'
           ? playUrl(session.room.spectatorTokens[viewer.color])
-          : playUrl(session.token),
+          : viewer.kind === 'spectator-public'
+            ? null
+            : playUrl(session.token),
+      // …and this one to anybody at all: no colour, no seat, nothing but 翻明
+      // ranks and the public log. Offered to every token holder, spectators
+      // included, because sharing it can never widen what the recipient learns.
+      publicUrl: playUrl(session.room.publicToken),
       llmUrl: viewer.kind === 'player' ? llmUrl(session.token) : null,
+      // the same neutral view as text, for a model watching the game
+      publicLlmUrl: llmUrl(session.room.publicToken),
     }
   })
 
@@ -305,6 +319,16 @@ function describeNewRoom(room: Room): Record<string, unknown> {
     // given the wrong Viewer. Each player gets their own colour's spectator link
     // from GET /api/game/:token instead.
     spectatorUrl: playUrl(room.spectatorTokens[hostColor]),
+    // THE ONE LINK THAT IS SAFE TO SHARE WITH ANYONE MID-GAME, and the reason it
+    // exists. `spectatorUrl` above is bound to one player and shows that player's
+    // whole army (§10.2 「與其進入時所綁定玩家的視角完全相同」), so posting it in a
+    // group chat hands sixteen 兵種 to whoever is reading — including the
+    // opponent. This one resolves to `{ kind: 'spectator-public' }`, which is
+    // entitled to a rank only once it is 翻明 (§4.3) or the game is over (§10.5):
+    // strictly the common knowledge of both players, so it cannot relay anything
+    // either player does not already have. Both are returned because they answer
+    // different questions — "watch over my shoulder" vs "watch the game".
+    publicUrl: playUrl(room.publicToken),
     llmUrl: llmUrl(hostToken),
     // Echo back what the server ACTUALLY built, not what was asked for. The
     // creation form confirms the settings to the player, and confirming a value

@@ -111,13 +111,24 @@ function pencilKey(scope: string): string {
   return `${PENCIL_PREFIX}${scope}`
 }
 
-/** Which seat this viewer occupies, as a storage-key fragment. */
+/**
+ * Which seat this viewer occupies, as a storage-key fragment.
+ *
+ * 公開觀戰者 gets a fragment of its own even though it has no seat and no
+ * notepad UI (see `isPublicSpectator`). The key is what keeps notepads apart,
+ * so the one viewer that must never touch a player's notes needs a fragment
+ * that cannot collide with one: open the public link in the same browser as
+ * your own seat and the two are `…::public` and `…::player-white`, which is the
+ * difference between reading your own handwriting and overwriting it.
+ */
 export function pencilSeatKey(viewer: Viewer): string {
   switch (viewer.kind) {
     case 'player':
       return `player-${viewer.color}`
     case 'spectator':
       return `spectator-${viewer.bound}`
+    case 'spectator-public':
+      return 'public'
     case 'replay-player':
       return `replay-${viewer.color}`
     case 'replay-omniscient':
@@ -325,13 +336,25 @@ export const useStore = create<AppState>()((set, get) => ({
 
 // ---------- derived helpers (no rules, only entitlement bookkeeping) ----------
 
-/** The colour whose seat this viewer occupies, or null for an omniscient replay. */
+/**
+ * The colour whose seat this viewer occupies, or null when it occupies none.
+ *
+ * NULL IS NOT WHITE. Two viewers have no colour, for opposite reasons: the
+ * omniscient replay viewer needs none because it sees every colour, and the
+ * 公開觀戰者 needs none because it sees no hidden 兵種 at all. Every caller must
+ * treat the null as "this viewer owns nothing" and never fall back to a side —
+ * a `me ?? 'white'` used for anything but which way up to draw the board would
+ * hand White's pieces to somebody who is not White. Board orientation is the
+ * one legitimate default, because it is a drawing convention and grants nothing.
+ */
 export function viewerColor(viewer: Viewer): Color | null {
   switch (viewer.kind) {
     case 'player':
       return viewer.color
     case 'spectator':
       return viewer.bound
+    case 'spectator-public':
+      return null
     case 'replay-player':
       return viewer.color
     case 'replay-omniscient':
@@ -339,7 +362,25 @@ export function viewerColor(viewer: Viewer): Color | null {
   }
 }
 
-/** Only a seated player may act; spectators are bound read-only views (§10). */
+/**
+ * 公開觀戰者 (gamebook §10) — the seatless viewer. It holds no colour, so it is
+ * handed nobody's army, and its link is the only one that is safe to pass to a
+ * third party while the game is live.
+ *
+ * It is NOT the same question as `viewerColor(...) === null`: the omniscient
+ * replay viewer is colourless too and sees everything, which is the opposite
+ * entitlement. Ask this when the question is "is this the public view"; ask
+ * `viewerColor` when the question is "whose pieces are these".
+ */
+export function isPublicSpectator(view: ViewerState): boolean {
+  return view.viewer.kind === 'spectator-public'
+}
+
+/**
+ * Only a seated player may act. Bound spectators and the 公開觀戰者 are
+ * read-only views (§10) — and the server agrees, so a client that got this
+ * wrong would be refused rather than obeyed.
+ */
 export function canAct(view: ViewerState): boolean {
   return view.viewer.kind === 'player'
 }

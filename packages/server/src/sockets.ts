@@ -96,6 +96,10 @@ function viewerRoomName(gameId: string, viewer: Viewer): string {
       return `${gameId}#player:${viewer.color}`
     case 'spectator':
       return `${gameId}#spectator:${viewer.bound}`
+    // Seatless and colourless, so every public observer of a game shares one
+    // room — they all receive byte-identical payloads by construction.
+    case 'spectator-public':
+      return `${gameId}#spectator:public`
     case 'replay-player':
       return `${gameId}#replay:${viewer.color}`
     case 'replay-omniscient':
@@ -104,12 +108,19 @@ function viewerRoomName(gameId: string, viewer: Viewer): string {
 }
 
 /** The four viewer identities the server actually issues tokens for. */
+/**
+ * Every viewer identity a game hands out. `broadcastState` fans out over this
+ * list, so anything missing here receives its join payload and then silently
+ * never updates again — a frozen board with no error, which is how the public
+ * observer shipped broken the first time.
+ */
 function issuedViewers(): Viewer[] {
   const viewers: Viewer[] = []
   for (const color of COLORS) {
     viewers.push({ kind: 'player', color })
     viewers.push({ kind: 'spectator', bound: color })
   }
+  viewers.push({ kind: 'spectator-public' })
   return viewers
 }
 

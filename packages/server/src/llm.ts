@@ -15,6 +15,13 @@
  * rendered by `renderForLLM` from the rules package. The model gets the log and
  * nothing else — no solver, same as a human (gamebook §10).
  *
+ * Every route here accepts EVERY token the room minted, but only the first two
+ * are readable by all of them. The state and rules routes are read-only, so a
+ * spectator token — bound or public — gets exactly the view that token is worth.
+ * The setup and move routes require a PLAYER token and refuse everything else
+ * outright: a 觀戰者 holds a view, never a seat (§10.2), so there is no colour it
+ * could act as. See `seatRefusal`.
+ *
  * Notation is NOT re-implemented here. `renderForLLM` prints every move URL using
  * the rules package's `moveToNotation`, so this file parses them back with that
  * package's `parseMoveNotation` and they round-trip by construction. The only
@@ -32,7 +39,7 @@ import {
   renderRulesForLLM,
   squareName,
 } from '@xiyang/rules'
-import type { Color, GameConfig, Move, PieceId, Rank, ViewerState } from '@xiyang/rules'
+import type { Color, GameConfig, Move, PieceId, Rank, Viewer, ViewerState } from '@xiyang/rules'
 
 import {
   RoomError,
@@ -148,6 +155,36 @@ function plain(reply: FastifyReply, body: string, status = 200): void {
     .send(body)
 }
 
+/**
+ * Why a token that is not a player token cannot act, in that viewer's own terms.
+ *
+ * Both mutating routes below refuse every non-player viewer. That refusal is
+ * deliberate and total, not a side effect of the seat lookup: gamebook §10 gives
+ * a 觀戰者 a VIEW and never a seat, so there is no colour to act as. Saying which
+ * kind of watcher the caller is matters, because the two arrive by very different
+ * links — a bound spectator was let in by one player, while a public observer may
+ * have been handed the link by anyone — and a model told only "you cannot play"
+ * will otherwise keep trying.
+ */
+function seatRefusal(viewer: Viewer, what: 'deployed' | 'played'): string {
+  const nothing = what === 'deployed' ? 'nothing was deployed' : 'no move was made'
+  switch (viewer.kind) {
+    case 'spectator-public':
+      return (
+        'this link is the public observer view of a live game: no seat, no colour, and no ' +
+        `兵種 beyond the ones already announced — so ${nothing}. Nothing you fetch under ` +
+        'this token can change the game. Only the two players can act.'
+      )
+    case 'spectator':
+      return (
+        `you are watching this game over ${viewer.bound === 'white' ? 'White' : 'Black'}'s ` +
+        `shoulder, not playing it, so ${nothing}. Acting is that player's alone.`
+      )
+    default:
+      return `you are watching this game, not playing it, so ${nothing}.`
+  }
+}
+
 /** Keep hostile or oversized path segments out of the rendered text. */
 function echoable(raw: string): string {
   const cleaned = raw.replace(/[^\x20-\x7e]/g, '').slice(0, 24)
@@ -191,12 +228,17 @@ export function registerLlmRoutes(app: FastifyInstance, baseUrl: string): void {
       return
     }
     // No code in the URL, so nothing is deployed — just show the instructions,
-    // which the position itself carries while this player is still in setup.
+    // which the position itself carries while this player is still in setup. A
+    // watcher gets the same refusal as `/setup/:code`: telling a viewer with no
+    // seat to "append your 16 characters" invites it to keep fetching a route
+    // that will never do anything for it.
     plain(
       reply,
       renderPosition(session, baseUrl, [
-        'that URL has no setup code on the end, so nothing was deployed. ' +
-          'Append your 16 characters, or the word random.',
+        session.viewer.kind === 'player'
+          ? 'that URL has no setup code on the end, so nothing was deployed. ' +
+            'Append your 16 characters, or the word random.'
+          : seatRefusal(session.viewer, 'deployed'),
       ]),
     )
   })
@@ -261,10 +303,11 @@ const RANDOM_CODE = 'random'
  */
 function attemptSetup(session: Resolved, baseUrl: string, codeParam: string): string {
   const viewer = session.viewer
+  // A seat is required before anything else is even looked at — the code in the
+  // URL is not parsed, no state is touched. Deploying is the one act that writes
+  // a whole army, and only its owner may do it (§9 互不可見).
   if (viewer.kind !== 'player') {
-    return renderPosition(session, baseUrl, [
-      'you are watching this game, not playing it, so nothing was deployed.',
-    ])
+    return renderPosition(session, baseUrl, [seatRefusal(viewer, 'deployed')])
   }
 
   const state = serialiseFor(session.room, viewer)
@@ -332,13 +375,17 @@ function attemptMove(
   moveParam: string,
 ): string {
   const viewer = session.viewer
-  const state = serialiseFor(session.room, session.viewer)
 
+  // The seat check comes FIRST, before the ply guard, the turn check and the
+  // notation parse. A watcher is not "wrong about the ply" or "not on turn" — it
+  // has no seat at all, and every later branch below is written for someone who
+  // does. `playMove` would refuse this too, but only incidentally: it is handed a
+  // colour, and there is no colour to hand it for a viewer that owns none.
   if (viewer.kind !== 'player') {
-    return renderPosition(session, baseUrl, [
-      'you are watching this game, not playing it, so no move was made.',
-    ])
+    return renderPosition(session, baseUrl, [seatRefusal(viewer, 'played')])
   }
+
+  const state = serialiseFor(session.room, viewer)
 
   if (state.status.kind !== 'playing') {
     const reason =

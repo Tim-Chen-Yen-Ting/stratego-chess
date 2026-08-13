@@ -3,7 +3,7 @@ import type { DragEvent } from 'react'
 import type { Color, PieceId, Rank, Square, ViewerState } from '@xiyang/rules'
 import { Board } from '../components/Board.js'
 import { PieceTray } from '../components/PieceTray.js'
-import { DISTRIBUTION, RANKS_IN_ORDER, RANK_LABEL } from '../constants.js'
+import { RANKS_IN_ORDER, RANK_LABEL, distributionOf } from '../constants.js'
 import { colorLabel, formatCountdown } from '../format.js'
 import { canAct, useStore, viewerColor } from '../store.js'
 
@@ -43,8 +43,16 @@ interface DragPayload {
   fromId: PieceId | null
 }
 
-function emptyRemaining(): Record<Rank, number> {
-  return { ...DISTRIBUTION }
+/**
+ * The pool this GAME deals, not the §2 default.
+ *
+ * 兵種 counts are a per-game setting (附錄 B). Reading the module constant here
+ * while the chip denominators read the config produced a tray showing 團長×2/1
+ * — two different tables in one row — and would have let a player draft an army
+ * its own server then rejected.
+ */
+function emptyRemaining(dist: Readonly<Record<Rank, number>>): Record<Rank, number> {
+  return { ...dist }
 }
 
 export function Setup({ view }: SetupProps) {
@@ -61,14 +69,16 @@ export function Setup({ view }: SetupProps) {
     [view.pieces, me],
   )
 
+  const dist = distributionOf(view.config)
+
   const remaining = useMemo(() => {
-    const left = emptyRemaining()
+    const left = emptyRemaining(dist)
     for (const id of Object.keys(draft)) {
       const rank = draft[id]
       if (rank) left[rank] -= 1
     }
     return left
-  }, [draft])
+  }, [draft, dist])
 
   const pendingIds = useMemo(
     () => new Set(myPieces.filter((p) => !draft[p.id]).map((p) => p.id)),
@@ -144,7 +154,7 @@ export function Setup({ view }: SetupProps) {
       const used = Object.values(draft).filter((r) => r === selectedRank).length
       const wasHolding = draft[piece.id] === selectedRank
       const after = used + (wasHolding ? 0 : 1)
-      if (after >= DISTRIBUTION[selectedRank]) setSelectedRank(null)
+      if (after >= dist[selectedRank]) setSelectedRank(null)
     }
   }
 
@@ -212,7 +222,7 @@ export function Setup({ view }: SetupProps) {
   function fillRandomly() {
     const pool: Rank[] = []
     for (const rank of RANKS_IN_ORDER) {
-      for (let i = 0; i < DISTRIBUTION[rank]; i++) pool.push(rank)
+      for (let i = 0; i < dist[rank]; i++) pool.push(rank)
     }
     // CSPRNG, matching the server's own shuffle (rooms.ts randomAssignment).
     // This draws a hidden army; a predictable one is the same failure as a

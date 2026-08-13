@@ -188,21 +188,43 @@ export function playAll(s: GameState, moves: readonly Move[]): GameState {
 // Viewers
 // ---------------------------------------------------------------------------
 
+/**
+ * EVERY viewer the system can construct. This array is the spine of the file:
+ * each suite below loops over it, so a viewer added here is immediately put
+ * through the raw-text grep, the structural deep walk, the rank permutation and
+ * the render checks. A viewer that is not in this list is a viewer nothing tests.
+ *
+ * `spectator-public` is the strictest of them — it owns no colour and is
+ * entitled to a rank only by §4.3 翻明 or §10.5 終局 — so it is also the one most
+ * of these properties bite hardest on.
+ */
 export const ALL_VIEWERS: readonly Viewer[] = [
   { kind: 'player', color: 'white' },
   { kind: 'player', color: 'black' },
   { kind: 'spectator', bound: 'white' },
   { kind: 'spectator', bound: 'black' },
+  { kind: 'spectator-public' },
   { kind: 'replay-omniscient' },
   { kind: 'replay-player', color: 'white' },
   { kind: 'replay-player', color: 'black' },
 ]
 
 export function viewerLabel(v: Viewer): string {
-  return v.kind === 'replay-omniscient' ? v.kind : `${v.kind}:${'color' in v ? v.color : v.bound}`
+  if ('color' in v) return `${v.kind}:${v.color}`
+  if ('bound' in v) return `${v.kind}:${v.bound}`
+  // The colourless viewers: the omniscient replay view, which needs no colour
+  // because it sees them all, and 公開觀戰者, which needs none because it sees
+  // no hidden 兵種 at all. Their kind alone names them.
+  return v.kind
 }
 
-/** Per-piece entitlement, indexed exactly like `state.pieces` / `view.pieces`. */
+/**
+ * Per-piece entitlement, indexed exactly like `state.pieces` / `view.pieces`.
+ *
+ * It asks `entitledToRank` rather than restating the policy, so a new viewer is
+ * scored by the very predicate under test — for `spectator-public` that yields
+ * an all-false array until the first 翻明, and an all-true one at 終局.
+ */
 export function entitlement(s: GameState, v: Viewer): boolean[] {
   return s.pieces.map((p) => entitledToRank(s, v, p))
 }
@@ -391,7 +413,8 @@ export const KIND_VOCAB: ReadonlySet<string> = new Set([
   'bomb-detonate', 'bomb-vs-bomb', 'fizzle',                                   // CombatOutcome
   'flag', 'flag-both', 'score', 'no-progress', 'timeout', 'resign',            // Result
   'setup', 'playing', 'over',                                                  // GameStatus
-  'player', 'spectator', 'replay-omniscient', 'replay-player',                 // Viewer
+  'player', 'spectator', 'spectator-public',
+  'replay-omniscient', 'replay-player',                                        // Viewer
 ])
 
 type Leaf = { path: string; value: string }

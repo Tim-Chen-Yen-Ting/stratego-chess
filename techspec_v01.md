@@ -220,7 +220,10 @@ export interface GameState {
 
 export type Viewer =
   | { kind: 'player'; color: Color }
+  /** bound to one player — sees exactly that player's view */
   | { kind: 'spectator'; bound: Color }
+  /** the strictest viewer: 翻明 ranks and announced events only, no seat */
+  | { kind: 'spectator-public' }
   | { kind: 'replay-omniscient' }
   | { kind: 'replay-player'; color: Color }
 
@@ -350,7 +353,7 @@ GET  /*                   → static client build
 ```
 
 Tokens are unguessable random strings and are the only auth. Each game issues:
-`hostToken`, `guestToken`, and two spectator tokens (one bound to each colour).
+`hostToken`, `guestToken`, two bound-spectator tokens (one per colour), and one `publicToken` carrying no side — the only link that is safe to share while a game is live.
 
 ### Socket.IO
 

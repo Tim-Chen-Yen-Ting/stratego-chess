@@ -65,6 +65,18 @@ export interface CreatedGame {
   hostUrl: string
   hostColor: 'white' | 'black'
   guestColor: 'white' | 'black'
+  /**
+   * 公開觀戰連結 — a token that resolves to the seatless viewer (gamebook §10).
+   * It carries no colour, so it hands over nobody's 兵種: the board, the public
+   * log and the 翻明 ranks, and nothing else. This is the one link that can be
+   * forwarded while the game is running.
+   *
+   * Optional because the client cannot prove what a given server build sends —
+   * the response is parsed, not validated. A build that predates the public
+   * viewer simply omits it, and the Create screen then shows no such row rather
+   * than a link reading "undefined".
+   */
+  publicUrl?: string
   /** what the server actually built — may differ from what was requested */
   setupTimeoutMs?: number
   scoreTarget?: number

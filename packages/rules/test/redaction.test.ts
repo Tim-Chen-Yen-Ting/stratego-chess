@@ -172,6 +172,44 @@ describe('entitledToRank — gamebook §10', () => {
     }
   })
 
+  it('公開觀戰者 is entitled to 翻明 pieces and NOTHING else — checked independently', () => {
+    // This assertion cannot be replaced by the property suites, and that is the
+    // point. `entitlement()` in redaction.property.ts IS `entitledToRank` — the
+    // very predicate `stateForViewer` consults — so suites A/B/D score the
+    // payload against the rule that produced it. A widened predicate handing
+    // this viewer a whole army would satisfy every one of them: 0 deep-walk
+    // violations, 0 raw-text violations, 0 variation under permutation. They
+    // prove the payload is CONSISTENT with the policy, never that the policy is
+    // right. So the policy gets stated here, in literal terms, once per state.
+    const pub: Viewer = { kind: 'spectator-public' }
+    const s = contactGame('pub-ent', 'commander', 'platoon')
+    expect(s.pieces.some((p) => p.revealed)).toBe(true)
+    expect(s.pieces.some((p) => !p.revealed)).toBe(true)
+
+    for (const p of s.pieces) {
+      expect(entitledToRank(s, pub, p), `${p.id} mid-game`).toBe(p.revealed)
+    }
+
+    // and it is strictly narrower than every other live viewer
+    for (const p of s.pieces.filter((p) => !p.revealed)) {
+      expect(entitledToRank(s, pub, p)).toBe(false)
+      const owner: Viewer = { kind: 'player', color: p.color }
+      expect(entitledToRank(s, owner, p)).toBe(true)
+      expect(entitledToRank(s, { kind: 'spectator', bound: p.color }, p)).toBe(true)
+    }
+
+    // §10.5 still opens everything at 終局, for this viewer too
+    const over = resign(s, 'white')
+    for (const p of over.pieces) expect(entitledToRank(over, pub, p)).toBe(true)
+  })
+
+  it('公開觀戰者 never receives a move list — §10.1 沒有座位', () => {
+    const s = startedGame('pub-legal')
+    expect(stateForViewer(s, { kind: 'spectator-public' }).legalMoves).toBeUndefined()
+    // the player on turn does get one, so the assertion above is not vacuous
+    expect(stateForViewer(s, { kind: 'player', color: s.toMove }).legalMoves).toBeDefined()
+  })
+
   it('終局公開全部兵種 — a finished game opens every rank to everyone', () => {
     const over = resign(startedGame('over'), 'white')
     expect(over.status.kind).toBe('over')

@@ -472,12 +472,35 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   const lines: string[] = []
 
   // --- header ---------------------------------------------------------
-  const who = self === null
-    ? 'omniscient replay view'
-    : vs.viewer.kind === 'spectator'
-      ? `you are watching ${colorLabel(self).toUpperCase()}`
-      : `you are ${colorLabel(self).toUpperCase()}`
+  // TWO viewers have no colour, and they are opposites: the replay viewer sees
+  // every 兵種, the public observer sees only the 翻明 ones. `self === null`
+  // therefore identifies neither on its own, and the seatless paths below cannot
+  // simply be inherited from the replay viewer — they were written for a reader
+  // who knows everything. What the two share is that neither has a seat, so
+  // nothing gated on `vs.viewer.kind === 'player'` (how to act, deployment
+  // instructions, the move list) can reach either one.
+  const publicOnly = vs.viewer.kind === 'spectator-public'
+  const who = publicOnly
+    ? 'public observer, no seat'
+    : self === null
+      ? 'omniscient replay view'
+      : vs.viewer.kind === 'spectator'
+        ? `you are watching ${colorLabel(self).toUpperCase()}`
+        : `you are ${colorLabel(self).toUpperCase()}`
   lines.push(`# 行軍西洋棋 — ${who}`)
+  if (publicOnly && vs.status.kind === 'over') {
+    lines.push('You watched this game from the outside. It is over, so every 兵種 is open now')
+    lines.push('(§10.5 終局公開全部兵種) — including the ones that were never 翻明.')
+  } else if (publicOnly) {
+    lines.push(
+      'You are watching a live game from the outside. This view carries ONLY what both',
+    )
+    lines.push(
+      'players already know in common: the carriers, the 翻明 兵種, and the public log.',
+    )
+    lines.push('Every other 兵種 shows as ??? — it is not withheld from display, it was never')
+    lines.push('sent. You hold no seat here: you cannot deploy, move, or resign.')
+  }
 
   const turn = vs.status.kind === 'over'
     ? 'game over'
@@ -591,9 +614,62 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   // positions and the deployment instructions instead.
   const setupStatus = vs.status.kind === 'setup' ? vs.status : null
 
-  if (self === null) {
+  if (publicOnly && setupStatus === null) {
+    // The narrowest listing in the system. The omniscient path below prints one
+    // undivided list per colour because every rank in it is known; here most are
+    // not, so the two groups are printed APART rather than interleaved. That is
+    // not cosmetic: chunkJoin puts four pieces on a line, so an interleaved list
+    // would print a 翻明 兵種 on the same line as a hidden piece's square, and
+    // line adjacency is the granularity both the redaction property suite and a
+    // reader skimming the text actually work at.
+    for (const color of ['white', 'black'] as const) {
+      const onBoard = onBoardOf(vs, color)
+      const known = onBoard.filter((p) => p.rank !== null)
+      const hidden = onBoard.filter((p) => p.rank === null)
+
+      lines.push(`## ${colorLabel(color)} pieces`)
+      // At 終局 this view holds every 兵種, including ones that were never 翻明
+      // — so it must not claim they were announced. Splitting the list has no
+      // purpose here either: with nothing hidden there is nothing to keep apart.
+      if (vs.status.kind === 'over') {
+        lines.push('終局公開全部兵種 (§10.5) — the unrevealed ones are in here too:')
+        lines.push(
+          ...(known.length
+            ? chunkJoin(known.map((p) => pieceLine(p, replay.revealedPly)), 4)
+            : ['(none)']),
+        )
+        lines.push('')
+        continue
+      }
+
+      lines.push('翻明 — announced, and known to both players:')
+      lines.push(
+        ...(known.length
+          ? chunkJoin(known.map((p) => pieceLine(p, replay.revealedPly)), 4)
+          : ['(none yet)']),
+      )
+      if (hidden.length > 0) {
+        lines.push(`兵種 not public — ${hidden.length} piece(s), carrier and square only:`)
+        lines.push(...chunkJoin(hidden.map((p) => pieceLine(p, null)), 4))
+      }
+      lines.push('')
+    }
+  } else if (self === null) {
     for (const color of ['white', 'black'] as const) {
       if (setupStatus !== null) {
+        // `setupOwnLines` speaks to a SEAT — it prints "your" pieces, a private
+        // setup code and "the opponent is still assigning". The omniscient
+        // replay viewer can stand in for each side in turn; the public observer
+        // cannot, because it has no side and no opponent. Give it the neutral
+        // statement instead of a sentence addressed to somebody else.
+        if (publicOnly) {
+          lines.push(
+            `## ${colorLabel(color)} — ${setupStatus.submitted[color] ? 'deployed' : 'not deployed yet'}`,
+          )
+          lines.push('兵種 are secret until 終局; nothing of either army is in this view.')
+          lines.push('')
+          continue
+        }
         lines.push(...setupOwnLines(vs, color, setupStatus.submitted[color], base, opts.token))
         lines.push('')
         continue
@@ -639,7 +715,13 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
     }
   } else if (vs.status.kind === 'playing') {
     lines.push('## Legal moves')
-    lines.push(`Not your turn. Refetch ${base}/llm/${encodeURIComponent(opts.token)} after the opponent moves.`)
+    // "Not your turn" would promise a turn that is coming. A 公開觀戰者 never
+    // gets one, so it is told the reason it has no list rather than a schedule.
+    lines.push(
+      publicOnly
+        ? `No move list — this view holds no seat and cannot play. Refetch ${base}/llm/${encodeURIComponent(opts.token)} to follow the game.`
+        : `Not your turn. Refetch ${base}/llm/${encodeURIComponent(opts.token)} after the opponent moves.`,
+    )
   }
   lines.push('')
   lines.push(`Rules primer: ${base}/llm/${encodeURIComponent(opts.token)}/rules`)

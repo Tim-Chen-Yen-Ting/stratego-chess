@@ -90,7 +90,7 @@ progress. That is a deliberate v1 decision, not an oversight.
    standing on one scores you 1 point after every single ply, yours and your opponent's.** First to
    40 wins. Black starts at 0.5 (貼目), which is what makes an exact tie impossible.
 
-To let a friend watch, share your **spectator link**. A spectator sees exactly your view and nothing
+To let someone watch a LIVE game, share the **public spectator link** — it carries the board, the public log and 翻明 兵種 only, and hands over nobody's army. The **bound spectator link** shows one player's entire hand and must not go to a third party mid-game.
 more, so relaying cannot leak anything you do not already know.
 
 The client never receives a rank it is not entitled to. It is not "sent but hidden" — it is absent

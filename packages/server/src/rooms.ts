@@ -4,10 +4,16 @@
  * There is no database. A room is a game plus its tokens, its clock and its
  * setup deadline. A server restart loses everything (techspec §0).
  *
- * Auth model: four unguessable tokens per game — one per player seat and one
+ * Auth model: five unguessable tokens per game — one per player seat, one
  * spectator token bound to each colour (gamebook §10: a spectator enters through
- * a specific player and sees exactly that player's view). Possession of a token
- * IS the authorisation; there is nothing else to check.
+ * a specific player and sees exactly that player's view), and one public
+ * observer token that is bound to nobody. Possession of a token IS the
+ * authorisation; there is nothing else to check.
+ *
+ * The five are not interchangeable, and the difference is the whole point: a
+ * bound spectator token IS that player's army, so passing one to a third party
+ * mid-game hands over sixteen 兵種. The public token carries only what both
+ * players already know, which is why it is the one that is safe to share.
  *
  * ALL rules live in @xiyang/rules. This file sequences calls into it and owns the
  * clock; it never decides a rules question.
@@ -65,6 +71,12 @@ export interface Room {
   readonly playerTokens: Record<Color, string>
   /** spectator token per colour, bound to that colour's view */
   readonly spectatorTokens: Record<Color, string>
+  /**
+   * The one token in the room that is bound to no player: it resolves to
+   * `{ kind: 'spectator-public' }`, which sees 翻明 ranks and the public log and
+   * nothing else. Safe to hand to anyone while the game is running.
+   */
+  readonly publicToken: string
   /** which colour the invite creator drew (gamebook §9 coin flip) */
   readonly hostColor: Color
   readonly clock: GameClock
@@ -131,6 +143,7 @@ export function createRoom(config?: Partial<GameConfig>): Room {
   playerTokens[hostColor] = mintToken()
   playerTokens[guestColor] = mintToken()
   const spectatorTokens: Record<Color, string> = { white: mintToken(), black: mintToken() }
+  const publicToken = mintToken()
 
   // The host closures only run after `room` below is initialised.
   const clock = new GameClock({
@@ -149,6 +162,7 @@ export function createRoom(config?: Partial<GameConfig>): Room {
     state: createGame(id, config),
     playerTokens,
     spectatorTokens,
+    publicToken,
     hostColor,
     clock,
     setupTimer: null,
@@ -168,6 +182,11 @@ export function createRoom(config?: Partial<GameConfig>): Room {
       viewer: { kind: 'spectator', bound: color },
     })
   }
+
+  // No colour, no seat. `entitledToRank` gives this viewer a 兵種 only once the
+  // piece is 翻明 or the game is over, so it is the one link in the room that can
+  // be handed to a third party mid-game without giving away an army.
+  tokens.set(publicToken, { gameId: id, viewer: { kind: 'spectator-public' } })
 
   rooms.set(id, room)
   armSetupTimer(room)
@@ -415,6 +434,8 @@ export function sweep(now = Date.now()): number {
       tokens.delete(room.playerTokens[color])
       tokens.delete(room.spectatorTokens[color])
     }
+    // every token the room minted, or the map keeps growing after the sweep
+    tokens.delete(room.publicToken)
     rooms.delete(id)
     dropped += 1
   }
