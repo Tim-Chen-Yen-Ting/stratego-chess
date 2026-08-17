@@ -25,6 +25,8 @@
  *   攻略 §7   a 翻明 司令 keeps attacking .... `MOVING_TARGET_WEIGHT`
  *   攻略 §9   the 軍旗 never crashes ......... `movesFlag`, absolute
  *   §5.3      the 軍旗 is not hunted .......... `flagThreat`, `flagDefence`
+ *   §7.1      the 軍旗 collects rent too ...... `flagMoveValue`, `FLAG_STEP_COST`
+ *   §4        a square lost straight back ..... `replyCostOf`, `REPLY_WEIGHT`
  *
  * 佈署 (§9) is `deploy.ts`'s doctrine plus one addition of this policy's own;
  * see `chooseDeployment` at the bottom.
@@ -98,9 +100,32 @@
  * and it is within noise on both boards. 平均持格／結算, the number §10.3's
  * acceptance turned on, is unchanged to two decimals: 1.96 vs 1.97, 3.48 vs 3.49.
  *
- * The first cut was NOT free — see `FLAG_THREAT_DECAY`, which cost two to four
- * points of win rate until it was measured and set to zero. The mechanism was
- * §11.4's, again: a term the size of the positional signal it competed with.
+ * The first cut was NOT free — pre-empting a two-ply threat cost two to four
+ * points of win rate until it was measured and set to zero, and the horizon that
+ * scaled it is now 1 (see `FLAG_THREAT_HORIZON`). The mechanism was §11.4's,
+ * again: a term the size of the positional signal it competed with.
+ *
+ * ---------------------------------------------------------------------------
+ * The reply, and the 軍旗's rent — what they bought, honestly
+ * ---------------------------------------------------------------------------
+ *
+ * Two changes, both against `contest` at 3600 games a cell (6 seeds × 300 × both
+ * seats × both boards), and both compared with the identical file with the change
+ * switched off so that exactly one thing differs:
+ *
+ *                                中央四格   側翼八格   平均持格／結算
+ *   neither                        69.3%      68.7%     1.97 / 3.50
+ *   reply only (CHANGE 1)          70.3%      67.7%     1.98 / 3.49
+ *   軍旗 rent only (CHANGE 2)       69.4%      68.3%     1.97 / 3.51
+ *   both                           70.5%      67.5%     1.98 / 3.49
+ *
+ * The honest reading, with a standard error of 0.8 on each cell: **neither change
+ * moves the win rate**, and both leave 平均持格／結算 exactly where it was. What
+ * matters about the second half of that sentence is that it took three attempts —
+ * see `REPLY_WEIGHT` for the two shapes that made the bot MORE passive, which is
+ * the failure this change is most likely to produce and the one the acceptance
+ * measure is aimed at. What is being claimed here is 「not worse, and now able to
+ * make two decisions it could not make at all」, not 「better」.
  *
  * ---------------------------------------------------------------------------
  * The lens (policy.ts, and it is not negotiable)
@@ -112,20 +137,19 @@
  * opponent's deployment. Where the policy wants to know what an enemy piece is,
  * it asks `beliefFor`, which is itself a function of the public log.
  *
- * `view.legalMoves` remains the authority on legality: this file scores moves and
- * never generates them. The cost of that discipline is that the policy is 1 ply
- * deep and cannot see a piece hanging. Stated here so nobody reads the EV
- * arithmetic as more than it is: it prices the contact it is about to make, not
- * the reply.
+ * `view.legalMoves` remains the authority on legality for OUR moves: this file
+ * scores them and never generates them.
  *
- * ONE exception, and it is bounded: the 軍旗 threat model (§5.3, and see its own
- * section header) works out which enemy pieces have a route to one square — the
- * square our 軍旗 stands on. `view.legalMoves` is OUR list and cannot answer that,
- * so the geometry is derived directly. It reads carriers and occupancy, both
- * public under §1; it reads no 兵種 at all; and nothing it produces is ever
- * offered as a move this side may play, which is what the rule above is for. The
- * exception exists because §5.3 has no counterpart: every other loss in the game
- * is a bad trade, and that one is the game.
+ * It does now ask what the OPPONENT can do, which it could not before, and the
+ * important thing about that is where the answer comes from. `@xiyang/rules`
+ * exports `carrierMoves` / `reachableSquares` — legal moves for either side from
+ * a redacted `ViewerState`, sound because 附錄 A requires the legal move set to be
+ * identical whatever 兵種 a piece carries, and proven equal to `legalMoves` by
+ * `publicmoves.test.ts`. `../lookahead.js` prices those moves against a belief.
+ * Neither reads a 兵種 this side is not entitled to, and neither ever produces a
+ * move offered as one we may play. The 軍旗 threat model used to hand-roll all of
+ * that geometry itself; it does not any more, and the file is 300 lines shorter
+ * for it.
  *
  * ---------------------------------------------------------------------------
  * Determinism
@@ -137,18 +161,7 @@
  * move (after `beliefFor`'s own draws), so a game replays byte for byte.
  */
 
-import {
-  ALL_RANKS,
-  fileOf,
-  forwardDir,
-  inBounds,
-  makeSquare,
-  opposite,
-  pawnDoubleStepRank,
-  pawnHomeRank,
-  rankOf,
-  resolveCombat,
-} from '@xiyang/rules'
+import { ALL_RANKS, carrierMoves, opposite, resolveCombat } from '@xiyang/rules'
 import type {
   Carrier,
   Color,
@@ -173,6 +186,13 @@ import {
   shapeOfMove,
   shuffled,
 } from '../policy.js'
+import {
+  lookaheadFor,
+  makeLookaheadCache,
+  squareSafety,
+  viewAfter,
+} from '../lookahead.js'
+import type { RankProbs, Lookahead, ReplyAttacker, ReplyRisk } from '../lookahead.js'
 import { beliefFor, pBomb, pFlag, priorBelief } from '../belief.js'
 import { informedDeployment } from '../deploy.js'
 import type { BeliefOptions, RankBelief } from '../belief.js'
@@ -301,26 +321,114 @@ export const ARRIVAL_WEIGHT = 0.5
 const HUNT_WEIGHT = 0.09
 /** A 翻明 司令 of ours gets this for making contact — 「移動標靶」, notebook §2.3b. */
 const MOVING_TARGET_WEIGHT = 0.12
-/** A quiet 軍旗 move is discounted this hard even when it gains a square. 攻略 §9. */
+/**
+ * What a 軍旗 move costs when its destination is NOT provably out of reach.
+ *
+ * 攻略 §9's blanket discount, and it is now the EXCEPTION rather than the rule.
+ * It used to price every 軍旗 move, standing in for 「this policy cannot see what
+ * attacks the destination」. That sentence is no longer true — `squareSafety`
+ * answers it exactly, off the engine — so the blanket rate now applies only where
+ * the answer is 「something does」, which is a flight from a threat that is already
+ * worse. Large enough that a flight is never taken for fun; see `FLAG_STEP_COST`
+ * for the priced case, which is most of them.
+ */
 const FLAG_RISK = 0.6
+
+/**
+ * What it costs to move the 軍旗 onto a square NOTHING can reach. CHANGE 2.
+ *
+ * Notebook §15.1: a human parked their 軍旗 on d5 — a 結算格 in the OPPONENT'S
+ * half — from move 27 to the end, collected eleven points off it, and never lost
+ * it, 「因為黑方沒有棋子構得到 d5。風險是可以數的，而它數對了」. Every document in
+ * the project treats the 軍旗 as a pure liability, and §7.1 says the opposite in
+ * one line: 「計分不區分兵種」. It collects rent like anything else.
+ *
+ * So the risk is priced rather than prohibited, and almost all of the price is
+ * paid by the SAFETY GATE, not by this number: the 軍旗 may only land where
+ * nothing reaches, re-asked every ply, and walks straight back out when that
+ * stops being true. What is left for a weight to cover is the residue the gate
+ * cannot see — that safety is a one-ply guarantee about a piece that intends to
+ * stand still, that moving it costs tempo, and that §14.3's badge argument makes
+ * every 軍旗 move a small information leak.
+ *
+ * Sized above `RESTLESSNESS_COST` (0.03 — what any idle move costs) and above one
+ * step of `APPROACH_WEIGHT` (0.08 — what a step towards a 結算格 pays), and far
+ * below one square. That ordering is the doctrine in two inequalities: the 軍旗
+ * takes a 結算格 it can already reach, and it does not go WANDERING towards one,
+ * because a walk is worth about 0.12 of a square and this costs 0.10 of it.
+ *
+ * Swept against the identical file with the income off, 1500 games a cell, both
+ * seats, both boards, against `contest`:
+ *
+ *                中央四格   側翼八格   旗負 (中央/側翼)
+ *   0.02           68.1%      69.2%      3 / 0
+ *   0.04           68.8%      68.5%      3 / 0
+ *   0.10 (this)    69.3%      68.7%      1 / 0
+ *   0.30           68.9%      68.9%      1 / 0   (income switched off in effect)
+ *
+ * Every cell is inside one standard error of every other, so what the sweep
+ * establishes is not that 0.10 wins — it is that the 軍旗 walking about the board
+ * is the part with a cost attached, and that it costs 旗負 rather than win rate.
+ * 0.10 buys the arriving move, which is the one §15.1 describes, and declines the
+ * tour. At 0.30 the doctrine is off: the numbers are the no-income column exactly.
+ */
+export const FLAG_STEP_COST = 0.1
+
+/**
+ * How far ahead the 軍旗 looks before PARKING on a 結算格, in enemy moves.
+ *
+ * One, and the choice is the whole of notebook §14.2 restated for a different
+ * decision, so it is worth being explicit about which way it cuts.
+ *
+ * `squareSafety` will answer at two plies — 「nothing takes it next move, and
+ * nothing is one move away from being able to」 — and at two plies almost nothing
+ * on an opening board qualifies. A single black knight on g8 is one move (g8f6)
+ * from bearing on d5, so the §15.1 park would simply never happen before the
+ * board thins out, which is a way of switching the doctrine off while appearing
+ * to keep it.
+ *
+ * At one ply it parks on a square nothing can take it on RIGHT NOW, and then
+ * re-asks every single ply — which is the thing §15.1 actually describes:
+ * 「風險不是恆定的——它等於『對手有沒有棋子能走到那一格』」. When they spend the move
+ * lining up, we get a move in between, and that move is priced at
+ * `FLAG_LOSS_WEIGHT × winValue` by a term that has been there since §13.3. The
+ * defence that works is the immediate one; §14.1 measured that at 1800 games a
+ * cell and pre-emption at −2 to −4 points.
+ *
+ * What stops one ply from being reckless is not a second ply, it is
+ * `flagHasExit`: the 軍旗 only parks where it can still leave. A tempo is the
+ * price of being wrong, and being unable to pay it is the only failure mode that
+ * a deeper horizon would have caught.
+ */
+export const FLAG_PARK_HORIZON = 1
 
 /**
  * How far ahead the 軍旗 threat search looks, in ENEMY MOVES. §5.3, notebook §13.3.
  *
- * Two, and the ceiling is not a budget — it is where the question stops carrying
- * information. `1` is 「it takes the 軍旗 on its next move」 and `2` is 「it needs
- * one move to line up」, which are exactly the two states worth telling apart. At
- * three, on any board with an open file or diagonal, EVERY enemy slider qualifies
- * against EVERY square: a rook reaches any square on an empty board in two moves,
- * so 「something is three moves from my 軍旗」 is a description of chess, not of a
- * threat. A policy that responded to it would move every ply and never park —
- * which is 攻略 §3's error, bought with 攻略 §9's anxiety.
+ * ONE, and it used to be two. The second ply was computed for every enemy piece
+ * on every gated move and then multiplied by a per-ply decay, which notebook
+ * §14.1 measured at ZERO over 1800 games a cell — so the whole layer was priced
+ * out of the policy while still being paid for in geometry. 「救下軍旗的從來不是
+ * 預判，是立即反應。」
  *
- * Notebook §13.4 makes the same point from the record: 「兩次防守都極其便宜」. The
- * defence that was missing is the one-tempo defence, and one tempo is what a
- * horizon of two sees.
+ * The one thing the second ply was argued to buy — telling a BLOCK from a shuffle
+ * — it does not buy, and the delta is why. `flagDefence` prices `value(now) −
+ * value(after)`, so a block turns 「takes it next move」 into 「does not take it next
+ * move」 and collects the whole `flagLoss` at a horizon of one. What a horizon of
+ * two added was the ability to say the threat was still two away AFTER the block,
+ * which at decay 0 is the same number as saying it is gone.
+ *
+ * At three, on any board with an open file or diagonal, EVERY enemy slider
+ * qualifies against EVERY square: a rook reaches any square on an empty board in
+ * two moves, so 「something is three moves from my 軍旗」 is a description of chess,
+ * not of a threat. That was always the argument against going deeper; §14.1 is
+ * the measurement that it applies at two as well.
+ *
+ * Kept as a named constant because the number is the thing that was measured, and
+ * because CHANGE 2 rests on it: a 軍旗 collecting rent is safe exactly while
+ * nothing reaches its square, re-asked every ply.
  */
-export const FLAG_THREAT_HORIZON = 2
+export const FLAG_THREAT_HORIZON = 1
 
 /**
  * What losing the 軍旗 costs, as a multiple of `winValue`.
@@ -339,43 +447,6 @@ export const FLAG_THREAT_HORIZON = 2
  */
 export const FLAG_LOSS_WEIGHT = 4
 
-/**
- * What a threat one move further away is worth, per ply of distance.
- *
- * ZERO, and that is a measurement rather than a simplification. The policy sees
- * two-ply threats (`flagThreat` reports them, and the report is what tells a block
- * from a shuffle) and does not pay to pre-empt them.
- *
- * The argument for a small positive value is that a two-ply threat might have no
- * answer once it becomes immediate, so buying the tempo early is worth something.
- * The argument against is that a two-ply threat HAS an answer at two plies: they
- * spend a move lining up, we get a move in between, and the position we answer
- * then is one this same term prices at full weight. Reasoning does not settle it.
- * 1800 games a cell, both seats, both boards, against the identical policy with
- * the defence switched off:
- *
- *                       中央四格   側翼八格   旗負 (def / no def)
- *   decay 0.05            48.6%      46.3%     7,4 / 37,69
- *   decay 0.01            50.1%      46.8%     4,6 / 37,68
- *   decay 0  (this)       51.2%      50.8%     7,7 / 35,64
- *
- * The flag-loss column barely moves — the pre-emption was not what was saving the
- * 軍旗, the immediate response was — and the win rate moves by two to four points.
- * So the whole cost of the defence was in the term that was not needed.
- *
- * The mechanism is notebook §11.4's, exactly: a term sized like a decision that
- * is not one. Early on, half the enemy army is two moves from anything, so the
- * term fires in almost every opening position, and it pays for shuffling pieces
- * around one's own back rank at the moment 攻略 §2 says to be taking the centre.
- * `ARRIVAL_WEIGHT` was worth 22 points precisely because nothing else was
- * competing with the walk; this put something back in its way.
- *
- * Kept as a named constant at 0 rather than deleted, because the horizon it
- * scales is real and the number is the thing that was measured. The invariant a
- * test pins is `FLAG_LOSS_WEIGHT × FLAG_THREAT_DECAY < 1` — a non-immediate threat
- * is worth less than one 結算格, which at 0 is true with room to spare.
- */
-export const FLAG_THREAT_DECAY = 0
 
 /**
  * How much of a defence's value the 軍旗 keeps when the 軍旗 itself is the piece
@@ -395,6 +466,85 @@ export const FLAG_THREAT_DECAY = 0
 export const FLAG_FLIGHT_SHARE = 0.6
 
 /**
+ * REPLY — what the opponent's answer costs, per point of the piece committed.
+ *
+ * CHANGE 1, and the sentence it implements is 「a square taken and lost straight
+ * back is worth almost nothing」. Until now every 結算格 this file could reach was
+ * priced at `econ.square` whether the opponent could answer or not, because the
+ * policy was one ply deep and said so in its own header. `pHoldsAfterReply` is
+ * that missing ply.
+ *
+ * ---------------------------------------------------------------------------
+ * The two shapes that made it PASSIVE, which is the point of writing this down
+ * ---------------------------------------------------------------------------
+ *
+ * The obvious implementation is to scale the square by the odds of keeping it:
+ * `gain × (1 − w(1 − pHolds))`. It is wrong, and it is wrong in the exact
+ * direction the change was built to avoid. Measured against the identical file
+ * with the term switched off, 1500 games a cell, both seats, both boards:
+ *
+ *                                    中央四格   側翼八格   平均持格／結算 (A vs B)
+ *   term off (null control)            50.0%      50.0%     3.41 vs 3.41
+ *   scale the square, w = 0.10         50.1%      47.9%     3.38 vs 3.44
+ *   scale the square, w = 0.25         50.1%      47.8%     3.37 vs 3.44
+ *   scale the square, w = 0.50         49.9%      48.2%     3.38 vs 3.45
+ *   scale the square, w = 1.00         48.7%      49.4%     3.37 vs 3.44
+ *   price the piece  (this)            50.7%      49.9%     3.39 vs 3.43
+ *
+ * Two readings, and the second is the useful one. The first: every scaling weight
+ * lost, and lost by the SAME amount, from a tenth to the full value — so the harm
+ * was never the size of the term, it was its sign. The second: 平均持格／結算 went
+ * DOWN, every time, which is the failure this change had to be measured against.
+ * A recentred version (`1 + w(pHolds − n)`, so an unanswerable square gets a
+ * BONUS) was swept over `n` from 0 to 1 and produced the same table; the offset
+ * only rescales every square-gain by a constant and cannot change their order.
+ *
+ * Why it goes passive is short, once seen: a 結算格 the opponent can answer is
+ * contested because they WANT it, so discounting it does not leave the income on
+ * the table — it hands the income to them. The counterfactual to taking a
+ * contested square is not 「take a safe one instead」, it is 「they take this one」,
+ * and a term that only knows what our square is worth cannot see that.
+ *
+ * So this version prices the PIECE instead:
+ *
+ *     cost = REPLY_WEIGHT × (1 − pHoldsAfterReply) × valueOf(our rank) × riskAversion
+ *
+ * which changes WHICH PIECE goes to a contested square and leaves the decision to
+ * go completely alone whenever nothing can answer at all. That is the brief's
+ * 「trades that go somewhere」 and it is also this file's own confessed blind spot,
+ * closed: 「1 ply deep and cannot see a piece hanging」.
+ *
+ * ---------------------------------------------------------------------------
+ * Why the weight is 1, and what the calibration actually says
+ * ---------------------------------------------------------------------------
+ *
+ * At 1 the cost is the honest expected value of hanging the piece, with no fudge
+ * factor, and 0.25 / 0.5 / 1.0 / 1.5 measured 47.2 / 47.8 / 49.9 / 49.9 on
+ * 側翼八格 and 51.0 / 51.1 / 50.7 / 49.0 on 中央四格 — so 1 is the top of both,
+ * and the top is flat.
+ *
+ * It is worth being clear that this is NOT the calibrated frequency. Over 60
+ * games a board, every arrival on a 結算格 was checked one ply later against
+ * whether it was still standing:
+ *
+ *   pHoldsAfterReply = 1     →  100% still there (n = 488 / 230). Exact.
+ *   pHoldsAfterReply < 0.1   →  82% / 78% still there (n = 105 / 155).
+ *
+ * The gate is perfect and the gradient is worth about a fifth of what it claims —
+ * the opponent simply does not spend its move on the recapture most of the time.
+ * A weight of 1 therefore overstates the EXPECTATION by roughly four, and still
+ * measures best, so what this constant is is a DISCRIMINATOR sized by measurement
+ * rather than an expectation derived from one. Said plainly because the two are
+ * easy to confuse and only one of them is supported here.
+ *
+ * The frequency discipline (§11.4, §14.2) is satisfied structurally rather than by
+ * being small: `replyCostOf` is evaluated only for moves that gain or contest a
+ * 結算格 — about 0.8 candidates a ply — and is exactly zero for every other move
+ * and for every square nothing can reach.
+ */
+export const REPLY_WEIGHT = 1
+
+/**
  * What it costs to move a piece for no reason — 攻略 §3, 「停下來，不要一直走」.
  *
  * Without it every idle shuffle scores exactly 0, ties with a pass, and lands
@@ -408,8 +558,12 @@ export const FLAG_FLIGHT_SHARE = 0.6
  * Smaller than one step of `APPROACH_WEIGHT`, so a move that actually goes
  * somewhere still beats standing still; larger than zero, so one that does not,
  * does not.
+ *
+ * Exported for the same reason `MIXING_BAND_SQUARES` is: what a test can pin is
+ * the RELATIONSHIP between this and `FLAG_STEP_COST`, and a relationship needs
+ * both sides of it visible.
  */
-const RESTLESSNESS_COST = 0.03
+export const RESTLESSNESS_COST = 0.03
 
 /**
  * THE MIXING BAND — the named epsilon, and the reason it exists.
@@ -464,12 +618,13 @@ export const MIXING_BAND_SQUARES = 0.02
 /**
  * A distribution over 兵種 for one enemy piece.
  *
- * Structurally `RankBelief` with the fields optional, so the valuation functions
- * below can also be handed a hand-written `{ flag: 1 }` — which is how the tests
- * pin the exceptions of §5.4 and §7④① without having to manufacture a position
- * that produces them.
+ * `RankBelief` with the fields optional, so the valuation functions below can
+ * also be handed a hand-written `{ flag: 1 }` — which is how the tests pin the
+ * exceptions of §5.4 and §7④① without having to manufacture a position that
+ * produces them. Re-exported from `../lookahead.js` rather than declared twice:
+ * the same distribution crosses that boundary in both directions.
  */
-export type RankProbs = Readonly<Partial<Record<Rank, number>>>
+export type { RankProbs } from '../lookahead.js'
 
 /** `PieceId → P(兵種)`. Defined for every enemy piece, alive or dead. */
 export type BeliefLookup = (id: PieceId) => RankBelief
@@ -759,241 +914,74 @@ export function contactEV(attacker: Rank, probs: RankProbs, terms: ContactTerms)
 }
 
 // ---------------------------------------------------------------------------
-// 軍旗 defence —「有東西打得到我的軍旗嗎」
-//
-// The defect notebook §13.3 names, and the only one in the file that is not a
-// question of price. §5.3: 「軍旗以任何方式離開棋盤，該方立即判負」. Game 10, ply
-// 78: White's 軍旗 had sat on d1 all game with the d-file empty and Black's rook
-// on d5, White passed thirteen times at 39 of 40 points, and `d5d1` ended it.
-// Any of three moves won instead — a piece to d2/d3/d4, or the queen anywhere off
-// the file. The policy had no term that could ask.
+// REACH — what the opponent could do next, asked of `lookahead.ts`
 //
 // ---------------------------------------------------------------------------
-// Why this is legitimate, and why it is not a second move generator
+// There is exactly one implementation of how pieces move, and it is not here
 // ---------------------------------------------------------------------------
 //
-// Everything below is CARRIER LAYER. §1 makes 載體層 public to both sides, and
-// occupancy is on the board in front of everyone, so 「which enemy pieces have a
-// line to this square」 is a fact a 公開觀戰者 holds — the strictest viewer in §10.1
-// — and computing it discloses nothing. No 兵種 is read, ours or theirs; the
-// belief is not consulted; a 排長 and a 司令 on d5 are the same threat, because
-// they take the 軍旗 identically (§2 一律大吃小, and 階級 10 is the floor).
+// This section used to hand-roll carrier geometry: ray tables, knight offsets, a
+// pawn attack relation, a private `between()`. It was a SECOND move generator
+// living next to the engine's, and the file argued at length that it was allowed
+// to exist because `view.legalMoves` carries only our own moves. The premise was
+// true and the conclusion was wrong — the answer was a missing export, not a
+// second copy.
 //
-// It does mean deriving ENEMY reach from geometry, which `view.legalMoves` cannot
-// give us — that list is ours alone, by construction. `policy.ts`'s rule is that a
-// policy never generates ITS OWN moves, because the engine already did and a
-// second implementation would be a second set of bugs; nothing here is ever
-// offered as a move this side may play. It is a valuation of the opponent's reach
-// and is used for no other purpose.
+// `@xiyang/rules` now provides the bottom half (`carrierMoves` /
+// `reachableSquares`, legal moves for EITHER side from a redacted `ViewerState`)
+// and `../lookahead.js` the top half (`replyRisk` / `squareSafety`, those moves
+// priced against a belief). Both are sound for the reason gamebook §1 gives:
+// 載體層 decides how a piece MOVES and 兵種層 decides what it BEATS, 附錄 A
+// requires the legal move set to be identical whatever 兵種 a piece carries, and
+// `publicmoves.test.ts` proves the two agree exactly over twelve seeds. So the
+// opponent's move list is public information, derived by the engine, with no
+// 兵種 read anywhere.
 //
-// Three geometric facts that are easy to get wrong and are each written out below:
+// Everything the old geometry got right, the engine gets right for free, and the
+// three facts the old comment had to warn about stop being facts anyone has to
+// remember:
 //
-//   · a pawn CAPTURES diagonally and forward only (§3), so the square it pushes
-//     to is never a square it threatens. A pawn in front of the 軍旗 is not a
-//     threat; a pawn diagonally behind it is.
-//   · EN PASSANT (§4.2) is the one capture whose 接觸格 ≠ 目的格. If the 軍旗 rides
-//     a pawn and that pawn DOUBLE-STEPS past an enemy pawn, it can be taken by a
-//     capture that lands on the square it skipped. So a 軍旗 double-step has to be
-//     tested against the skipped square, not against where the flag ends up.
-//   · a slider is stopped by whatever stands between, which is what makes BLOCKING
-//     an answer at all — and a block only buys a tempo, because the blocker can be
-//     captured. That shows up here as an immediate threat becoming a two-ply one,
-//     which is most of the value and honestly not all of it.
+//   · a pawn PUSHES onto an empty square and CAPTURES diagonally. Asking 「what
+//     could take the piece standing here」 answers this correctly by construction,
+//     because the square is occupied: the push is not generated and the diagonal
+//     capture is. It is also why `squareSafety` puts a probe piece on an empty
+//     square rather than reading an attack map — a 軍旗 standing in FRONT of a
+//     pawn is safe from it, and the map says otherwise.
+//   · EN PASSANT (§4.2) — the one capture whose 接觸格 ≠ 目的格 — is generated by
+//     `moves.ts` off the public log, so a 軍旗 riding a pawn that has just
+//     double-stepped is seen without a private window calculation. It arrives
+//     here as `ReplyAttacker.enPassant`.
+//   · a slider is stopped by whatever stands between, so BLOCKING is an answer.
+//     Blocks are not enumerated here at all; a block is found by pricing the
+//     position it produces, which is the only way that stays correct when the
+//     blocker itself is capturable.
 //
-// The search is deliberately shallow (see `FLAG_THREAT_HORIZON`) and static: it
-// assumes nothing else on the board moves. Both directions of that error are
-// cheap. It over-counts, in that it lets an enemy piece capture its way to the
-// 軍旗 without pricing the contact it would have to win; over-caution about the
-// one piece whose loss ends the game is the error to prefer.
+// What remains legitimate about asking at all: §1 makes 載體層 public to both
+// sides and occupancy is on the board in front of everyone, so 「which enemy
+// pieces have a line to this square」 is a fact the 公開觀戰者 holds — the
+// strictest viewer in §10.1. No 兵種 is read to compute the LIST; a 排長 and a
+// 司令 on d5 are the same threat against a 軍旗, because they take it identically
+// (§2 一律大吃小, and 階級 10 is the floor). The odds attached to each entry come
+// from `beliefFor`, which is itself a function of the public log. Nothing here is
+// ever offered as a move THIS side may play; `view.legalMoves` remains the only
+// authority on that.
 // ---------------------------------------------------------------------------
-
-type Step = readonly [number, number]
-
-const ROOK_DIRS: readonly Step[] = [[0, 1], [1, 0], [0, -1], [-1, 0]]
-const BISHOP_DIRS: readonly Step[] = [[1, 1], [1, -1], [-1, -1], [-1, 1]]
-const QUEEN_DIRS: readonly Step[] = [...ROOK_DIRS, ...BISHOP_DIRS]
-const KNIGHT_STEPS: readonly Step[] = [
-  [1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2],
-]
-
-type Occ = readonly (ViewerPiece | undefined)[]
-
-/** The rays a sliding carrier travels on, or null for the three that do not slide. */
-function raysOf(carrier: Carrier): readonly Step[] | null {
-  switch (carrier) {
-    case 'rook': return ROOK_DIRS
-    case 'bishop': return BISHOP_DIRS
-    case 'queen': return QUEEN_DIRS
-    default: return null
-  }
-}
-
-/** 'rook' / 'bishop' when the two squares share a line, else null. */
-function alignment(a: Square, b: Square): 'rook' | 'bishop' | null {
-  if (a === b) return null
-  const df = fileOf(b) - fileOf(a)
-  const dr = rankOf(b) - rankOf(a)
-  if (df === 0 || dr === 0) return 'rook'
-  if (Math.abs(df) === Math.abs(dr)) return 'bishop'
-  return null
-}
-
-/** Squares strictly between two ALIGNED squares, ordered from `a` towards `b`. */
-function between(a: Square, b: Square): Square[] {
-  const df = Math.sign(fileOf(b) - fileOf(a))
-  const dr = Math.sign(rankOf(b) - rankOf(a))
-  const out: Square[] = []
-  let f = fileOf(a) + df
-  let r = rankOf(a) + dr
-  while (inBounds(f, r) && makeSquare(f, r) !== b) {
-    out.push(makeSquare(f, r))
-    f += df
-    r += dr
-  }
-  return out
-}
-
-function clearBetween(occ: Occ, a: Square, b: Square): boolean {
-  return between(a, b).every((sq) => occ[sq] === undefined)
-}
 
 /**
- * Would a `carrier` of `color` standing on `from` capture whatever is on `target`?
+ * One enemy piece with a capture of our 軍旗 available on its next move.
  *
- * Attack geometry, not move geometry: for every carrier except the pawn they are
- * the same relation, and for the pawn they are emphatically not (§3, §4.2).
+ * `ReplyAttacker` unchanged, because the 軍旗 question is a special case of the
+ * general one and giving it a private shape would only hide that.
  */
-function attacksSquare(
-  occ: Occ,
-  from: Square,
-  carrier: Carrier,
-  color: Color,
-  target: Square,
-): boolean {
-  if (from === target) return false
-  const df = Math.abs(fileOf(target) - fileOf(from))
-  const dr = rankOf(target) - rankOf(from)
-  switch (carrier) {
-    case 'pawn':
-      // Diagonal, forward, one square. A pawn NEVER threatens the square ahead of
-      // it, which is the single most common way to misread a pawn wall.
-      return df === 1 && dr === forwardDir(color)
-    case 'knight':
-      return (df === 1 && Math.abs(dr) === 2) || (df === 2 && Math.abs(dr) === 1)
-    case 'king':
-      return df <= 1 && Math.abs(dr) <= 1
-    default: {
-      const line = alignment(from, target)
-      if (line === null) return false
-      if (carrier === 'rook' && line !== 'rook') return false
-      if (carrier === 'bishop' && line !== 'bishop') return false
-      return clearBetween(occ, from, target)
-    }
-  }
-}
-
-/**
- * Every square this enemy carrier could move to right now — the §3 geometry, with
- * occupancy respected and its own colour blocking it.
- *
- * En passant is left out of THIS list on purpose: it can only ever be the capture
- * itself, never a setup move, and the capture is tested separately where the
- * 接觸格 ≠ 目的格 distinction actually matters.
- */
-function destinationsOf(occ: Occ, from: Square, piece: ViewerPiece): Square[] {
-  const out: Square[] = []
-  const color = piece.color
-  const f0 = fileOf(from)
-  const r0 = rankOf(from)
-
-  const consider = (f: number, r: number): void => {
-    if (!inBounds(f, r)) return
-    const sq = makeSquare(f, r)
-    if (occ[sq]?.color === color) return
-    out.push(sq)
-  }
-
-  const rays = raysOf(piece.carrier)
-  if (rays !== null) {
-    for (const [df, dr] of rays) {
-      let f = f0 + df
-      let r = r0 + dr
-      while (inBounds(f, r)) {
-        const sq = makeSquare(f, r)
-        const other = occ[sq]
-        if (other) {
-          if (other.color !== color) out.push(sq)
-          break
-        }
-        out.push(sq)
-        f += df
-        r += dr
-      }
-    }
-    return out
-  }
-
-  if (piece.carrier === 'knight') {
-    for (const [df, dr] of KNIGHT_STEPS) consider(f0 + df, r0 + dr)
-    return out
-  }
-  if (piece.carrier === 'king') {
-    for (const [df, dr] of QUEEN_DIRS) consider(f0 + df, r0 + dr)
-    return out
-  }
-
-  // pawn (§3): pushes onto EMPTY squares, captures onto occupied ones. Two
-  // different relations, which is the whole point of this function existing.
-  const dir = forwardDir(color)
-  if (inBounds(f0, r0 + dir)) {
-    const one = makeSquare(f0, r0 + dir)
-    if (occ[one] === undefined) {
-      out.push(one)
-      if (r0 === pawnHomeRank(color) && inBounds(f0, r0 + 2 * dir)) {
-        const two = makeSquare(f0, r0 + 2 * dir)
-        if (occ[two] === undefined) out.push(two)
-      }
-    }
-  }
-  for (const df of [-1, 1]) {
-    if (!inBounds(f0 + df, r0 + dir)) continue
-    const sq = makeSquare(f0 + df, r0 + dir)
-    const other = occ[sq]
-    if (other && other.color !== color) out.push(sq)
-  }
-  return out
-}
-
-/** One enemy piece with a route to our 軍旗, and how long the route is. */
-export interface FlagThreat {
-  /** where the threatening piece stands now */
-  readonly from: Square
-  /** its 載體 — public (§1), and all this model ever reads */
-  readonly carrier: Carrier
-  /**
-   * Enemy MOVES until the 軍旗 leaves the board. `1` is a capture available on
-   * their very next move; `2` is one move to line up and the capture after it.
-   */
-  readonly plies: number
-  /**
-   * The squares strictly between it and the 軍旗 — i.e. where a blocker goes.
-   * Non-empty only for an immediate threat by a sliding 載體; a knight, a king and
-   * a pawn cannot be blocked at all.
-   */
-  readonly line: readonly Square[]
-  /** the capture would be an en passant (§4.2), so 接觸格 ≠ 目的格 */
-  readonly enPassant: boolean
-}
+export type FlagThreat = ReplyAttacker
 
 export interface FlagThreatReport {
   /** our 軍旗's square, or null when this view does not show one on the board */
   readonly flagSquare: Square | null
-  /** every threat inside {@link FLAG_THREAT_HORIZON}, nearest first then by square */
+  /** everything that could take it next move, most dangerous first */
   readonly threats: readonly FlagThreat[]
-  /** the nearest of them */
+  /** the first of them */
   readonly nearest: FlagThreat | null
-  /** the nearest threat's distance in enemy moves; Infinity when there is none */
-  readonly plies: number
   /** somebody can take the 軍旗 on their very next move */
   readonly immediate: boolean
 }
@@ -1002,178 +990,45 @@ const NO_THREAT: FlagThreatReport = Object.freeze({
   flagSquare: null,
   threats: Object.freeze([]) as readonly FlagThreat[],
   nearest: null,
-  plies: Number.POSITIVE_INFINITY,
   immediate: false,
 })
 
-function reportOf(flagSquare: Square | null, threats: FlagThreat[]): FlagThreatReport {
-  threats.sort((a, b) => (a.plies !== b.plies ? a.plies - b.plies : a.from - b.from))
-  const nearest = threats[0] ?? null
+function reportOf(flagSquare: Square, threats: readonly FlagThreat[]): FlagThreatReport {
   return {
     flagSquare,
     threats,
-    nearest,
-    plies: nearest === null ? Number.POSITIVE_INFINITY : nearest.plies,
-    immediate: nearest !== null && nearest.plies === 1,
+    nearest: threats[0] ?? null,
+    immediate: threats.length > 0,
   }
 }
 
-/**
- * How many moves this enemy piece needs before the 軍旗 comes off the board.
- *
- * `epSkipped` is the en-passant window (§4.2), non-null only when our 軍旗 rides a
- * pawn that has just double-stepped: an enemy pawn takes it by capturing onto the
- * SKIPPED square, so the target of the diagonal is not the flag's square at all.
- */
-function threatFrom(
-  occ: (ViewerPiece | undefined)[],
-  from: Square,
-  piece: ViewerPiece,
-  flagSquare: Square,
-  epSkipped: Square | null,
-): FlagThreat | null {
-  const { carrier, color } = piece
-
-  if (attacksSquare(occ, from, carrier, color, flagSquare)) {
-    const line = raysOf(carrier) === null ? [] : between(from, flagSquare)
-    return { from, carrier, plies: 1, line, enPassant: false }
-  }
-  if (
-    epSkipped !== null
-    && carrier === 'pawn'
-    && attacksSquare(occ, from, 'pawn', color, epSkipped)
-  ) {
-    return { from, carrier, plies: 1, line: [], enPassant: true }
-  }
-  if (FLAG_THREAT_HORIZON < 2) return null
-
-  // One move to line up. The piece has LEFT `from`, so its own origin no longer
-  // blocks the ray it is about to shoot down — a rook stepping sideways off the
-  // file it wants is the commonest shape of this and would be missed otherwise.
-  const origin = occ[from]
-  occ[from] = undefined
-  try {
-    for (const to of destinationsOf(occ, from, piece)) {
-      if (attacksSquare(occ, to, carrier, color, flagSquare)) {
-        return { from, carrier, plies: 2, line: [], enPassant: false }
-      }
-    }
-  } finally {
-    occ[from] = origin
-  }
-  return null
-}
-
-function threatsOn(
-  occ: (ViewerPiece | undefined)[],
-  flagSquare: Square,
-  color: Color,
-  epSkipped: Square | null,
-): FlagThreatReport {
-  const threats: FlagThreat[] = []
-  for (let sq = 0; sq < 64; sq++) {
-    const piece = occ[sq]
-    if (!piece || piece.color === color) continue
-    const threat = threatFrom(occ, sq, piece, flagSquare, epSkipped)
-    if (threat !== null) threats.push(threat)
-  }
-  return reportOf(flagSquare, threats)
-}
-
-/** Our own 軍旗's square. Ours to read: §10.1 grants a player its whole army. */
-function ownFlagSquare(view: ViewerState, color: Color): Square | null {
-  let square: Square | null = null
-  let id = ''
+/** Our own 軍旗, if this view shows one on the board. §10.1 grants us our whole army. */
+function ownFlag(view: ViewerState, color: Color): ViewerPiece | null {
+  let best: ViewerPiece | null = null
   for (const p of view.pieces) {
     if (p.color !== color || p.square === null || p.rank !== 'flag') continue
     // Lowest id wins, so a hand-built view with two never depends on array order.
-    if (square === null || p.id < id) {
-      square = p.square
-      id = p.id
-    }
+    if (best === null || p.id < best.id) best = p
   }
-  return square
+  return best
 }
 
 /**
- * The en-passant window against our own 軍旗, off the public log (§4.2).
+ * Can anything take our 軍旗 on its next move, and from where? §5.3, notebook §13.3.
  *
- * In practice this is always null when a policy is asked to move: the window is
- * one ply wide and opens on OUR double step, so on our own turn the last entry is
- * the opponent's. It is computed anyway because `flagThreat` is a statement about
- * a position rather than about a turn, and because the same window IS reachable —
- * by the move this policy is about to consider (see `threatAfter`).
- */
-function epWindowFor(view: ViewerState, color: Color, flagSquare: Square): Square | null {
-  const last = view.log[view.log.length - 1]
-  if (!last || last.color !== color) return null
-  if (last.move.kind !== 'move' || last.combat) return null
-  const { from, to } = last.move
-  if (to !== flagSquare) return null
-  if (fileOf(from) !== fileOf(to)) return null
-  if (rankOf(from) !== pawnHomeRank(color)) return null
-  if (rankOf(to) !== pawnDoubleStepRank(color)) return null
-  const mover = view.pieces.find((p) => p.square === to)
-  if (!mover || mover.color !== color || mover.carrier !== 'pawn') return null
-  return (from + to) / 2
-}
-
-/**
- * Can anything reach our 軍旗, from where, and in how many of its moves?
- *
- * The public entry point, and the whole of the model. Pure carrier layer, pure
- * `ViewerState`, no 兵種 read anywhere — see the section header for why that is
- * both sufficient and permitted.
+ * Horizon ONE, and that is a measurement rather than a budget — see
+ * {@link FLAG_THREAT_HORIZON}. The belief is the 數量表 prior rather than
+ * `beliefFor`'s, which costs nothing and loses nothing: against 階級 10 every
+ * 兵種 wins, so the LIST is what the defence reads and the odds on it are 1.
+ * Keeping it prior-only also keeps this function pure and free of the seeded
+ * stream, so a test can ask it about a hand-built position.
  */
 export function flagThreat(view: ViewerState, color: Color): FlagThreatReport {
-  const flagSquare = ownFlagSquare(view, color)
-  if (flagSquare === null) return NO_THREAT
-  const occ = occupancy(view)
-  return threatsOn(occ, flagSquare, color, epWindowFor(view, color, flagSquare))
-}
-
-/**
- * Squares whose occupancy can change the IMMEDIATE picture — the gate.
- *
- * Every square from which something could bear on the 軍旗: the eight rays walked
- * out to and including the first piece on each (a slider beyond a blocker cannot
- * see the flag, and the blocker's own square is exactly where a line opens when it
- * leaves), plus the knight jumps, plus the two squares an enemy pawn captures from.
- *
- * This is what makes the per-move recomputation affordable, and it is EXACT for
- * the case that matters. A quiet move can only create a new immediate threat by
- * vacating a square that was blocking a ray — such a square is in this set by
- * construction — and can only answer one by landing between, capturing the hunter,
- * or moving the 軍旗. Everything else provably leaves the one-ply picture alone.
- * (Two-ply changes CAN slip past the gate: a piece of ours far from the flag can
- * unblock a route an enemy slider would use to line up. That is a miss and never a
- * false alarm, and a two-ply threat is priced at a twentieth of an immediate one.)
- */
-function flagLinesOf(occ: Occ, flagSquare: Square, color: Color): Set<Square> {
-  const out = new Set<Square>()
-  const f0 = fileOf(flagSquare)
-  const r0 = rankOf(flagSquare)
-  for (const [df, dr] of QUEEN_DIRS) {
-    let f = f0 + df
-    let r = r0 + dr
-    while (inBounds(f, r)) {
-      const sq = makeSquare(f, r)
-      out.add(sq)
-      if (occ[sq] !== undefined) break
-      f += df
-      r += dr
-    }
-  }
-  for (const [df, dr] of KNIGHT_STEPS) {
-    if (inBounds(f0 + df, r0 + dr)) out.add(makeSquare(f0 + df, r0 + dr))
-  }
-  // Where an enemy pawn stands to capture onto this square — its own forward
-  // direction is the opposite of ours, so it comes from the rank in front of us.
-  const theirDir = forwardDir(opposite(color))
-  for (const df of [-1, 1]) {
-    if (inBounds(f0 + df, r0 - theirDir)) out.add(makeSquare(f0 + df, r0 - theirDir))
-  }
-  return out
+  const flag = ownFlag(view, color)
+  if (flag === null || flag.square === null) return NO_THREAT
+  const prior = priorBelief(view)
+  const safety = squareSafety(view, color, () => prior, flag.square, 1)
+  return reportOf(flag.square, safety.attackers)
 }
 
 // ---------------------------------------------------------------------------
@@ -1198,18 +1053,29 @@ interface Ctx {
   wanted: readonly Square[]
   winValue: number
   valueOf: (rank: Rank) => number
-  /** square → piece, this ply. Shared with the 軍旗 threat model, which reads it a lot. */
+  /** square → piece, this ply. */
   occ: readonly (ViewerPiece | undefined)[]
+  /**
+   * `replyRisk` / `squareSafety`, bound to this position, this belief and one
+   * per-ply memo. The single most reused object in the file: it is the 軍旗 threat
+   * report, it is CHANGE 1's 「could they take it straight back」, and it is
+   * CHANGE 2's 「can anything get to that square at all」.
+   */
+  look: Lookahead
   /** our own 軍旗's square, or null if this view does not show one */
   flagSquare: Square | null
-  /** can anything reach it, and how soon (§5.3, notebook §13.3) */
+  /** can anything take it next move (§5.3, notebook §13.3) */
   threat: FlagThreatReport
-  /** the squares whose occupancy can change that answer — see `flagLinesOf` */
-  threatLines: ReadonlySet<Square>
   /** what losing the 軍旗 costs, in points. `FLAG_LOSS_WEIGHT × winValue`. */
   flagLoss: number
-  /** per-ply discount on a threat that is not yet immediate */
-  threatDecay: number
+  /** CHANGE 1 — how much of a 結算格's value rides on surviving the answer */
+  replyWeight: number
+  /** CHANGE 2 — may the 軍旗 be an income candidate at all (§15.1) */
+  flagIncome: boolean
+  /** what one 軍旗 step costs, as a fraction of a 結算格 */
+  flagStep: number
+  /** enemy moves the 軍旗 looks ahead before parking on a 結算格 */
+  flagParkHorizon: number
 }
 
 function chebyshev(a: Square, b: Square): number {
@@ -1291,10 +1157,42 @@ function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolic
     return weight * PIECE_VALUE_IN_SQUARES * econ.square
   }
 
-  const flagSquare = opts.flagDefence === false ? null : ownFlagSquare(view, color)
-  const threat = flagSquare === null
+  const defending = opts.flagDefence !== false
+
+  // ONE memo per ply, and `lookahead.ts` keys it on the view OBJECT — the harness
+  // hands a policy a fresh deep copy each ply, so a stale entry cannot survive
+  // into the next position even if this were held longer.
+  //
+  // `gate: 'all'`, and it is the most expensive decision in this file: it doubles
+  // the policy's running time, from 4.6s to 9.4s per 400 games. It buys the 軍旗.
+  // The narrower gates are built for the INCOME question — 「does this move touch a
+  // 結算格 or open a line onto one」 — and §5.3 is not an income question: a quiet
+  // move at the other end of the board can vacate the square that was blocking a
+  // rook, and `needsReplyAnalysis` only looks for that while we are already
+  // holding income. Measured over 1000 games a cell, both boards, one variable:
+  //
+  //     gate        中央四格 旗負   側翼八格 旗負   time
+  //     income            6              5          30s
+  //     exposed           6              3          42s
+  //     all (this)        2              0          80s
+  //
+  // Two of those columns are the same defence §14.1 spent 1800 games a cell
+  // establishing, so paying double for the move list is the cheap half of it.
+  const look = lookaheadFor(view, color, belief, {
+    gate: opts.replyGate ?? 'all',
+    rankValue: value,
+    squareValue: econ.square,
+    cache: makeLookaheadCache(),
+  })
+
+  // The 軍旗 report, off the SAME memo — `flagThreat` would answer identically but
+  // would pay for a second enemy move generation on a position this ply has
+  // already generated. The belief differs (this one is `beliefFor`'s, that one the
+  // 數量表 prior) and the answer cannot: against 階級 10 the list is the whole of it.
+  const flag = defending ? ownFlag(view, color) : null
+  const threat = flag?.square == null
     ? NO_THREAT
-    : threatsOn(occ.slice(), flagSquare, color, epWindowFor(view, color, flagSquare))
+    : reportOf(flag.square, look.squareSafety(flag.square, 1).attackers)
 
   return {
     view,
@@ -1312,11 +1210,14 @@ function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolic
     winValue,
     valueOf: value,
     occ,
-    flagSquare,
+    look,
+    flagSquare: defending ? threat.flagSquare : null,
     threat,
-    threatLines: flagSquare === null ? new Set<Square>() : flagLinesOf(occ, flagSquare, color),
     flagLoss: (opts.flagLossWeight ?? FLAG_LOSS_WEIGHT) * winValue,
-    threatDecay: opts.flagThreatDecay ?? FLAG_THREAT_DECAY,
+    replyWeight: opts.replyAware === false ? 0 : opts.replyWeight ?? REPLY_WEIGHT,
+    flagIncome: defending && opts.flagIncome !== false,
+    flagStep: opts.flagStepCost ?? FLAG_STEP_COST,
+    flagParkHorizon: opts.flagParkHorizon ?? FLAG_PARK_HORIZON,
   }
 }
 
@@ -1449,54 +1350,9 @@ function movingTargetBonus(ctx: Ctx, shape: MoveShape, mover: ViewerPiece | unde
 // 軍旗 defence, as a move term
 // ---------------------------------------------------------------------------
 
-/** Points at stake when the nearest threat is `plies` enemy moves away. */
-function threatValue(ctx: Ctx, plies: number): number {
-  if (!Number.isFinite(plies) || plies > FLAG_THREAT_HORIZON) return 0
-  return ctx.flagLoss * Math.pow(ctx.threatDecay, plies - 1)
-}
-
-/** Would this move relocate our 軍旗 by a double step, opening an §4.2 window? */
-function flagDoubleStep(ctx: Ctx, shape: MoveShape): Square | null {
-  if (ctx.flagSquare === null) return null
-  for (const [id, to] of shape.relocations) {
-    const piece = ctx.byId.get(id)
-    if (!piece || piece.square !== ctx.flagSquare || piece.carrier !== 'pawn') continue
-    if (rankOf(piece.square) !== pawnHomeRank(ctx.color)) continue
-    if (fileOf(to) !== fileOf(piece.square)) continue
-    if (rankOf(to) !== pawnDoubleStepRank(ctx.color)) continue
-    return (piece.square + to) / 2
-  }
-  return null
-}
-
-/**
- * The threat picture after this move, on the position the move would produce.
- *
- * Optimistic about a contact in exactly the way `heldScoringAfter` is: the
- * attacker is assumed to survive and occupy. The caller pays for that assumption
- * by scaling the resulting credit by the odds it holds (§4.1 — a losing attacker
- * never enters the target square, so a block that loses is not a block).
- */
-function threatAfter(ctx: Ctx, shape: MoveShape): FlagThreatReport {
-  if (ctx.flagSquare === null) return NO_THREAT
-  const occ = ctx.occ.slice()
-
-  let flagSquare = ctx.flagSquare
-  for (const [id] of shape.relocations) {
-    const piece = ctx.byId.get(id)
-    if (piece?.square != null) occ[piece.square] = undefined
-  }
-  // The 接觸格 is not always the 目的格 (§4.2), so the victim is cleared by ITS
-  // square rather than by where we land.
-  if (shape.contact?.square != null) occ[shape.contact.square] = undefined
-  for (const [id, to] of shape.relocations) {
-    const piece = ctx.byId.get(id)
-    if (!piece) continue
-    occ[to] = piece
-    if (piece.square === ctx.flagSquare) flagSquare = to
-  }
-
-  return threatsOn(occ, flagSquare, ctx.color, flagDoubleStep(ctx, shape))
+/** Points at stake in a threat report. §5.3 — the whole game, or nothing. */
+function threatValue(ctx: Ctx, immediate: boolean): number {
+  return immediate ? ctx.flagLoss : 0
 }
 
 /**
@@ -1511,23 +1367,24 @@ function threatAfter(ctx: Ctx, shape: MoveShape): FlagThreatReport {
  * vacates a blocking square, or a 軍旗 that steps somewhere still covered, prices
  * as the negative it is.
  *
- * The gate is `threatLines`: for every other move the one-ply picture provably
- * cannot have changed, and the delta is zero without recomputing anything.
+ * `risk.exposed` is what makes the second half work without a gate of our own.
+ * It lists every piece of ours the opponent could hit AFTER the move — not just
+ * the one that moved — with `isFlag` set on the one that matters, so a rook
+ * shuffling off the d-file three squares from the 軍旗 is priced by the same
+ * lookup as the 軍旗 stepping out of the way itself. The old version had to reason
+ * its way to a gate for exactly that case and could still miss a discovered line.
  */
-function flagDefence(ctx: Ctx, shape: MoveShape): number {
+function flagDefence(ctx: Ctx, shape: MoveShape, risk: ReplyRisk): number {
   if (ctx.flagSquare === null) return 0
+  // `analysed: false` means 「not asked」 and MUST NOT be read as 「nothing reaches
+  // it」. Read that way it inverts the term completely: with the 軍旗 already under
+  // fire, every unanalysed move scores a full `flagLoss` for a defence it does not
+  // perform. Measured, on the way to this line — 1000 games with the gate narrowed
+  // to `income` lost 6 and 5 軍旗 against 2 and 0 for the gate this ships with.
+  if (!risk.analysed) return 0
 
-  let gated = shape.contact !== undefined || movesFlag(ctx, shape)
-  if (!gated) {
-    for (const [id, to] of shape.relocations) {
-      const piece = ctx.byId.get(id)
-      if (piece?.square != null && ctx.threatLines.has(piece.square)) gated = true
-      if (ctx.threatLines.has(to)) gated = true
-    }
-  }
-  if (!gated) return 0
-
-  const delta = threatValue(ctx, ctx.threat.plies) - threatValue(ctx, threatAfter(ctx, shape).plies)
+  const after = risk.exposed.some((e) => e.isFlag && e.attackers.length > 0)
+  const delta = threatValue(ctx, ctx.threat.immediate) - threatValue(ctx, after)
   if (delta <= 0) return delta
 
   // 附錄 A at the policy layer — see `FLAG_FLIGHT_SHARE`. Only a move that
@@ -1561,7 +1418,153 @@ function defenceCredit(ctx: Ctx, defence: number, attacker: Rank, contact: Viewe
   const odds = branchOdds(attacker, ctx.belief(contact.id))
   const hunter = ctx.threat.threats.some((t) => t.from === contact.square)
   const survives = hunter ? odds.win + odds.mutual : odds.win
-  return defence * survives + threatValue(ctx, ctx.threat.plies) * odds.flagWin
+  return defence * survives + threatValue(ctx, ctx.threat.immediate) * odds.flagWin
+}
+
+// ---------------------------------------------------------------------------
+// 軍旗 income (§7.1, notebook §15.1) — the 軍旗 as a piece that collects rent
+//
+// 「所有文件都把軍旗當成純負債」 (§15.1), and §7.1 says 「計分不區分兵種」 in the
+// same breath. Game 11's white player parked theirs on d5 — a 結算格 in BLACK's
+// half — from move 27 to the end and banked eleven points, and it survived for a
+// reason that is completely computable: 「黑方沒有棋子構得到 d5」.
+//
+// The doctrine here is that whole finding and nothing more than it:
+//
+//   · the 軍旗 may stand on a 結算格 that nothing can take it on next move,
+//   · which is re-asked from scratch every ply, because it decays as they develop,
+//   · and the moment it stops being true the 軍旗 walks straight back out, at
+//     `FLAG_LOSS_WEIGHT × winValue` — a price nothing else in the file can match.
+//
+// Note the FORM of the gate, because getting it wrong is notebook §14.2 with a
+// new name. It is a BOOLEAN — 「nothing can get to that square」 is a fact about
+// the position, and a fact is safe to act on where a small continuous weight on
+// the same fact is not. §14.2 measured the weight version at −2 to −4 points of
+// win rate, and there is not one anywhere in this section.
+//
+// Two absolutes are untouched by any of it. It never moves the 軍旗 onto an
+// occupied square (§5.3 — that is a resignation, not a bad move), and it never
+// leaves it where something can take it (§14). Both are filters, not weights.
+//
+// The second-order argument, which is §4.5b's for the 工兵 with the stakes moved:
+// a 爆裂物 cannot evict either of them (§5.4), so the cheapest eviction in the
+// game does not work on this square. What CAN evict it is any 兵種 at all, since
+// 階級 10 is the floor — and that is exactly what the safety gate is watching for.
+// ---------------------------------------------------------------------------
+
+/**
+ * Where this move puts the 軍旗, when it is the 軍旗 that moves.
+ *
+ * Castling relocates two pieces and one of them may be the 軍旗 (§5.3 — 王車易位
+ * 不構成離開棋盤), so the destination is looked up by id rather than assumed.
+ */
+function flagDestination(ctx: Ctx, shape: MoveShape): Square | null {
+  for (const [id, to] of shape.relocations) if (ctx.flagIds.has(id)) return to
+  return null
+}
+
+/**
+ * Can the 軍旗 get OUT of the square it is about to stand on?
+ *
+ * The one hole the safety gate leaves open. 「Nothing reaches it」 is re-asked
+ * every ply and answered in time — but only if there is somewhere to go when the
+ * answer changes, and a 軍旗 may not answer by capturing (§5.3) or by trading. A
+ * 軍旗 walked into a corner where every exit is covered has not taken a priced
+ * risk, it has taken an unpriced one, and 攻略 §3's park filter will keep it
+ * there while the position closes around it.
+ *
+ * Each candidate exit is asked about the position in which the 軍旗 IS standing
+ * on it, which is the whole reason this is not a set lookup against the reach
+ * map. A pawn that could merely PUSH onto an empty exit does not cover it — the
+ * push is exactly the move that becomes illegal once something is there — and an
+ * exit test that got that backwards would rule out most of the board.
+ */
+function flagHasExit(ctx: Ctx, post: ViewerState, from: Square): boolean {
+  for (const m of carrierMoves(post, ctx.color)) {
+    if (m.kind !== 'move' || m.from !== from) continue
+    const shape = shapeOfMove(post, ctx.color, m)
+    // §5.3 absolute: an exit is never a capture. A 軍旗 that has to hit something
+    // to get out has not got out.
+    if (!shape || shape.contact !== undefined) continue
+    const at = viewAfter(post, ctx.color, m)
+    if (at === null) continue
+    if (squareSafety(at, ctx.color, ctx.belief, m.to, 1).unreachable) return true
+  }
+  return false
+}
+
+/**
+ * The 軍旗 branch. Returns null when the move is refused outright.
+ *
+ * Four outcomes, in the order the rules impose them:
+ *
+ *   1. the destination can be taken next move and the 軍旗 is not already worse
+ *      off — refused. This is the §14 absolute and it comes before any income.
+ *   2. it can be taken but this is a FLIGHT from something already on the 軍旗 —
+ *      priced at the old blanket `FLAG_RISK`, because the alternative is losing
+ *      the game and nothing about the destination is provable.
+ *   3. it takes or keeps a 結算格 that is `unreachable` — priced like any other
+ *      piece (§7.1) minus `FLAG_STEP_COST`, provided it can get out again.
+ *   4. it walks towards one — the same, at the same step cost, so the 軍旗 makes
+ *      the trip only when it is the piece best placed to make it.
+ */
+function flagMoveValue(
+  ctx: Ctx,
+  shape: MoveShape,
+  move: Move,
+  risk: ReplyRisk,
+  gainSquares: number,
+  gain: number,
+  positional: number,
+  defence: number,
+): number | null {
+  const step = ctx.flagStep * ctx.econ.square
+
+  // `{ flagDefence: false }` is the pre-§13.3 policy and has to stay that policy,
+  // or the A/B it exists for stops being one variable. No safety question, no
+  // income, one blanket 攻略 §9 discount, and a 軍旗 move only for a strict gain.
+  if (ctx.flagSquare === null) {
+    if (gainSquares <= 0) return null
+    return gain + positional - FLAG_RISK * ctx.econ.square
+  }
+
+  // 「Not asked」 is not 「safe」 — see `flagDefence`. A 軍旗 move whose reply was
+  // never analysed is refused outright rather than priced on a blank answer.
+  if (!risk.analysed) return null
+  const exposed = risk.exposed.some((e) => e.isFlag && e.attackers.length > 0)
+
+  if (exposed) {
+    // Running is only ever right when standing still is worse (defence > 0), and
+    // the blanket 攻略 §9 rate applies because nothing here is provable.
+    if (defence <= 0) return null
+    return gain + positional + defence - FLAG_RISK * ctx.econ.square
+  }
+
+  if (defence > 0) return gain + positional + defence - step
+  if (!ctx.flagIncome || gainSquares < 0) return null
+
+  if (gainSquares > 0) {
+    // §15.1's actual question — 「黑方沒有棋子構得到 d5」 — plus the one it does not
+    // ask, which is whether the 軍旗 can leave again.
+    const to = flagDestination(ctx, shape)
+    const post = to === null ? null : viewAfter(ctx.view, ctx.color, move)
+    if (to === null || post === null) return null
+    // At `FLAG_PARK_HORIZON` 1 this is already answered: `unreachable` at one ply
+    // is exactly 「nothing attacks it」, which `exposed` above read off the same
+    // position. The generation is only paid when the horizon is set deeper, which
+    // is a sweep knob rather than a default — see the constant for why.
+    if (
+      ctx.flagParkHorizon > 1
+      && !squareSafety(post, ctx.color, ctx.belief, to, ctx.flagParkHorizon).unreachable
+    ) return null
+    if (!flagHasExit(ctx, post, to)) return null
+    return gain + positional - step
+  }
+  // A walk. `positional` already contains the approach terms, so this is worth
+  // something only while the 軍旗 is genuinely closing on a 結算格 — and less than
+  // the same walk by anything else, which is the point of the step cost.
+  const value = positional - step
+  return value > 0 ? value : null
 }
 
 // ---------------------------------------------------------------------------
@@ -1580,13 +1583,17 @@ function evaluate(ctx: Ctx, move: Move): number | null {
   // resignation (§5.3 + §7④①) — and the one case where it draws instead of
   // losing (軍旗 vs 軍旗) is a lottery ticket, not a plan. It stays absolute when
   // the 軍旗 is being hunted: a flag that runs into a piece has lost the game it
-  // was running from.
+  // was running from, and it stays absolute when the square pays: 攻略 §9 outranks
+  // §7.1 every time they meet.
   if (flagMove && shape.contact !== undefined) return null
+
+  // One ply of lookahead, memoised per candidate by `lookahead.ts`'s own cache.
+  const risk = ctx.look.replyRisk(move)
 
   const gainSquares = heldScoringAfter(ctx.view, ctx.color, shape) - ctx.held
   const gain = gainSquares * ctx.econ.square
   const contact = shape.contact
-  const defence = flagDefence(ctx, shape)
+  const defence = flagDefence(ctx, shape, risk)
 
   // 攻略 §3 — 「佔到格子之後，除非有更好的理由，不要動它」. A move that steps off a
   // 結算格 without strictly improving the holding is refused. There are exactly
@@ -1610,21 +1617,19 @@ function evaluate(ctx: Ctx, move: Move): number | null {
     approachBonus(ctx, shape) + huntBonus(ctx, shape) - RESTLESSNESS_COST * ctx.econ.square
 
   if (flagMove) {
-    // A quiet 軍旗 move is legal and occasionally right — a 軍旗 on a 結算格 scores
-    // like anything else (§7.1 「計分不區分兵種」). It is also the piece whose loss
-    // ends the game, so: only for a strict gain, or to get out of the way of
-    // something that can actually reach it, and discounted either way.
-    //
-    // The second clause is what `FLAG_RISK`'s original comment was standing in
-    // for — 「this policy cannot see what attacks the destination」 was true and is
-    // no longer: `flagDefence` prices the destination on the position the move
-    // produces, so a 軍旗 fleeing along the line it is being hunted down, or onto
-    // a square the same piece also covers, scores no defence and is refused here.
-    if (gainSquares <= 0 && defence <= 0) return null
-    return gain + positional + defence - FLAG_RISK * ctx.econ.square
+    return flagMoveValue(ctx, shape, move, risk, gainSquares, gain, positional, defence)
   }
 
-  if (!contact) return gain + positional + defence
+  // CHANGE 1. Computed for moves that gain or contest a 結算格 and for no others,
+  // which is what keeps it off the plies where there is no square in play at all
+  // (notebook §11.4 and §14.2 are the same mistake twice: a clever term the size
+  // of the signal it competes with, firing every ply).
+  const denialSquares = contact?.square != null && ctx.scoring.has(contact.square) ? 1 : 0
+  const replyCost = gainSquares > 0 || denialSquares > 0
+    ? replyCostOf(ctx, risk, mover)
+    : 0
+
+  if (!contact) return gain + positional + defence - replyCost
 
   const attackerRank = mover?.rank ?? null
   // Attacking with a piece whose own rank the view did not disclose cannot be
@@ -1632,7 +1637,6 @@ function evaluate(ctx: Ctx, move: Move): number | null {
   if (attackerRank === null) return null
 
   const attackerValue = ctx.valueOf(attackerRank) * ctx.posture.riskAversion
-  const denialSquares = contact.square !== null && ctx.scoring.has(contact.square) ? 1 : 0
 
   const ev = contactEV(attackerRank, ctx.belief(contact.id), {
     squareGain: gain,
@@ -1651,8 +1655,44 @@ function evaluate(ctx: Ctx, move: Move): number | null {
     valueOf: ctx.valueOf,
   })
 
+  // §4.1 again, and it is easy to get wrong here: a losing attacker 「從未進入目標格」,
+  // so there is no piece of ours on that square for them to answer. The reply is
+  // charged in the worlds where the attack WINS and stands there, and nowhere
+  // else — 同歸於盡 leaves the square empty too. Without this the file would
+  // penalise a contact twice for the same failure, once inside `contactEV`'s lose
+  // branch and once here.
+  const enters = branchOdds(attackerRank, ctx.belief(contact.id)).win
+
   return ev + positional + movingTargetBonus(ctx, shape, mover)
-    + defenceCredit(ctx, defence, attackerRank, contact)
+    + defenceCredit(ctx, defence, attackerRank, contact) - replyCost * enters
+}
+
+/**
+ * What the opponent's answer costs us, in points. `(1 − pHoldsAfterReply)` × the
+ * piece we are committing to the square. See {@link REPLY_WEIGHT}.
+ *
+ * Note what it prices and what it deliberately does not. It does NOT discount the
+ * SQUARE, which is the version that was built first and measured worse — see
+ * REPLY_WEIGHT's table. It prices the PIECE, which is the thing this file's own
+ * header used to name as the cost of being one ply deep: 「it cannot see a piece
+ * hanging」.
+ *
+ * The difference is the whole result. Discounting the square changes WHETHER to
+ * contest, and the answer to that was already right — a contested 結算格 is
+ * contested because they want it, so declining hands them the income the term was
+ * trying to protect. Pricing the piece changes WHICH PIECE goes, and leaves the
+ * decision to go completely alone whenever nothing can answer at all.
+ *
+ * Scaled by `riskAversion` like every other statement about losing our own
+ * material (攻略 §4 / §4-2): a side that is behind cannot afford the piece, a side
+ * that is ahead is happy to spend it.
+ */
+function replyCostOf(ctx: Ctx, risk: ReplyRisk, mover: ViewerPiece | undefined): number {
+  if (ctx.replyWeight <= 0) return 0
+  if (!risk.analysed || !mover || mover.rank === null) return 0
+  if (risk.attackers.length === 0) return 0
+  const lost = 1 - risk.pHoldsAfterReply
+  return ctx.replyWeight * lost * ctx.valueOf(mover.rank) * ctx.posture.riskAversion
 }
 
 // ---------------------------------------------------------------------------
@@ -1839,22 +1879,51 @@ export interface BeliefPolicyOptions {
    *
    * Default on. Off reproduces the policy that lost game 10: the threat report is
    * never built, every defence delta is zero, and the park filter and the 軍旗
-   * filter fall back to their income-only forms. It costs no `Rng` draws either
-   * way, so the two variants stay on the same seeded stream and a paired
-   * comparison really is one variable.
+   * filter fall back to their income-only forms. Turning it off also turns off
+   * the §15.1 income, because the income rests entirely on the safety gate and a
+   * 軍旗 collecting rent it cannot check on is not the doctrine. It costs no `Rng`
+   * draws either way, so the two variants stay on the same seeded stream and a
+   * paired comparison really is one variable.
    */
   readonly flagDefence?: boolean
   /**
-   * Override {@link FLAG_LOSS_WEIGHT} / {@link FLAG_THREAT_DECAY}.
+   * Override {@link FLAG_LOSS_WEIGHT}.
    *
    * Not for play — for the sweep. §11.2 measured six deployment doctrines one at
    * a time and found two of them worth NEGATIVE win rate; the only way that was
-   * ever going to be visible is a switch per doctrine. The 軍旗 defence has two
-   * numbers in it and they answer different questions (「how much is the game
-   * worth」 and 「how twitchy is it」), so they turn separately.
+   * ever going to be visible is a switch per doctrine.
    */
   readonly flagLossWeight?: number
-  readonly flagThreatDecay?: number
+  /**
+   * CHANGE 1 — price the piece a move commits to a 結算格 against the answer.
+   *
+   * Default on. `false` is exactly `replyWeight: 0`, named separately because
+   * 「off」 and 「zero」 read differently in a results table. It costs no `Rng` draws
+   * either way, so the two variants stay on the same seeded stream and a paired
+   * comparison really is one variable.
+   */
+  readonly replyAware?: boolean
+  /** Override {@link REPLY_WEIGHT}. For the sweep. */
+  readonly replyWeight?: number
+  /**
+   * CHANGE 2 — let the 軍旗 hold a 結算格 nothing can reach (§7.1, notebook §15.1).
+   *
+   * Default on. `false` restores the pre-§15.1 policy, in which the 軍旗 could
+   * only ever take a square it was already standing next to and never walked
+   * towards one. The safety gate and both §5.3 absolutes stay on either way —
+   * this switch turns off the INCOME, never the defence.
+   */
+  readonly flagIncome?: boolean
+  /** Override {@link FLAG_STEP_COST} / {@link FLAG_PARK_HORIZON}. For the sweep. */
+  readonly flagStepCost?: number
+  readonly flagParkHorizon?: number
+  /**
+   * How much of the move list `lookahead.ts` analyses. For the sweep.
+   *
+   * NOT a free performance knob, which is why it is documented rather than
+   * hardcoded: narrowing it costs 軍旗. See `contextFor` for the table.
+   */
+  readonly replyGate?: 'income' | 'exposed' | 'all'
 }
 
 export function makeBeliefPolicy(name = 'belief', opts: BeliefPolicyOptions = {}): Policy {

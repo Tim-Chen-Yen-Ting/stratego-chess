@@ -34,6 +34,8 @@ export type {
 // 兵種數量配置 is a 附錄 B tunable: `DISTRIBUTION_*` are PRESETS to configure a
 // game with, and `DISTRIBUTION` is the default one. Anything that validates,
 // counts or explains a deployment reads `config.distribution`.
+export { carrierMoves, reachableSquares } from './publicmoves.js'
+
 export {
   ALL_COLORS,
   ALL_RANKS,

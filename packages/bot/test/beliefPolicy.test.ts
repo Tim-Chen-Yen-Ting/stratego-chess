@@ -31,6 +31,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  ALL_RANKS,
   DISTRIBUTION_SCOUTS,
   SCORING_WIDE_8,
   applyMove,
@@ -55,15 +56,19 @@ import type {
 import { deriveSeed, makeRng } from '../src/prng.js'
 import { playGame, runMatch } from '../src/index.js'
 import type { GameOutcome } from '../src/index.js'
+import type { RankBelief } from '../src/belief.js'
 import { contestPolicy } from '../src/policies/contest.js'
 import { randomPolicy } from '../src/policies/random.js'
 import {
   ARRIVAL_WEIGHT,
   FLAG_FLIGHT_SHARE,
   FLAG_LOSS_WEIGHT,
-  FLAG_THREAT_DECAY,
+  FLAG_PARK_HORIZON,
+  FLAG_STEP_COST,
   FLAG_THREAT_HORIZON,
   MIXING_BAND_SQUARES,
+  REPLY_WEIGHT,
+  RESTLESSNESS_COST,
   beliefNoFlagDefencePolicy,
   beliefPolicy,
   branchOdds,
@@ -71,8 +76,10 @@ import {
   contactEV,
   economyOf,
   flagThreat,
+  makeBeliefPolicy,
   revealsOnWin,
 } from '../src/policies/belief.js'
+import { contactOddsBetween, replyRisk, squareSafety } from '../src/lookahead.js'
 import type { ContactTerms } from '../src/policies/belief.js'
 
 // ---------------------------------------------------------------------------
@@ -86,6 +93,11 @@ const sq = (name: string): Square => {
 }
 
 const PASS: Move = { kind: 'pass' }
+
+/** A belief that has already made up its mind, for the reply tests. */
+const RANK_CERTAIN_COMMANDER: RankBelief = Object.freeze(
+  Object.fromEntries(ALL_RANKS.map((r) => [r, r === 'commander' ? 1 : 0])) as Record<Rank, number>,
+)
 const move = (from: string, to: string): Move => ({ kind: 'move', from: sq(from), to: sq(to) })
 
 /** A game with both sides deployed by `belief`, ready to be read as a ViewerState. */
@@ -636,12 +648,16 @@ describe('it asks whether anything can reach its 軍旗 (§5.3)', () => {
     const report = flagThreat(gameTen(GAME_TEN_MOVES), 'white')
     expect(report.flagSquare).toBe(sq('d1'))
     expect(report.immediate).toBe(true)
-    expect(report.plies).toBe(1)
+    expect(report.threats).toHaveLength(1)
     expect(report.nearest?.from).toBe(sq('d5'))
     expect(report.nearest?.carrier).toBe('rook')
-    // The blocking squares, which is the other half of what a report is FOR:
-    // 「任何一手防守都能贏：把某顆棋放到 d2」.
-    expect(report.nearest?.line).toEqual([sq('d4'), sq('d3'), sq('d2')])
+    expect(report.nearest?.enPassant).toBe(false)
+    // …and the report is the ENGINE's answer, not a private one: the same rook
+    // is in `carrierMoves`' list of Black replies, on the same square.
+    expect(
+      squareSafety(gameTen(GAME_TEN_MOVES), 'white', () => RANK_CERTAIN_COMMANDER, sq('d1'), 1)
+        .attackers.map((a) => a.from),
+    ).toEqual([sq('d5')])
   })
 
   it('does NOT pass — the move that lost the game', () => {
@@ -770,10 +786,10 @@ describe('a pawn threat is not the same shape as a pawn move (§3, §4.2)', () =
     const report = flagThreat(flagOnF4('f5'), 'white')
     expect(report.immediate).toBe(false)
     expect(report.threats.some((t) => t.from === sq('f5'))).toBe(false)
-    // What IS a threat is every pawn that can step onto the diagonal: e7–e5 and
-    // g7–g5 both bear on f4 the move after next.
-    expect(report.threats.filter((t) => t.plies === 2).map((t) => t.from))
-      .toEqual(expect.arrayContaining([sq('e7'), sq('g7')]))
+    // Nor is it a threat one move later. e7–e5 and g7–g5 would each bear on f4,
+    // and the horizon is deliberately one: §14.1 measured pre-emption at 1800
+    // games a cell and found it saved no 軍旗 and cost two to four points.
+    expect(report.threats).toEqual([])
   })
 
   it('sees the pawn on the diagonal, and knows it cannot be blocked', () => {
@@ -781,7 +797,7 @@ describe('a pawn threat is not the same shape as a pawn move (§3, §4.2)', () =
     expect(report.immediate).toBe(true)
     expect(report.nearest?.from).toBe(sq('e5'))
     expect(report.nearest?.carrier).toBe('pawn')
-    expect(report.nearest?.line).toEqual([]) // nothing to interpose against a pawn
+    expect(report.threats).toHaveLength(1)
   })
 
   it('refuses the double step that hands the 軍旗 to an en passant (§4.2)', () => {
@@ -828,7 +844,7 @@ describe('it is not paranoid about a threat it has time to answer', () => {
     const report = flagThreat(distant([PASS]), 'white')
     expect(report.flagSquare).toBe(sq('d1'))
     expect(report.threats).toEqual([])
-    expect(report.plies).toBe(Number.POSITIVE_INFINITY)
+    expect(report.immediate).toBe(false)
   })
 
   it('does not run the 軍旗, and takes the 結算格 instead', () => {
@@ -845,29 +861,32 @@ describe('it is not paranoid about a threat it has time to answer', () => {
     expect(played).toEqual(new Set(['e2e4']))
   })
 
-  it('keeps a non-immediate threat worth less than one 結算格, structurally', () => {
+  it('keeps the weights in the order the measurements put them', () => {
     // The two halves of 「price it at everything remaining, but do not be
     // paranoid」, as inequalities rather than as hopes. `winValue` is at least
-    // `X − our score` and at least one 結算格, so:
-    //   immediate    = FLAG_LOSS_WEIGHT × winValue     ≥ the whole remaining gap
-    //   two plies    = that × FLAG_THREAT_DECAY        < one 結算格
-    // The second is currently true by a mile, because the decay was measured at
-    // 1800 games a cell and came out at zero — every positive value tested cost
-    // two to four points of win rate and saved no 軍旗. This test is the fence
-    // around that result: it does not forbid a future retune, it forbids one that
-    // makes a threat we have a move to answer worth more than the income we would
-    // give up answering it early.
+    // `X − our score` and at least one 結算格, so an immediate threat is worth
+    // `FLAG_LOSS_WEIGHT × winValue` — the whole remaining gap — and a threat we
+    // have a move to answer is worth NOTHING, which is not a simplification: the
+    // decay was measured at 1800 games a cell and every positive value tested
+    // cost two to four points of win rate and saved no 軍旗 (notebook §14.1). The
+    // horizon is now one because that is the only depth the result supports.
     expect(FLAG_LOSS_WEIGHT).toBeGreaterThanOrEqual(1)
-    expect(FLAG_THREAT_DECAY).toBeGreaterThanOrEqual(0)
-    expect(FLAG_LOSS_WEIGHT * FLAG_THREAT_DECAY).toBeLessThan(1)
+    expect(FLAG_THREAT_HORIZON).toBe(1)
     // …and a flight is worth strictly less than the block that achieves the same
     // thing, but strictly more than nothing, or one of the two answers is dead.
     expect(FLAG_FLIGHT_SHARE).toBeGreaterThan(0)
     expect(FLAG_FLIGHT_SHARE).toBeLessThan(1)
-    // The report has to tell 「takes it next move」 from 「one move to line up」 even
-    // when the second is priced at nothing: the difference between them is exactly
-    // what a block achieves, and a horizon of one could not see a block work.
-    expect(FLAG_THREAT_HORIZON).toBeGreaterThanOrEqual(2)
+    // 軍旗 income (§15.1) has to cost more than an idle shuffle and less than a
+    // 結算格, or the 軍旗 either never walks or walks for free. That ordering IS
+    // the doctrine: it goes when it is the piece best placed to go, and loses the
+    // argument to any other piece that is equally well placed.
+    expect(FLAG_STEP_COST).toBeGreaterThan(RESTLESSNESS_COST)
+    expect(FLAG_STEP_COST).toBeLessThan(1)
+    // And every one of them has to be bigger than the band it competes inside,
+    // or the dice decide it — notebook §11.4, the mistake this file has made
+    // twice and is not going to make a third time.
+    expect(MIXING_BAND_SQUARES).toBeLessThan(FLAG_STEP_COST)
+    expect(MIXING_BAND_SQUARES).toBeLessThan(REPLY_WEIGHT)
   })
 })
 
@@ -908,7 +927,325 @@ describe('and it holds up over games rather than over scenes', () => {
     // they are here to catch the defence going away, not to pin two counts.
     expect(undefended).toBeGreaterThan(8) // the defect is real and reproduces
     expect(defended * 3).toBeLessThan(undefended) // and most of it goes away
+  }, 60_000)
+})
+
+// ---------------------------------------------------------------------------
+// 9. the reply — a square taken and lost straight back (CHANGE 1)
+// ---------------------------------------------------------------------------
+
+describe('it prices the answer to the move it is about to play', () => {
+  it('reads survival off the engine, both §5.4 exceptions included', () => {
+    // The half of the reply this policy consumes: P(our piece is still standing).
+    // Written against `lookahead.ts`'s own primitive rather than a private one,
+    // because a second combat table would disagree with the first exactly on the
+    // §5.4 cases that decide whether a 軍旗 may hold a 結算格 at all.
+    const holds = (mine: Rank, theirs: Partial<Record<Rank, number>>): number =>
+      1 - contactOddsBetween({ [mine]: 1 }, theirs).mineLost
+
+    // A 排長 (階級 8) attacked by something that is certainly a 司令 does not
+    // survive; attacked by something that is certainly a 工兵 (階級 9) it does.
+    expect(holds('platoon', { commander: 1 })).toBe(0)
+    expect(holds('platoon', { engineer: 1 })).toBe(1)
+    // 同階 takes both (§4.1 淨空), so the square is not HELD either — the
+    // distinction a bare 階級 comparison would miss.
+    expect(holds('platoon', { platoon: 1 })).toBe(0)
+    // §5.4, both directions: a 爆裂物 takes anything with it EXCEPT 工兵 and 軍旗,
+    // which survive untouched. That is the one attack a 軍旗 walks away from, and
+    // it is the second-order argument for a 軍旗 on a 結算格 (§4.5b's, restated).
+    expect(holds('brigade', { bomb: 1 })).toBe(0)
+    expect(holds('engineer', { bomb: 1 })).toBe(1)
+    expect(holds('flag', { bomb: 1 })).toBe(1)
+    // …and nothing else: 階級 10 is the floor, so every other contact takes it.
+    expect(holds('flag', { platoon: 1 })).toBe(0)
+    // A split belief is priced as one, not rounded to whichever side is likelier.
+    expect(holds('platoon', { commander: 0.5, engineer: 0.5 })).toBeCloseTo(0.5, 10)
   })
+
+  /**
+   * One white knight on c3, two empty 結算格 one hop away, and exactly one thing
+   * separating them: which of the two a 翻明 司令 can answer.
+   *
+   * Everything else is held equal on purpose. Both destinations are empty, so
+   * neither move is a contact; both are the same 結算格 distance from c3, so
+   * `approachBonus` and `ARRIVAL_WEIGHT` give them the same number; both gain the
+   * same single square, so `econ.square` cancels. The ONLY term that can tell
+   * them apart is the reply, which is what makes this a test of the reply rather
+   * than of the position.
+   *
+   * b4 and c5 are the two squares a knight can stand on to cover d5 and a4
+   * respectively without covering the other, and both are empty in the §9 layout.
+   */
+  function twoSquares(commanderAt: string): ViewerState {
+    const view = scene({
+      color: 'white',
+      place: [
+        { id: 'w-b1', square: sq('c3') },
+        { id: 'b-b8', square: sq(commanderAt), rank: 'commander', reveal: true },
+      ],
+      moves: [move('c3', 'a4'), move('c3', 'd5'), PASS],
+      config: { scoringSquares: SCORING_WIDE_8 },
+    })
+    // The 軍旗 somewhere neither knight square bears on, so §5.3 stays out of it.
+    return flagOn(view, 'white', 'w-h1')
+  }
+
+  it('takes the 結算格 the 司令 cannot answer, and not the one it can', () => {
+    const answers = (view: ViewerState, from: string, to: string): Square[] =>
+      replyRisk(view, 'white', () => RANK_CERTAIN_COMMANDER, move(from, to), { gate: 'all' })
+        .attackers.map((a) => a.from)
+
+    const coversD5 = twoSquares('b4')
+    expect(answers(coversD5, 'c3', 'd5')).toEqual([sq('b4')])
+    expect(answers(coversD5, 'c3', 'a4')).toEqual([])
+    expect(playsOver(coversD5, 'white', 40)).toEqual(new Set(['c3a4']))
+
+    // The mirror image. Same knight, same two squares, same everything — the
+    // 司令 stands on c5 instead of b4, and the answer inverts.
+    const coversA4 = twoSquares('c5')
+    expect(answers(coversA4, 'c3', 'a4')).toEqual([sq('c5')])
+    expect(answers(coversA4, 'c3', 'd5')).toEqual([])
+    expect(playsOver(coversA4, 'white', 40)).toEqual(new Set(['c3d5']))
+  })
+
+  it('is the reply that decides it, and nothing else in the file', () => {
+    // The same two positions with `{ replyAware: false }`. Without the term the
+    // policy cannot tell the squares apart at all, so it mixes across both — which
+    // is the proof that the discrimination above came from CHANGE 1 rather than
+    // from some accident of geometry that would have chosen a4 anyway.
+    const off = makeBeliefPolicy('off', { replyAware: false })
+    const played = new Set<string>()
+    for (const at of ['b4', 'c5']) {
+      const view = twoSquares(at)
+      for (let seed = 0; seed < 40; seed++) {
+        played.add(moveToNotation(off.move(view, 'white', makeRng(seed))))
+      }
+    }
+    expect(played).toEqual(new Set(['c3a4', 'c3d5']))
+  })
+
+  it('costs exactly nothing when nothing can answer', () => {
+    // The term is a COST on the piece being committed, never a discount on the
+    // square, so a move the opponent cannot reply to is scored byte for byte as
+    // it was before the change existed. That is the whole reason the change did
+    // not turn into caution: see REPLY_WEIGHT for the version that did.
+    const view = twoSquares('h6') // covers neither
+    const off = makeBeliefPolicy('off', { replyAware: false })
+    for (let seed = 0; seed < 20; seed++) {
+      expect(moveToNotation(beliefPolicy.move(view, 'white', makeRng(seed))))
+        .toBe(moveToNotation(off.move(view, 'white', makeRng(seed))))
+    }
+  })
+
+  it('asks about the position the move PRODUCES, not the one it is played from', () => {
+    const view = twoSquares('b4')
+    const certainly = (): RankBelief => RANK_CERTAIN_COMMANDER
+    const risk = replyRisk(view, 'white', certainly, move('c3', 'd5'), { gate: 'all' })
+    expect(risk.attackers.map((a) => a.from)).toEqual([sq('b4')])
+    expect(risk.pHoldsAfterReply).toBe(0)
+    // The knight has ALREADY left c3 in the position being asked about, which is
+    // the difference between a lookahead and a description of the present.
+    expect(risk.attackers.every((a) => a.from !== sq('c3'))).toBe(true)
+    // And a square nothing bears on comes back untouched, with an empty list —
+    // the caller distinguishes 「they cannot」 from 「they probably lose」.
+    const safe = replyRisk(view, 'white', certainly, move('c3', 'a4'), { gate: 'all' })
+    expect(safe.attackers).toEqual([])
+    expect(safe.pHoldsAfterReply).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 10. the 軍旗 collects rent (CHANGE 2, notebook §15.1)
+// ---------------------------------------------------------------------------
+
+describe('the 軍旗 is an income candidate, at a price (§7.1, notebook §15.1)', () => {
+  /**
+   * Game 11's shape, and it is the §9 opening position almost untouched.
+   *
+   * 「白方的軍旗主動走進敵陣，停在對手的計分格上收錢」 — a knight-carried 軍旗 went
+   * `b1 → c3 → d5` on move 27 and never moved again, banking eleven settlements
+   * off a 結算格 in BLACK's half. It survived for a reason that is completely
+   * computable and that §15.1 spells out: 「黑方沒有棋子構得到 d5」.
+   *
+   * That is true of the opening layout as it stands, and it is worth saying why,
+   * because it is the pawn distinction the whole reach model turns on. Black's
+   * d7 pawn PUSHES to d5 and does not capture there; with a white piece standing
+   * on d5 the push is not a legal move at all, and no black pawn captures onto
+   * d5 from the seventh rank. Neither knight reaches it, and every bishop, rook
+   * and queen is behind its own pawns.
+   */
+  function rent(spec: { blackAt?: [PieceId, string][]; flagAt?: string; moves: Move[] }): ViewerState {
+    const view = scene({
+      color: 'white',
+      place: [
+        { id: 'w-b1', square: sq(spec.flagAt ?? 'c3') },
+        ...(spec.blackAt ?? []).map(([id, square]) => ({ id, square: sq(square) })),
+      ],
+      moves: spec.moves,
+    })
+    return flagOn(view, 'white', 'w-b1')
+  }
+
+  const TO_D5: Move[] = [move('c3', 'd5'), move('c3', 'b5'), move('e2', 'e3'), PASS]
+
+  it('knows a pawn that can PUSH to a square cannot capture on it', () => {
+    // Reach and attack are the same relation exactly when something is standing
+    // on the square, and this is the case where they are not. Black's d7 pawn CAN
+    // move to d5 while d5 is empty; it cannot once the 軍旗 is there, because the
+    // push is blocked and a pawn does not capture forwards. So the question has
+    // to be asked about the position the move PRODUCES — which is the single most
+    // common way to misread a pawn wall, and the reason the reach model builds a
+    // position instead of an attack map.
+    expect(
+      squareSafety(rent({ moves: [PASS] }), 'white', () => RANK_CERTAIN_COMMANDER, sq('d5'), 1, {
+        occupantRank: 'flag',
+      }).attackers,
+    ).toEqual([])
+    expect(flagThreat(rent({ flagAt: 'd5', moves: [PASS] }), 'white').threats).toEqual([])
+  })
+
+  it('takes a 結算格 nothing on the board can reach', () => {
+    expect(playsOver(rent({ moves: TO_D5 }), 'white', 40)).toEqual(new Set(['c3d5']))
+  })
+
+  it('refuses the same square the moment one piece reaches it', () => {
+    // One black knight on b4, and the whole calculation inverts. Nothing else
+    // changed — same 軍旗, same 載體, same 結算格, same distance, same score.
+    const view = rent({ blackAt: [['b-b8', 'b4']], moves: TO_D5 })
+    expect(flagThreat(rent({ flagAt: 'd5', blackAt: [['b-b8', 'b4']], moves: [PASS] }), 'white')
+      .threats.map((t) => t.from)).toEqual([sq('b4')])
+    const played = playsOver(view, 'white', 40)
+    expect(played.has('c3d5')).toBe(false)
+    expect(played.has('c3b5')).toBe(false) // b4 covers that too
+  })
+
+  it('walks back out when the safety decays', () => {
+    // §15.1: 「風險不是恆定的」. The 軍旗 is already being paid for d5 and a knight
+    // has arrived on b4, so the same square re-asked now answers differently and
+    // the policy has to give up income it is collecting. Stepping off a 結算格 is
+    // precisely what 攻略 §3's park filter refuses, so this is also the test that
+    // §5.3 still outranks §3 — and that the re-evaluation happens every ply
+    // rather than once, when the 軍旗 first went there.
+    const view = rent({
+      flagAt: 'd5',
+      blackAt: [['b-b8', 'b4']],
+      moves: [move('d5', 'c3'), move('d5', 'f4'), move('e2', 'e3'), PASS],
+    })
+    expect(flagThreat(view, 'white').immediate).toBe(true)
+    const played = playsOver(view, 'white', 40)
+    expect(played.has('pass')).toBe(false)
+    expect(played.has('e2e3')).toBe(false)
+    // …and wherever it goes, it goes somewhere nothing reaches. A 軍旗 that flees
+    // onto another covered square has not answered anything.
+    for (const notation of played) {
+      const landed = rent({
+        flagAt: notation.slice(2, 4),
+        blackAt: [['b-b8', 'b4']],
+        moves: [PASS],
+      })
+      expect(flagThreat(landed, 'white').immediate).toBe(false)
+    }
+  })
+
+  it('never walks onto an occupied square, even one that pays (§5.3, 攻略 §9)', () => {
+    // 攻略 §9 is absolute and outranks §7.1 every time they meet. d5 is a 結算格,
+    // the capture is legal (§4 「任何棋子移動至敵子所在格皆為合法移動」), and it is a
+    // resignation: 階級 10 loses to everything, and the one case that draws
+    // instead of losing (軍旗 vs 軍旗) is a lottery ticket, not a plan.
+    const view = rent({ blackAt: [['b-d7', 'd5']], moves: TO_D5 })
+    expect(playsOver(view, 'white', 40).has('c3d5')).toBe(false)
+  })
+
+  /**
+   * A 軍旗 riding a PAWN, one push from the only 結算格 on the board.
+   *
+   * The board is a 附錄 B tunable, so it is set to the single square d5 — which
+   * makes d4 an ordinary square the 軍旗 may leave, and d5 the whole of the income
+   * on offer. The 軍旗 walks one step for a square nothing on the board can reach.
+   */
+  function pawnRent(blackAt: [PieceId, string][]): ViewerState {
+    const view = scene({
+      color: 'white',
+      place: [
+        { id: 'w-d2', square: sq('d4') },
+        ...blackAt.map(([id, square]) => ({ id, square: sq(square) })),
+      ],
+      moves: [move('d4', 'd5'), move('e2', 'e3'), PASS],
+      config: { scoringSquares: [sq('d5')] },
+    })
+    return flagOn(view, 'white', 'w-d2')
+  }
+
+  it('will not walk into a square it cannot get out of', () => {
+    // The hole the safety gate leaves open on its own: 「nothing reaches it」 is
+    // re-asked every ply and answered in time only if there is somewhere to go
+    // when the answer changes, and a 軍旗 may not answer by capturing (§5.3). A
+    // pawn on d5 with a black pawn on d6 has no push and no legal quiet move at
+    // all — it is safe, it pays, and it is a cell.
+    const boxed = pawnRent([['b-c7', 'd6']])
+    expect(flagThreat(pawnRent([['b-c7', 'd6'], ['w-d2', 'd5']]), 'white').threats).toEqual([])
+    expect(playsOver(boxed, 'white', 40).has('d4d5')).toBe(false)
+
+    // The same square, the same 軍旗, the same 載體 — with d6 empty and unreached,
+    // so there is a way back out. Now it goes. Both black pawns that capture onto
+    // d6 are moved away and a rook takes e7, because vacating e7 would otherwise
+    // open the f8 bishop onto d6 and put the cell straight back.
+    const free: [PieceId, string][] = [['b-c7', 'c4'], ['b-e7', 'a6'], ['b-a8', 'e7']]
+    const open = pawnRent(free)
+    expect(flagThreat(pawnRent([...free, ['w-d2', 'd5']]), 'white').threats).toEqual([])
+    expect(playsOver(open, 'white', 40)).toEqual(new Set(['d4d5']))
+  })
+
+  it('switching the rent off leaves the defence on', () => {
+    // `{ flagIncome: false }` restores the pre-§15.1 policy. It must not restore
+    // the pre-§13.3 one: the safety gate and both §5.3 absolutes are FILTERS, not
+    // weights, and this switch turns off the income alone.
+    const noRent = makeBeliefPolicy('no-rent', { flagIncome: false })
+    const hunted = rent({
+      flagAt: 'd5',
+      blackAt: [['b-b8', 'b4']],
+      moves: [move('d5', 'c3'), move('d5', 'f4'), move('e2', 'e3'), PASS],
+    })
+    for (let seed = 0; seed < 20; seed++) {
+      const played = moveToNotation(noRent.move(hunted, 'white', makeRng(seed)))
+      expect(played.startsWith('d5')).toBe(true)
+    }
+  })
+
+  it('replays byte for byte from the same seed', () => {
+    const view = rent({ moves: TO_D5 })
+    const once = moveToNotation(beliefPolicy.move(view, 'white', makeRng(7)))
+    expect(moveToNotation(beliefPolicy.move(view, 'white', makeRng(7)))).toBe(once)
+    expect(moveToNotation(beliefPolicy.move(view, 'white', makeRng(7)))).toBe(once)
+  })
+
+  it('does not buy the rent with 奪旗 losses over real games', () => {
+    // The scenes above prove the gate fires where it was aimed and say nothing
+    // about how often it is aimed correctly. This is the A/B: the identical file
+    // against itself with the rent switched off, one variable, paired seeds,
+    // 側翼八格 because that is the board with the most 結算格 to be tempted by.
+    //
+    // Measured at 3600 games a cell, both seats, both boards: the win rate and
+    // 平均持格／結算 are both flat to within noise and 旗負 does not move. The fence
+    // here is deliberately loose — it forbids a regression that doubles the 奪旗
+    // losses, not one that moves them by a handful.
+    const summary = runMatch({
+      seed: 20260817,
+      games: 150,
+      white: beliefPolicy,
+      black: makeBeliefPolicy('belief-norent', { flagIncome: false }),
+      swapColors: true,
+      config: { scoringSquares: SCORING_WIDE_8 },
+    })
+    expect(summary.games).toBe(300)
+    const withRent = summary.byPolicy.belief
+    const without = summary.byPolicy['belief-norent']
+    expect(withRent).toBeDefined()
+    expect(without).toBeDefined()
+    expect(withRent!.flagLosses).toBeLessThan(2 * Math.max(6, without!.flagLosses))
+    expect(withRent!.meanEarnedPerSettlement)
+      .toBeGreaterThan(0.9 * without!.meanEarnedPerSettlement)
+  }, 60_000)
 })
 
 // ---------------------------------------------------------------------------

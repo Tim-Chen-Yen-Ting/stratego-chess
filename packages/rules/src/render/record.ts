@@ -57,6 +57,7 @@ import type {
   Rank,
   Result,
   Square,
+  ViewerPiece,
   ViewerState,
 } from '../types.js'
 
@@ -832,6 +833,60 @@ function pointLeader(vs: ViewerState): Color | null {
  * and a record that prints only the score hides the most interesting thing that
  * happened in it.
  */
+/**
+ * The board as it stood when the record was taken.
+ *
+ * Added because a real game turned on something no move log makes visible: a
+ * player parked their 軍旗 on a 結算格 and collected income from it for 21 plies.
+ * Reading that off 48 rows of coordinates means replaying the game by hand. One
+ * diagram shows it at a glance.
+ *
+ * 兵種 are printed exactly where `ViewerState` carries one, so a live export
+ * shows only 翻明 pieces and the viewer's own, and a finished one shows
+ * everything (§10.5). Nothing is inferred.
+ */
+function finalBoardLines(vs: ViewerState): string[] {
+  const bySquare = new Map<Square, ViewerPiece>()
+  for (const p of vs.pieces) if (p.square !== null) bySquare.set(p.square, p)
+
+  const scoring = new Set(vs.config.scoringSquares)
+  const out: string[] = []
+  out.push('```')
+  out.push('    a   b   c   d   e   f   g   h')
+  for (let rank = 7; rank >= 0; rank--) {
+    const cells: string[] = []
+    for (let file = 0; file < 8; file++) {
+      const sq = rank * 8 + file
+      const piece = bySquare.get(sq)
+      const mark = scoring.has(sq) ? '*' : ' '
+      if (piece === undefined) {
+        cells.push(`${mark}.  `)
+        continue
+      }
+      const letter = CARRIER_LETTER[piece.carrier as Carrier]
+      const glyph = piece.color === 'white' ? letter.toUpperCase() : letter.toLowerCase()
+      cells.push(`${mark}${glyph}${piece.revealed ? '!' : ' '} `)
+    }
+    out.push(`${rank + 1}  ${cells.join('')}`)
+  }
+  out.push('```')
+  out.push('')
+  out.push(
+    'UPPERCASE = White · `*` marks a 結算格 · `!` marks a piece whose 兵種 is 翻明.',
+  )
+  out.push('')
+
+  const listed = [...bySquare.entries()]
+    .filter(([, p]) => p.rank !== null)
+    .sort((a, b) => a[0] - b[0])
+    .map(([sq, p]) => `${squareName(sq)} ${p.carrier} ${RANK_NAMES_ZH[p.rank as Rank]}`)
+  for (let i = 0; i < listed.length; i += 4) {
+    out.push(listed.slice(i, i + 4).join(' · '))
+  }
+  if (listed.length > 0) out.push('')
+  return out
+}
+
 function resultLines(vs: ViewerState): string[] {
   const out: string[] = []
 
@@ -1239,6 +1294,10 @@ export function exportMarkdown(vs: ViewerState): string {
   lines.push('')
   lines.push(...moveLogLines(vs))
   lines.push('')
+
+  lines.push('## Final position')
+  lines.push('')
+  lines.push(...finalBoardLines(vs))
 
   lines.push('## Deployments')
   lines.push('')
