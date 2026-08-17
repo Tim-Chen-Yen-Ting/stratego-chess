@@ -5,16 +5,30 @@
  *
  *   ① 行動階段 — move / capture / castle / pass. 奪旗 is decided HERE and
  *      ends the game immediately, before any scoring happens.
- *   ② 結算階段 — the SIDE THAT JUST MOVED scores its 結算格, then the score
- *      target (§7②) and the stagnation counter (§7③) are checked.
+ *   ② 結算階段 — the SIDE THAT JUST MOVED scores its 結算格. The score target
+ *      (§7②) is then tested only when the TURN is complete — after the second
+ *      player's ply, never after the first player's — and the stagnation
+ *      counter (§7③) is likewise reckoned per full turn.
  *
- * Settlement crediting the mover alone is what keeps the two sides even. Score
+ * Two separate symmetries are being defended here, and they need two separate
+ * rules: settle per PLY, decide per TURN.
+ *
+ * Settlement crediting the mover alone is what keeps the INCOME even. Score
  * both every ply and white banks a square from ply 2m-1 where black banks the
  * mirror-image square from ply 2m — one extra settlement per acquiring move,
  * compounding all game. Settle once per FULL TURN instead and the counting
  * evens out but the exposure does not: white's placement can be evicted before
  * it is ever counted, black's never can. Mover-only is neutral on both axes,
  * because each side banks once before the opponent can reply.
+ *
+ * Testing the target per turn is what keeps the MOVE COUNT even. Even settlement
+ * still lets white reach X first simply by moving first: white crosses on ply
+ * 2m-1 and, tested there, the game stops with black's m-th move unplayed — white
+ * winning on one move it was never owed. That move is worth exactly one
+ * settlement's income, which is why a komi sweep put the "fair" 貼目 at one
+ * settlement's income: the same quantity, priced instead of removed. Deferring
+ * the test to the close of the turn removes it, and leaves 貼目 to do its one
+ * real job (§7.3), making a tie impossible.
  *
  * `applyMove` is pure: the input state is never mutated, and every mutable
  * sub-object of the returned state is freshly allocated.
@@ -92,13 +106,29 @@ function plyHadProgress(
 }
 
 /**
- * §7② / §7③ tie-break. 貼目 is meant to make an exact tie impossible; komi is
+ * §7② / §7③ 分數高者獲勝. 貼目 is meant to make an exact tie impossible; komi is
  * a configurable knob (附錄 B) so a caller can set it to 0 and produce one
  * anyway. Deterministic fallback: the tie goes to black, the side komi exists
  * to favour.
+ *
+ * It also answers §7② correctly when only ONE side is at or past X, without
+ * needing to be told which: a side under X is by definition below every side at
+ * or past it, so the leader is always among the crossers.
  */
 function leader(score: { white: number; black: number }): Color {
   return score.white > score.black ? 'white' : 'black'
+}
+
+/**
+ * Does a ply by `mover` complete the turn?
+ *
+ * §9 白方先行 — white is the first player, so white opens every turn and black
+ * closes it. Asked by the §7② score test, which may only run when both sides
+ * have had the same number of moves. §7③ decides the same thing from ply parity
+ * instead, since it is counting turns rather than judging one.
+ */
+function closesTurn(mover: Color): boolean {
+  return mover === 'black'
 }
 
 export function isGameOver(s: GameState): boolean {
@@ -243,20 +273,29 @@ export function applyMove(s: GameState, move: Move): GameState {
   }
   const log = [...s.log, event]
 
-  if (!result) {
-    // §7② 先達 X 分者獲勝. Only one score moved in this settlement, and the other
-    // side was already tested against X at its own last ply, so at most one side
-    // can be at or past X here: `leader` necessarily names the side that just
-    // crossed it.
+  if (!result && closesTurn(mover)) {
+    // §7② 先達 X 分者獲勝 — asked ONLY here, at the close of a full turn.
     //
-    // §7② also covers 「若雙方於同一次結算同時越過 X」 — both sides crossing at
-    // once, decided by the higher score. That case is UNREACHABLE by
-    // construction now that one settlement moves one score: for both to be at or
-    // past X here, the idle side would have had to arrive there without a
-    // settlement of its own, which only a degenerate config can do (貼目 alone
-    // already meeting X). The handling stays anyway — it is the rule as written,
-    // and it costs nothing, because `leader` answers both questions with the
-    // same expression.
+    // Asking it after every settlement instead ends the game on ply 2m-1 the
+    // moment white crosses, with black's m-th move unplayed: white wins having
+    // had one more move than black. That is not a small edge. Over 300 bot games
+    // it is 55/45 on 中央四格 and 68/32 on 中央＋側翼八格, and it is worth exactly
+    // one settlement's income — which is why the empirically "fair" 貼目 came out
+    // at one settlement's income too. Deferring the question to the turn's close
+    // deletes the extra move rather than pricing it: whenever this runs, both
+    // sides have played the same number of moves.
+    //
+    // A side that crosses X mid-turn simply keeps playing to the end of the
+    // turn. There is deliberately no 'pending win' status — scores only ever
+    // rise, so a crossing cannot be undone, and the only thing the rest of the
+    // turn can do is let the opponent answer: catch up on points, or end the
+    // game outright with 奪旗 (§7.4①), which is decided in ① and never reaches
+    // this line.
+    //
+    // Which makes 「若雙方於同一次結算同時越過 X」 the live case it is written as,
+    // not a defensive one: white crosses on its ply, black replies over the line
+    // on its own, and both are at or past X when the turn closes. 分數高者獲勝 —
+    // and since 貼目 is non-integer the two scores cannot be equal.
     if (score.white >= s.config.scoreTarget || score.black >= s.config.scoreTarget) {
       result = { kind: 'score', winner: leader(score) }
     }

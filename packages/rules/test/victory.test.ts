@@ -5,16 +5,41 @@
  *     （因貼目，不可能相等）。」
  *   「連續 N = 30 個完整回合內，未發生任何吃子，且雙方皆未得分，則遊戲結束，
  *     分數高者獲勝。任何一次吃子或任何一分得分，計數歸零。」
+ *
+ * 先達 X is asked at the CLOSE OF A TURN — after the second player's ply, never
+ * after the first player's. White moves first, so asking it after every
+ * settlement stopped the game on ply 2m-1 the instant white crossed, with
+ * black's m-th move unplayed: white won having had one more move than black.
+ * Measured over 300 bot games that is 55/45 on 中央四格 and 68/32 on
+ * 中央＋側翼八格, and it is worth exactly one settlement's income — the same
+ * number a komi sweep called the "fair" 貼目, which is the same edge priced
+ * rather than removed. Deferring the question removes it: whenever it is now
+ * asked, both sides have played the same number of moves. That is also what
+ * turns 「同時越過 X」 from a defensive clause into the ordinary case.
+ *
+ * 奪旗 (§7.4①) is untouched. It is decided in the ACTION sub-step and ends the
+ * game where it stands, mid-turn or not.
  */
 
 import { describe, expect, it } from 'vitest'
 import { applyMove, flagFall, resign } from '../src/game.js'
 import { legalMoves } from '../src/moves.js'
 import { createGame, defaultAssignment, submitAssignment } from '../src/setup.js'
-import type { GameState, Move } from '../src/types.js'
+import type { Color, GameState, Move } from '../src/types.js'
 import { mv, position } from './helpers.js'
 
-describe('§7② 計分 — first to X wins', () => {
+/**
+ * How many plies `color` has actually played, read off the public log.
+ *
+ * The whole point of testing X at the close of a turn is that this number is
+ * equal for both sides at every score-decided ending, so every one of them
+ * asserts it.
+ */
+function pliesPlayed(s: GameState, color: Color): number {
+  return s.log.filter((e) => e.color === color).length
+}
+
+describe('§7② 計分 — X is tested at the close of a turn, not mid-turn', () => {
   const before = position(
     [
       { at: 'd4', color: 'white', carrier: 'knight', rank: 'general', id: 'WN' },
@@ -24,7 +49,7 @@ describe('§7② 計分 — first to X wins', () => {
     { config: { scoreTarget: 3 } },
   )
 
-  it('ends the moment the target is reached exactly', () => {
+  it('does NOT end when white crosses X on its own ply — black still gets its reply', () => {
     // §7 settles after every ply but credits ONLY the mover, so white's knight
     // on d4 pays on white's plies and on no others. Three points therefore take
     // three WHITE plies — ply 1, 3, 5 — not three plies.
@@ -47,17 +72,57 @@ describe('§7② 計分 — first to X wins', () => {
     expect(p4.score.white).toBe(2)
     expect(p4.status).toEqual({ kind: 'playing' })
 
+    // Ply 5: white is AT the target. The old rule stopped here and gave white the
+    // game — on a turn black had not been allowed to finish. It must not.
     const p5 = applyMove(p4, mv('a1', 'b1'))
     expect(p5.score.white).toBe(3)
-    expect(p5.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
-    expect(legalMoves(p5, 'black')).toEqual([])
+    expect(p5.score.white).toBeGreaterThanOrEqual(before.config.scoreTarget)
+    expect(p5.status).toEqual({ kind: 'playing' })
+    expect(legalMoves(p5, 'black').length, 'black must still be allowed to answer')
+      .toBeGreaterThan(0)
+
+    // Ply 6 closes the turn, and only now is the target read. White is over it,
+    // black is not, so white wins — one black move later than it used to.
+    const p6 = applyMove(p5, mv('a8', 'b8'))
+    expect(p6.score).toEqual({ white: 3, black: 0.5 })
+    expect(p6.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
+    expect(legalMoves(p6, 'white')).toEqual([])
+    expect(pliesPlayed(p6, 'white')).toBe(pliesPlayed(p6, 'black'))
+  })
+
+  it('ends immediately when BLACK crosses X, because that ply completes the turn', () => {
+    const blackScores = position(
+      [
+        { at: 'd5', color: 'black', carrier: 'knight', rank: 'general', id: 'BN' },
+        { at: 'a1', color: 'white', carrier: 'king', rank: 'commander', id: 'WK' },
+        { at: 'a8', color: 'black', carrier: 'king', rank: 'battalion', id: 'BK' },
+      ],
+      { score: { white: 0, black: 1.5 }, config: { scoreTarget: 3 } },
+    )
+
+    const p1 = applyMove(blackScores, mv('a1', 'b1'))
+    expect(p1.score).toEqual({ white: 0, black: 1.5 })
+    const p2 = applyMove(p1, mv('a8', 'b8'))
+    expect(p2.score).toEqual({ white: 0, black: 2.5 })
+    expect(p2.status).toEqual({ kind: 'playing' })
+
+    const p3 = applyMove(p2, mv('b1', 'a1'))
+    expect(p3.status).toEqual({ kind: 'playing' })
+
+    // Black is the SECOND player, so black's own settlement closes the turn:
+    // there is no half-turn owing to anybody and the game stops on the spot.
+    const p4 = applyMove(p3, mv('b8', 'a8'))
+    expect(p4.score).toEqual({ white: 0, black: 3.5 })
+    expect(p4.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'black' } })
+    expect(p4.log).toHaveLength(4)
+    expect(legalMoves(p4, 'white')).toEqual([])
+    expect(pliesPlayed(p4, 'white')).toBe(pliesPlayed(p4, 'black'))
   })
 })
 
-describe('§7② 同一次結算同時越過 X — 分數高者獲勝', () => {
-  /** All four 中央格 held, two apiece — the closest a position can get to both
-   *  sides scoring at once. Under mover-only settlement it still cannot: the
-   *  two black knights pay black on BLACK's plies. */
+describe('§7② 同一次回合內雙方同時越過 X — 分數高者獲勝', () => {
+  /** All four 中央格 held, two apiece: white banks its pair on white's ply and
+   *  black banks its pair on the reply, so a turn can carry BOTH sides over X. */
   function contested(score: { white: number; black: number }): GameState {
     return position(
       [
@@ -73,15 +138,14 @@ describe('§7② 同一次結算同時越過 X — 分數高者獲勝', () => {
   }
 
   /**
-   * The premise of the rule, restated for mover-only settlement: a settlement
-   * moves exactly ONE score. Both sides holding two 結算格 each is the position
-   * that used to make them cross together; now white's two pay on white's ply
-   * and black's two sit idle until black's.
+   * The premise, unchanged: a settlement moves exactly ONE score. White's two
+   * 結算格 pay on white's ply and black's two sit idle until black's.
    *
-   * This is what makes 「雙方於同一次結算同時越過 X」 unreachable in real play —
-   * for the idle side to be at X already, it would have had to arrive there
-   * without a settlement of its own, and its own settlement would have ended the
-   * game the moment it did.
+   * What changed is the consequence. While X was read after every settlement,
+   * 「雙方同時越過 X」 was unreachable — white's crossing ended the game before
+   * black could answer it. Reading X once per turn puts black's settlement back
+   * inside the same decision, so both sides really can be over the line when the
+   * question is asked, and the tie-break below is live code, not a defensive one.
    */
   it('moves exactly one score per settlement, even with both sides holding two', () => {
     const before = contested({ white: 10, black: 10.5 })
@@ -92,32 +156,103 @@ describe('§7② 同一次結算同時越過 X — 分數高者獲勝', () => {
     expect(b.score).toEqual({ white: 12, black: 12.5 })
   })
 
-  /**
-   * The 分數高者 tie-break itself, exercised on the only score pair that can
-   * still reach it: one side already at or past X when the other crosses. The
-   * branch is unreachable from a real game (see above) but it is the rule as
-   * written, and it must not silently award the game to the side that just moved.
-   */
-  it('gives it to black when black ends higher', () => {
-    const s = applyMove(contested({ white: 38, black: 40.5 }), mv('a1', 'b1'))
-    expect(s.score).toEqual({ white: 40, black: 40.5 })
-    expect(s.score.white).toBeGreaterThanOrEqual(40)
-    expect(s.score.black).toBeGreaterThanOrEqual(40)
-    expect(s.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'black' } })
+  it('gives it to black when black replies over the line and ends higher', () => {
+    const before = contested({ white: 38, black: 38.5 })
+
+    // White's pair carries white to exactly X. Under the old rule this was the
+    // end of the game and a white win; now it is half a turn.
+    const w = applyMove(before, mv('a1', 'b1'))
+    expect(w.score).toEqual({ white: 40, black: 38.5 })
+    expect(w.status).toEqual({ kind: 'playing' })
+
+    // Black's own pair carries black over it too, in the same turn.
+    const b = applyMove(w, mv('a8', 'b8'))
+    expect(b.score).toEqual({ white: 40, black: 40.5 })
+    expect(b.score.white).toBeGreaterThanOrEqual(40)
+    expect(b.score.black).toBeGreaterThanOrEqual(40)
+    expect(b.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'black' } })
+    expect(pliesPlayed(b, 'white')).toBe(pliesPlayed(b, 'black'))
   })
 
   it('gives it to white when white ends higher', () => {
-    const s = applyMove(contested({ white: 39, black: 40.5 }), mv('a1', 'b1'))
-    expect(s.score).toEqual({ white: 41, black: 40.5 })
-    expect(s.score.black).toBeGreaterThanOrEqual(40)
-    expect(s.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
+    const w = applyMove(contested({ white: 39, black: 38.5 }), mv('a1', 'b1'))
+    expect(w.score).toEqual({ white: 41, black: 38.5 })
+    expect(w.status).toEqual({ kind: 'playing' })
+
+    const b = applyMove(w, mv('a8', 'b8'))
+    expect(b.score).toEqual({ white: 41, black: 40.5 })
+    expect(b.score.white).toBeGreaterThanOrEqual(40)
+    expect(b.score.black).toBeGreaterThanOrEqual(40)
+    expect(b.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
+    expect(pliesPlayed(b, 'white')).toBe(pliesPlayed(b, 'black'))
+  })
+
+  it('still awards a lone crosser — the reply only has to be allowed to happen', () => {
+    const w = applyMove(contested({ white: 38, black: 30.5 }), mv('a1', 'b1'))
+    expect(w.score.white).toBe(40)
+    expect(w.status).toEqual({ kind: 'playing' })
+
+    const b = applyMove(w, mv('a8', 'b8'))
+    expect(b.score).toEqual({ white: 40, black: 32.5 })
+    expect(b.score.black).toBeLessThan(40)
+    expect(b.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
+    expect(pliesPlayed(b, 'white')).toBe(pliesPlayed(b, 'black'))
   })
 
   it('never produces an equal score — 貼目 消滅平局', () => {
     for (const w of [36, 37, 38, 39]) {
-      const s = applyMove(contested({ white: w, black: w + 0.5 }), mv('a1', 'b1'))
-      expect(s.score.white).not.toBe(s.score.black)
+      const white = applyMove(contested({ white: w, black: w + 0.5 }), mv('a1', 'b1'))
+      expect(white.score.white).not.toBe(white.score.black)
+      const both = applyMove(white, mv('a8', 'b8'))
+      expect(both.score.white).not.toBe(both.score.black)
     }
+  })
+})
+
+describe('§7.4① 奪旗 — still ends the game the instant it fires', () => {
+  it('ends on white\'s ply, mid-turn, and black never replies', () => {
+    const before = position(
+      [
+        { at: 'd1', color: 'white', carrier: 'rook', rank: 'general', id: 'WR' },
+        { at: 'd4', color: 'black', carrier: 'knight', rank: 'flag', id: 'BF' },
+        { at: 'a8', color: 'black', carrier: 'king', rank: 'commander', id: 'BK' },
+      ],
+      { score: { white: 39, black: 0.5 }, config: { scoreTarget: 40 } },
+    )
+
+    const s = applyMove(before, mv('d1', 'd4'))
+    expect(s.status).toEqual({ kind: 'over', result: { kind: 'flag', winner: 'white' } })
+    expect(legalMoves(s, 'black')).toEqual([])
+
+    // ① precedes ②: the settlement never ran at all, so white's new d4 is
+    // unpaid. Deferring the SCORE test to the close of the turn says nothing
+    // about 奪旗, which is not a scoring condition and does not wait for anyone.
+    expect(s.score).toEqual({ white: 39, black: 0.5 })
+    expect(pliesPlayed(s, 'white')).toBe(1)
+    expect(pliesPlayed(s, 'black')).toBe(0)
+  })
+
+  it('lets black take the game on the very turn white crossed X', () => {
+    const before = position(
+      [
+        { at: 'd4', color: 'white', carrier: 'knight', rank: 'general', id: 'WN' },
+        { at: 'h4', color: 'white', carrier: 'rook', rank: 'flag', id: 'WF' },
+        { at: 'h8', color: 'black', carrier: 'rook', rank: 'division', id: 'BR' },
+        { at: 'a1', color: 'white', carrier: 'king', rank: 'commander', id: 'WK' },
+        { at: 'a8', color: 'black', carrier: 'king', rank: 'battalion', id: 'BK' },
+      ],
+      { score: { white: 39, black: 0.5 }, config: { scoreTarget: 40 } },
+    )
+
+    const w = applyMove(before, mv('a1', 'b1'))
+    expect(w.score.white).toBe(40)                  // white is at X…
+    expect(w.status).toEqual({ kind: 'playing' })   // …and the turn is not over
+
+    // This is the move the old rule took away from black. Played, it wins.
+    const b = applyMove(w, mv('h8', 'h4'))
+    expect(b.status).toEqual({ kind: 'over', result: { kind: 'flag', winner: 'black' } })
+    expect(b.score.white).toBeGreaterThanOrEqual(40)
+    expect(pliesPlayed(b, 'white')).toBe(pliesPlayed(b, 'black'))
   })
 })
 
@@ -322,6 +457,37 @@ describe('§7④ 超時 and ⑤ 認輸', () => {
     const over = resign(live, 'white')
     expect(resign(over, 'black')).toBe(over)
     expect(flagFall(over, 'black')).toBe(over)
+  })
+
+  it('a crossing not yet read is not a win — §7④⑤ are untouched by it', () => {
+    // The state §7.4② deliberately does NOT model: white is over X, but the turn
+    // has not closed, so the target has not been read. There is no 'pending win'
+    // to honour — X is either met when the question is asked or it is not — and
+    // the two terminations that do not come from a move must not be able to see
+    // one. A 'pending win' status is exactly what would make these two award the
+    // game to white instead.
+    const crossed = applyMove(
+      position(
+        [
+          { at: 'd4', color: 'white', carrier: 'knight', rank: 'general', id: 'WN' },
+          { at: 'a1', color: 'white', carrier: 'king', rank: 'commander', id: 'WK' },
+          { at: 'a8', color: 'black', carrier: 'king', rank: 'battalion', id: 'BK' },
+        ],
+        { score: { white: 39, black: 0.5 }, config: { scoreTarget: 40 } },
+      ),
+      mv('a1', 'b1'),
+    )
+    expect(crossed.score.white).toBe(40)
+    expect(crossed.status).toEqual({ kind: 'playing' })
+
+    expect(resign(crossed, 'white').status).toEqual({
+      kind: 'over',
+      result: { kind: 'resign', winner: 'black' },
+    })
+    expect(flagFall(crossed, 'white').status).toEqual({
+      kind: 'over',
+      result: { kind: 'timeout', winner: 'black' },
+    })
   })
 })
 

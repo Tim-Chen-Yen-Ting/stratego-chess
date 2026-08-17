@@ -6,7 +6,13 @@
  * client as static files with an SPA fallback. Single origin, so no CORS and no
  * second service.
  *
- *   POST /api/game            create a game, get the invite links back
+ *   POST /api/game            create a game, get the invite links back.
+ *                             Body: { config?, opponent? }, where opponent is
+ *                             { kind: 'human' } (the default) or
+ *                             { kind: 'bot', policy?, thinkMs? }. A bot game
+ *                             comes back WITHOUT guestToken/guestUrl: that seat
+ *                             is played in-process and its link would hand the
+ *                             creator the opponent's whole army.
  *   GET  /api/game/:token     ViewerState as JSON
  *   GET  /api/links/:token    the share/LLM links that belong to this token
  *   GET  /healthz             200
@@ -29,15 +35,20 @@ import { Server as SocketIOServer } from 'socket.io'
 
 import { ALL_RANKS, checkDistribution, viewerColor } from '@xiyang/rules'
 import type { GameConfig, Rank, Viewer } from '@xiyang/rules'
+import { POLICIES } from '@xiyang/bot'
+import type { Policy } from '@xiyang/bot'
 
 import { registerLlmRoutes } from './llm.js'
 import {
   createRoom,
   disposeAll,
+  isBotSeatViewer,
   resolveToken,
   roomCount,
   seatColor,
   serialiseFor,
+  setRoomLog,
+  type BotOpponent,
   type Room,
 } from './rooms.js'
 import { registerSocketHandlers, type GameServer, type ServerLog } from './sockets.js'
@@ -57,6 +68,11 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? `http://localhost:${PORT
 /** Client-side route that turns a token into a seat at the table. */
 function playUrl(token: string): string {
   return `${PUBLIC_BASE_URL}/g/${token}`
+}
+
+/** A seat played in-process by a bot has no token, and therefore no link. */
+function maybePlayUrl(token: string | null): string | null {
+  return token === null ? null : playUrl(token)
 }
 
 function llmUrl(token: string): string {
@@ -143,6 +159,73 @@ function readConfig(input: unknown): Partial<GameConfig> | undefined {
   return Object.keys(config).length === 0 ? undefined : config
 }
 
+// --------------------------------------------------------------- opponent input
+
+/**
+ * `{ opponent: { kind: 'bot', policy: 'contest' } }` — who takes the other seat.
+ *
+ * Default is a human, so a body that says nothing behaves exactly as before.
+ * An unknown policy name is a 400 and never a quiet fallback: a caller that
+ * asked for `greedy` and silently got `contest` would have no way to notice, and
+ * every game it recorded would be attributed to the wrong opponent.
+ */
+const DEFAULT_BOT_POLICY = 'contest'
+
+/** Bound and de-fang a caller-supplied string before it goes into a message. */
+function echoable(raw: string): string {
+  const cleaned = raw.replace(/[^\x20-\x7e]/g, '').slice(0, 32)
+  return cleaned.length === 0 ? '(empty)' : cleaned
+}
+
+function knownPolicies(): string {
+  return Object.keys(POLICIES).sort().join(', ')
+}
+
+function lookupPolicy(name: string): Policy | undefined {
+  // own-property only: a raw index would resolve 'constructor' or 'toString'
+  return Object.prototype.hasOwnProperty.call(POLICIES, name) ? POLICIES[name] : undefined
+}
+
+type OpponentInput = { ok: BotOpponent | undefined } | { error: string }
+
+function readOpponent(input: unknown): OpponentInput {
+  if (input === undefined || input === null) return { ok: undefined }
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    return { error: 'opponent must be an object, e.g. { "kind": "bot", "policy": "contest" }' }
+  }
+
+  const raw = input as Record<string, unknown>
+  const kind = raw['kind']
+  if (kind === undefined || kind === null || kind === 'human') return { ok: undefined }
+  if (kind !== 'bot') {
+    // Only a string is echoed back. Stringifying an arbitrary value to put it in
+    // a message can itself throw, which would turn a 400 into a 500.
+    const got = typeof kind === 'string' ? `, not '${echoable(kind)}'` : ''
+    return { error: `opponent.kind must be 'human' or 'bot'${got}` }
+  }
+
+  // Absent means "no preference" and gets the default. An empty string, or
+  // anything that is not a string, is a caller that TRIED to name a policy and
+  // failed — defaulting there is precisely the silent fallback that would let a
+  // typo be recorded as a game against the wrong opponent. `null` counts as
+  // absent because that is how a JSON round trip spells an omitted field.
+  const requested = raw['policy']
+  if (requested !== undefined && requested !== null && typeof requested !== 'string') {
+    return { error: `opponent.policy must be a string. Known: ${knownPolicies()}` }
+  }
+  const name =
+    requested === undefined || requested === null ? DEFAULT_BOT_POLICY : (requested as string)
+  const policy = lookupPolicy(name)
+  if (policy === undefined) {
+    return {
+      error: `unknown bot policy '${echoable(name)}'. Known: ${knownPolicies()}`,
+    }
+  }
+
+  const thinkMs = clampNumber(raw['thinkMs'], 0, 30_000)
+  return { ok: thinkMs === undefined ? { policy, name } : { policy, name, thinkMs } }
+}
+
 // --------------------------------------------------------------- logging
 
 /**
@@ -202,14 +285,28 @@ export function buildApp(): ReturnType<typeof Fastify> {
 
   app.get('/healthz', async () => ({ ok: true, games: roomCount() }))
 
-  app.post<{ Body: { config?: unknown } | undefined }>('/api/game', async (request) => {
-    const room = createRoom(readConfig(request.body?.config))
-    return describeNewRoom(room)
-  })
+  app.post<{ Body: { config?: unknown; opponent?: unknown } | undefined }>(
+    '/api/game',
+    async (request, reply) => {
+      const opponent = readOpponent(request.body?.opponent)
+      if ('error' in opponent) {
+        void reply.status(400)
+        return { error: opponent.error }
+      }
+      const config = readConfig(request.body?.config)
+      const room = createRoom(
+        opponent.ok === undefined ? { config } : { config, bot: opponent.ok },
+      )
+      return describeNewRoom(room)
+    },
+  )
 
   app.get<{ Params: { token: string } }>('/api/game/:token', async (request, reply) => {
     const session = resolveToken(request.params.token)
-    if (session === undefined) {
+    // No token resolves to a bot seat — none is ever minted — so the second test
+    // can only fire on a bug in issuance. It is here because the cost of being
+    // wrong is the bot's entire deployment, in one response.
+    if (session === undefined || isBotSeatViewer(session.room, session.viewer)) {
       void reply.status(404)
       return { error: 'unknown token' }
     }
@@ -224,7 +321,10 @@ export function buildApp(): ReturnType<typeof Fastify> {
   // `publicUrl` is bound to nobody and carries only what has been announced.
   app.get<{ Params: { token: string } }>('/api/links/:token', async (request, reply) => {
     const session = resolveToken(request.params.token)
-    if (session === undefined) {
+    // Same second barrier as /api/game/:token, and it matters more here: this
+    // route's whole job is handing out links, and the bot's are the ones that
+    // must not exist.
+    if (session === undefined || isBotSeatViewer(session.room, session.viewer)) {
       void reply.status(404)
       return { error: 'unknown token' }
     }
@@ -235,13 +335,17 @@ export function buildApp(): ReturnType<typeof Fastify> {
       viewer,
       seat: session.seat ?? null,
       color: viewerColor(viewer),
+      // Who is in the other chair. Public information — colours are public (§1)
+      // and the policy name says nothing about a deployment — and the client
+      // needs it to know there is no invite to send.
+      opponent: describeOpponent(session.room),
       // hand this to a friend to have them watch over your shoulder — it carries
       // YOUR army, so it goes to someone you would show your hand to
       // A bound-spectator link belongs to a seat. The public observer has none,
       // and echoing its own token back under this name just duplicates publicUrl.
       spectatorUrl:
         viewer.kind === 'player'
-          ? playUrl(session.room.spectatorTokens[viewer.color])
+          ? maybePlayUrl(session.room.spectatorTokens[viewer.color])
           : viewer.kind === 'spectator-public'
             ? null
             : playUrl(session.token),
@@ -302,30 +406,42 @@ export function buildApp(): ReturnType<typeof Fastify> {
   return app
 }
 
+/** What the other chair contains, in terms every viewer is entitled to. */
+function describeOpponent(room: Room): Record<string, unknown> {
+  const bot = room.bot
+  if (bot === null) return { kind: 'human' }
+  return { kind: 'bot', policy: bot.name, color: bot.color, thinkMs: bot.thinkMs }
+}
+
 function describeNewRoom(room: Room): Record<string, unknown> {
   const hostColor = room.hostColor
   const guestColor = seatColor(room, 'guest')
   const hostToken = room.playerTokens[hostColor]
-  const guestToken = room.playerTokens[guestColor]
+  const hostSpectatorToken = room.spectatorTokens[hostColor]
+  if (hostToken === null || hostSpectatorToken === null) {
+    // Unreachable: the creator holds the host seat and a bot only ever sits in
+    // the guest seat, so the host's tokens are always minted.
+    throw new Error('the host seat was created without tokens')
+  }
   // even a scalar off the config comes through the serialiser — there is exactly
   // one road out of a GameState in this package and it runs through redaction
   const config = serialiseFor(room, { kind: 'player', color: hostColor }).config
 
-  return {
+  const response: Record<string, unknown> = {
     gameId: room.id,
     hostToken,
-    guestToken,
     hostUrl: playUrl(hostToken),
-    guestUrl: playUrl(guestToken),
-    // gamebook §9: the coin flip already happened, server-side
+    // gamebook §9: the coin flip already happened, server-side. It runs in a bot
+    // game too, so the creator may be Black.
     hostColor,
     guestColor,
+    opponent: describeOpponent(room),
     // ONLY the host's own links. Returning the opponent's spectator token would
     // let the creator read every enemy 兵種 for the whole game — the redactor
     // would work perfectly and still hand over everything, because it would be
     // given the wrong Viewer. Each player gets their own colour's spectator link
     // from GET /api/game/:token instead.
-    spectatorUrl: playUrl(room.spectatorTokens[hostColor]),
+    spectatorUrl: playUrl(hostSpectatorToken),
     // THE ONE LINK THAT IS SAFE TO SHARE WITH ANYONE MID-GAME, and the reason it
     // exists. `spectatorUrl` above is bound to one player and shows that player's
     // whole army (§10.2 「與其進入時所綁定玩家的視角完全相同」), so posting it in a
@@ -351,6 +467,25 @@ function describeNewRoom(room: Room): Record<string, unknown> {
     scoringSquares: config.scoringSquares,
     distribution: config.distribution,
   }
+
+  // THE INVITE, AND ONLY WHEN THERE IS SOMEONE TO INVITE.
+  //
+  // In a bot game these two keys are ABSENT — not null, not empty. The guest
+  // seat is the bot's, and its token is that seat's whole view: opening
+  // `guestUrl` would show the creator all sixteen of the opponent's 兵種 and turn
+  // the game into a solved one. There is no token to print in the first place
+  // (rooms.ts mints none), and this branch keeps the shape honest even so:
+  // a client that finds no `guestUrl` has nothing to share, which is correct,
+  // because a bot needs no invitation.
+  if (room.bot === null) {
+    const guestToken = room.playerTokens[guestColor]
+    if (guestToken !== null) {
+      response['guestToken'] = guestToken
+      response['guestUrl'] = playUrl(guestToken)
+    }
+  }
+
+  return response
 }
 
 // --------------------------------------------------------------- start
@@ -376,6 +511,9 @@ async function main(): Promise<void> {
   }
 
   registerSocketHandlers(io, log)
+  // The registry drives the bot seat, and a policy that returns an illegal move
+  // must be shouted about rather than silently freezing the board (rooms.ts).
+  setRoomLog(log)
 
   let closing = false
   const shutdown = (signal: string): void => {

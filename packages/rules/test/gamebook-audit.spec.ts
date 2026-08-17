@@ -394,9 +394,33 @@ describe('§7 結算', () => {
       ],
       { score: { white: 39, black: 0.5 }, config: { scoreTarget: 40 } },
     )
+    // §7.4② is checked at the END OF THE TURN, never mid-turn. White crossing X
+    // on its own ply does NOT stop the game — Black still gets its reply, so both
+    // sides always finish on an equal number of moves. Ending on White's ply gave
+    // White a win with one more move than Black had, worth 55/45 and 68/32 on the
+    // two boards in bot measurement.
+    const afterWhite = applyMove(s, PASS)
+    expect(afterWhite.score.white).toBe(40)
+    expect(afterWhite.status).toEqual({ kind: 'playing' })
+    expect(afterWhite.toMove).toBe('black')
+
+    // Black replies; the turn is now complete and the target is checked.
+    const afterBlack = applyMove(afterWhite, PASS)
+    expect(afterBlack.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
+  })
+
+  it('§7② 黑方越線立刻結束 — 它是後手，回合已經完整', () => {
+    const s = position(
+      [
+        { at: 'e5', color: 'black', carrier: 'rook', rank: 'commander', id: 'B' },
+        { at: 'a1', color: 'white', carrier: 'king', rank: 'flag', id: 'wf' },
+        { at: 'a8', color: 'black', carrier: 'king', rank: 'flag', id: 'bf' },
+      ],
+      { score: { white: 10, black: 39.5 }, config: { scoreTarget: 40 }, toMove: 'black' },
+    )
     const n = applyMove(s, PASS)
-    expect(n.score.white).toBe(40)
-    expect(n.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
+    expect(n.score.black).toBe(40.5)
+    expect(n.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'black' } })
   })
 })
 

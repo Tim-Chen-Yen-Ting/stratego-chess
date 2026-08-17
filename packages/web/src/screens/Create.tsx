@@ -1,7 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { DEFAULT_CONFIG } from '@xiyang/rules'
 import type { Color, RankDistribution, Square } from '@xiyang/rules'
-import type { CreatedGame } from '../socket.js'
+import {
+  BOT_POLICIES,
+  DEFAULT_BOT_POLICY,
+  botPolicyLabel,
+  botSeatOf,
+  rememberBotGame,
+} from '../socket.js'
+import type { BotSeat, CreatedGame } from '../socket.js'
 import {
   DISTRIBUTIONS,
   DISTRIBUTION_IDS,
@@ -16,7 +23,7 @@ import {
   type DistributionId,
   type ScoringAreaId,
 } from '../constants.js'
-import { formatClock, squareName } from '../format.js'
+import { formatClock, other, squareName } from '../format.js'
 import { localizeUrl } from '../url.js'
 
 /**
@@ -29,6 +36,19 @@ import { localizeUrl } from '../url.js'
  * validates or derives anything about the game itself (gamebook §10).
  */
 
+/**
+ * WHO is on the other side. This is the first question the screen asks, because
+ * it decides whether the game needs a second person at all — and therefore
+ * whether an invite link is a useful thing to hand back.
+ *
+ * A bot is a PLAYER, not a mode of the interface: the server seats it, hands it
+ * `stateForViewer(state, { kind: 'player', color })` and nothing else, and it
+ * deploys its own sixteen 兵種 in secret exactly like a human would. Which is
+ * why 「機器人」 is a peer of 「人類」 here rather than a checkbox in 進階設定.
+ */
+type OpponentKind = 'human' | 'bot'
+
+/** How the invite link is rendered for a HUMAN opponent — see `llmForm`. */
 type OpponentMode = 'human' | 'llm'
 
 /** The subset of `GameConfig` this screen exposes. */
@@ -79,14 +99,39 @@ function distributionDiffText(distribution: RankDistribution): string {
 /**
  * POST /api/game (techspec §5). The body is NESTED — `{ config: { ... } }` —
  * and every field is optional; the server fills the rest from DEFAULT_CONFIG.
+ *
+ * `opponent` says who takes the second seat: `{ kind: 'bot', policy }` asks the
+ * server to seat one in-process, and omitting it entirely is a human game —
+ * byte-for-byte the request this screen sent before bot games existed.
+ *
+ * An unknown policy name comes back as a 400 carrying the server's own message,
+ * which is surfaced verbatim. The server refuses to substitute a policy it does
+ * know, and this screen must not paper over that: a game the player believes is
+ * 「爭奪」 but is actually 「亂走」 is a lie about who they just played.
  */
-async function postCreateGame(options: CreateOptions): Promise<CreatedGame> {
+async function postCreateGame(
+  options: CreateOptions,
+  botPolicy: string | null,
+): Promise<CreatedGame> {
   const res = await fetch('/api/game', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ config: options }),
+    body: JSON.stringify({
+      config: options,
+      ...(botPolicy === null ? {} : { opponent: { kind: 'bot', policy: botPolicy } }),
+    }),
   })
-  if (!res.ok) throw new Error(`建立對局失敗（HTTP ${res.status}）`)
+  if (!res.ok) {
+    const detail = await res
+      .json()
+      .then((body: unknown) =>
+        typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
+          ? `：${(body as { error: string }).error}`
+          : '',
+      )
+      .catch(() => '')
+    throw new Error(`建立對局失敗（HTTP ${res.status}）${detail}`)
+  }
   return (await res.json()) as CreatedGame
 }
 
@@ -132,14 +177,36 @@ function readPositiveInt(raw: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+/**
+ * How long the created panel is left on screen before a bot game enters itself.
+ *
+ * Not a loading delay — the game is already built. It is the one beat the coin
+ * flip (§9) deserves: the human may have drawn Black and would otherwise learn
+ * it from a board that is already moving. Long enough to read one line, short
+ * enough that nobody reaches for a button.
+ */
+const BOT_ENTER_DELAY_MS = 1600
+
+/** What the screen holds after a successful POST. */
+interface CreatedState {
+  game: CreatedGame
+  options: CreateOptions
+  /** the policy asked for, or null when a human opponent was chosen */
+  requestedBot: string | null
+  /** the bot the server actually seated — null means it seated none */
+  bot: BotSeat | null
+}
+
 export function Create() {
-  const [created, setCreated] = useState<{ game: CreatedGame; options: CreateOptions } | null>(null)
+  const [created, setCreated] = useState<CreatedState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
 
   const [clockEnabled, setClockEnabled] = useState(true)
   const [noProgressTurns, setNoProgressTurns] = useState(String(DEFAULT_CONFIG.noProgressTurns))
+  const [opponentKind, setOpponentKind] = useState<OpponentKind>('human')
+  const [botPolicy, setBotPolicy] = useState<string>(DEFAULT_BOT_POLICY)
   const [opponentMode, setOpponentMode] = useState<OpponentMode>('human')
   const [scoringAreaId, setScoringAreaId] = useState<ScoringAreaId>('center')
   const scoringArea = SCORING_AREAS[scoringAreaId]
@@ -209,16 +276,43 @@ export function Create() {
       scoringSquares: scoringArea.squares,
       distribution: distributionPreset.counts,
     }
+    const requestedBot = opponentKind === 'bot' ? botPolicy : null
     setBusy(true)
     setError(null)
     try {
-      setCreated({ game: await postCreateGame(options), options })
+      const game = await postCreateGame(options, requestedBot)
+      const bot = botSeatOf(game, requestedBot)
+      // Carried across the navigation into the game, where a fresh page load
+      // knows only its token. Server-side marking wins wherever it exists; this
+      // is the fallback, and it records a choice the player just made rather
+      // than anything about the position (see socket.ts).
+      if (bot !== null) rememberBotGame(game.hostToken, bot)
+      setCreated({ game, options, requestedBot, bot })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
   }
+
+  /**
+   * A bot game has nobody to wait for, so it does not stop at a link. It shows
+   * the coin flip for a beat and walks in.
+   *
+   * Only when the server confirmed the bot: if it fell back to a human game
+   * (`bot === null`) the panel stays put, because then there IS a link that
+   * matters and leaving the page would strand the invite.
+   */
+  useEffect(() => {
+    if (created === null || created.bot === null) return
+    const target = localizeUrl(created.game.hostUrl)
+    const id = window.setTimeout(() => {
+      window.location.assign(target)
+    }, BOT_ENTER_DELAY_MS)
+    return () => {
+      window.clearTimeout(id)
+    }
+  }, [created])
 
   async function copy(label: string, text: string) {
     try {
@@ -236,12 +330,18 @@ export function Create() {
     setCopied(null)
   }
 
+  /**
+   * The invite link, or '' when there is none to show.
+   *
+   * Empty is the normal case for a bot game: the second seat belongs to the
+   * bot, and its token would serve whoever opened it that colour's entire
+   * deployment. The server does not issue one, and the row below is not
+   * rendered — `''` rather than `undefined` because a link row is either a link
+   * or absent, never the word "undefined".
+   */
+  const guestUrl = created?.game.guestUrl ?? ''
   const opponentUrl =
-    created === null
-      ? ''
-      : opponentMode === 'llm'
-        ? llmForm(created.game.guestUrl)
-        : created.game.guestUrl
+    guestUrl === '' ? '' : opponentMode === 'llm' ? llmForm(guestUrl) : guestUrl
 
   /**
    * 公開觀戰連結 (gamebook §10) — empty string when the server did not issue
@@ -262,6 +362,84 @@ export function Create() {
         <>
           <section className="panel">
             <h2>對局設定</h2>
+
+            {/* WHO first, then how long and how much — the rest of this panel
+                only makes sense once it is known whether a second person is
+                coming. */}
+            <div className="c-field c-opponent">
+              <div className="c-field-head">
+                <span className="c-field-label">對手</span>
+                <span className="c-seg c-seg-big" role="group" aria-label="對手類型">
+                  <button
+                    type="button"
+                    aria-pressed={opponentKind === 'human'}
+                    onClick={() => setOpponentKind('human')}
+                  >
+                    人類（邀請連結）
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={opponentKind === 'bot'}
+                    onClick={() => setOpponentKind('bot')}
+                  >
+                    機器人
+                  </button>
+                </span>
+              </div>
+              <p className="muted small c-hint">
+                {opponentKind === 'human'
+                  ? '建立後拿到一條邀請連結，交給對手，他用瀏覽器開啟即可入座。'
+                  : '伺服器會在另一個座位坐一個機器人，建立完直接開局，沒有邀請連結。'}
+              </p>
+
+              {opponentKind === 'bot' && (
+                <>
+                  <div className="c-num-row c-bot-row">
+                    <span className="c-num-label" id="c-bot-label">
+                      機器人
+                    </span>
+                    {/* same card shape as the 兵種配置 picker: three options that
+                        each need a sentence saying what they will actually do to
+                        you */}
+                    <div className="c-choices" role="group" aria-labelledby="c-bot-label">
+                      {BOT_POLICIES.map((policy) => {
+                        const active = botPolicy === policy.id
+                        return (
+                          <button
+                            key={policy.id}
+                            type="button"
+                            aria-pressed={active}
+                            className={active ? 'c-choice c-choice-on' : 'c-choice'}
+                            onClick={() => setBotPolicy(policy.id)}
+                          >
+                            <span className="c-choice-head">
+                              <span className="c-choice-name">{policy.label}</span>
+                              <span className="c-choice-what">
+                                <code className="c-sq">{policy.id}</code>
+                                {policy.id === DEFAULT_BOT_POLICY && '（預設）'}
+                              </span>
+                            </span>
+                            <span className="c-choice-why">{policy.line}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  {/*
+                   * The claim that makes a bot an opponent rather than a
+                   * demonstration, said once, here, where the choice is made.
+                   * It receives stateForViewer(state, {kind:'player', color})
+                   * and nothing else — the same bytes your browser gets
+                   * (規則書 §10). It cannot see your 兵種; you cannot see its.
+                   */}
+                  <p className="muted small c-hint">
+                    機器人是<strong>玩家</strong>，不是旁觀者：它跟你一樣只收到自己視角的盤面（規則書
+                    §10），自己秘密佈署十六個兵種，看不到你的軍容——你也不會拿到它的。
+                    這局不會發出第二個座位的連結。
+                  </p>
+                </>
+              )}
+            </div>
 
             <div className="c-field">
               <div className="c-field-head">
@@ -285,7 +463,10 @@ export function Create() {
               </div>
               <p className="muted small c-hint">
                 {clockEnabled
-                  ? `雙方各 ${CLOCK_SUMMARY}，時間用盡即判負。人對人請用這個。`
+                  ? `雙方各 ${CLOCK_SUMMARY}，時間用盡即判負。` +
+                    (opponentKind === 'bot'
+                      ? '機器人幾乎不耗時，讀秒實際上只約束你自己。'
+                      : '人對人請用這個。')
                   : '完全關閉時鐘：不讀秒，也不會超時判負。與 LLM 靠複製貼上對弈時請選這個——一來一回的節奏遠慢於任何時鐘。'}
               </p>
             </div>
@@ -429,10 +610,11 @@ export function Create() {
           </section>
 
           <button className="primary big" type="button" onClick={onCreate} disabled={busy}>
-            {busy ? '建立中…' : '建立對局'}
+            {busy ? '建立中…' : opponentKind === 'bot' ? '開始對局' : '建立對局'}
           </button>
           <p className="muted small">
-            對局存於記憶體，伺服器重啟即消失。無帳號、無配對，僅邀請連結。
+            對局存於記憶體，伺服器重啟即消失。無帳號、無配對
+            {opponentKind === 'bot' ? '；機器人對局不發邀請連結。' : '，僅邀請連結。'}
           </p>
         </>
       )}
@@ -444,6 +626,7 @@ export function Create() {
           <h2>對局已建立</h2>
           <p className="muted small">
             對局編號 {created.game.gameId} ·{' '}
+            {created.bot !== null ? `對手 機器人 ${botPolicyLabel(created.bot.policy)} · ` : ''}
             {created.options.clockEnabled ? `計時 ${CLOCK_SUMMARY}` : '不計時'} · 計分區{' '}
             {created.options.scoringSquares.length} 格 · 兵種配置{' '}
             {distributionName(created.options.distribution)} · 目標 {created.options.scoreTarget} 分
@@ -451,88 +634,139 @@ export function Create() {
             {Math.round(created.options.setupTimeoutMs / 60_000)} 分
           </p>
 
-          <div className="link-row">
-            <div className="link-label c-label-row">
-              <span>邀請對手（分享這條）— {seatLabel(created.game.guestColor)}</span>
-              <span className="c-seg" role="group" aria-label="對手連結形式">
-                <button
-                  type="button"
-                  aria-pressed={opponentMode === 'human'}
-                  onClick={() => chooseOpponentMode('human')}
-                >
-                  人類
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={opponentMode === 'llm'}
-                  onClick={() => chooseOpponentMode('llm')}
-                >
-                  LLM
-                </button>
-              </span>
-            </div>
-            <code className="link">{opponentUrl}</code>
-            <button type="button" onClick={() => void copy('guest', opponentUrl)}>
-              {copied === 'guest' ? '已複製' : '複製'}
-            </button>
-            <p className="muted small c-hint c-seat-note">
-              同一個座位、同一組 token，只是換一種呈現：人類走 <code>/g/</code> 的介面，
-              LLM 走 <code>/llm/</code> 的純文字。
-            </p>
-            <p className="muted small c-hint">
-              {opponentMode === 'llm'
-                ? '把這條貼進網頁版聊天機器人，請它抓取（fetch）這個網址：它會拿到純文字盤面，以及每個合法著法各自的網址，抓其中一條就是落子。'
-                : '對手用瀏覽器開啟即可入座。'}
-            </p>
-          </div>
-
-          <div className="link-row">
-            <p className="muted small c-hint">
-              擲幣已決定顏色。想要另一色就把兩條連結對調——誰拿到哪條，誰就坐那個位子。
-            </p>
-
-            <div className="link-label">你的入口（房主）— {seatLabel(created.game.hostColor)}</div>
-            <code className="link">{created.game.hostUrl}</code>
-            <button type="button" onClick={() => void copy('host', created.game.hostUrl)}>
-              {copied === 'host' ? '已複製' : '複製'}
-            </button>
-          </div>
-
           {/*
-           * The third link, and the only one that may leave the two seats.
-           * Every other viewer is attached to somebody's army — a 綁定觀戰者
-           * inherits one player's view entire (§10.2 ①) — so until this link
-           * existed there was no way to let anyone watch a live game without
-           * handing over sixteen 兵種. This one owns no colour.
+           * Asked for a bot and got a human game back. Not a detail to swallow:
+           * the player would otherwise sit at a board waiting for a move that
+           * is never coming. The invite link below is the honest way out.
            */}
-          {publicUrl !== '' && (
-            <div className="link-row c-public-row">
-              <div className="link-label c-label-row">
-                <span>公開觀戰 — 無陣營，不入座</span>
-                <span className="c-safe">對局進行中可安全轉發</span>
-              </div>
-              <code className="link">{publicUrl}</code>
-              <button type="button" onClick={() => void copy('public', publicUrl)}>
-                {copied === 'public' ? '已複製' : '複製'}
-              </button>
-              <p className="muted small c-hint">
-                拿到這條的人看到的是<strong>雙方本來就都知道的那些</strong>：棋盤與載體、公開事件紀錄、已翻明的兵種、比分與時鐘。任何一方未翻明的兵種都不在裡面——不是收到了不顯示，是伺服器根本不送（規則書 §10）。他也不能落子、不能認輸。終局後全部兵種對所有人公開（§10 終局公開全部兵種），這條連結也會一起看到。
-              </p>
-              <p className="muted small c-hint">
-                <strong className="c-careful">別跟「綁定觀戰連結」搞混：</strong>
-                那條綁定某一方的視角（規則書 §10.2 ①），等於把那方的整副軍容交出去，對局中不能給第三者；要轉發的是上面這條。
-              </p>
-            </div>
+          {created.requestedBot !== null && created.bot === null && (
+            <p className="error">
+              這個伺服器沒有座機器人（可能是較舊的版本），已改建立一般對局。
+              下面是邀請連結，找個人來坐，或重新整理再試一次。
+            </p>
           )}
 
-          <p>
-            <a className="primary big as-button" href={localizeUrl(created.game.hostUrl)}>
-              以房主身分進入 →
-            </a>
-          </p>
-          <p className="muted small">
-            若上方分享連結的網域與此頁不同（開發模式常見），對手仍應使用伺服器發出的連結。
-          </p>
+          {created.bot !== null ? (
+            /*
+             * A bot game hands back no invite row, because there is no second
+             * person and the second SEAT is the bot's: its token would serve
+             * whoever opened it the bot's entire deployment (規則書 §10.1 玩家:
+             * 己方全部). The server withholds it; this screen therefore has
+             * nothing to show and nothing to copy, and goes to the board.
+             */
+            <div className="c-bot-created">
+              <div className="c-bot-headline">
+                對手 <strong>機器人 · {botPolicyLabel(created.bot.policy)}</strong>
+                　它已入座，並會自己秘密佈署十六個兵種
+              </div>
+              {/* the coin flip already ran (§9) and may well have handed the
+                  human Black — say so before the board does */}
+              <div className="c-bot-seat">
+                擲幣結果：你<strong>{seatLabel(created.game.hostColor)}</strong>
+                {created.game.hostColor === 'black' && '，機器人先行'}
+              </div>
+              <p className="muted small c-hint">
+                下一步是你的佈署：把十六個兵種指派到自己的十六顆棋子上。
+                機器人同時、獨立地做同一件事——它看不到你的，你也看不到它的。
+              </p>
+              <p>
+                <a className="primary big as-button" href={localizeUrl(created.game.hostUrl)}>
+                  進入對局 →
+                </a>
+              </p>
+              <p className="muted small">正在進入…沒有自動跳轉的話，按上面的按鈕。</p>
+            </div>
+          ) : (
+            <>
+            {opponentUrl !== '' && (
+              <div className="link-row">
+                <div className="link-label c-label-row">
+                  <span>
+                    邀請對手（分享這條）—{' '}
+                    {seatLabel(created.game.guestColor ?? other(created.game.hostColor))}
+                  </span>
+                  <span className="c-seg" role="group" aria-label="對手連結形式">
+                    <button
+                      type="button"
+                      aria-pressed={opponentMode === 'human'}
+                      onClick={() => chooseOpponentMode('human')}
+                    >
+                      人類
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={opponentMode === 'llm'}
+                      onClick={() => chooseOpponentMode('llm')}
+                    >
+                      LLM
+                    </button>
+                  </span>
+                </div>
+                <code className="link">{opponentUrl}</code>
+                <button type="button" onClick={() => void copy('guest', opponentUrl)}>
+                  {copied === 'guest' ? '已複製' : '複製'}
+                </button>
+                <p className="muted small c-hint c-seat-note">
+                  同一個座位、同一組 token，只是換一種呈現：人類走 <code>/g/</code> 的介面，
+                  LLM 走 <code>/llm/</code> 的純文字。
+                </p>
+                <p className="muted small c-hint">
+                  {opponentMode === 'llm'
+                    ? '把這條貼進網頁版聊天機器人，請它抓取（fetch）這個網址：它會拿到純文字盤面，以及每個合法著法各自的網址，抓其中一條就是落子。'
+                    : '對手用瀏覽器開啟即可入座。'}
+                </p>
+              </div>
+            )}
+
+            <div className="link-row">
+              <p className="muted small c-hint">
+                擲幣已決定顏色。想要另一色就把兩條連結對調——誰拿到哪條，誰就坐那個位子。
+              </p>
+
+              <div className="link-label">你的入口（房主）— {seatLabel(created.game.hostColor)}</div>
+              <code className="link">{created.game.hostUrl}</code>
+              <button type="button" onClick={() => void copy('host', created.game.hostUrl)}>
+                {copied === 'host' ? '已複製' : '複製'}
+              </button>
+            </div>
+
+            {/*
+             * The third link, and the only one that may leave the two seats.
+             * Every other viewer is attached to somebody's army — a 綁定觀戰者
+             * inherits one player's view entire (§10.2 ①) — so until this link
+             * existed there was no way to let anyone watch a live game without
+             * handing over sixteen 兵種. This one owns no colour.
+             */}
+            {publicUrl !== '' && (
+              <div className="link-row c-public-row">
+                <div className="link-label c-label-row">
+                  <span>公開觀戰 — 無陣營，不入座</span>
+                  <span className="c-safe">對局進行中可安全轉發</span>
+                </div>
+                <code className="link">{publicUrl}</code>
+                <button type="button" onClick={() => void copy('public', publicUrl)}>
+                  {copied === 'public' ? '已複製' : '複製'}
+                </button>
+                <p className="muted small c-hint">
+                  拿到這條的人看到的是<strong>雙方本來就都知道的那些</strong>：棋盤與載體、公開事件紀錄、已翻明的兵種、比分與時鐘。任何一方未翻明的兵種都不在裡面——不是收到了不顯示，是伺服器根本不送（規則書 §10）。他也不能落子、不能認輸。終局後全部兵種對所有人公開（§10 終局公開全部兵種），這條連結也會一起看到。
+                </p>
+                <p className="muted small c-hint">
+                  <strong className="c-careful">別跟「綁定觀戰連結」搞混：</strong>
+                  那條綁定某一方的視角（規則書 §10.2 ①），等於把那方的整副軍容交出去，對局中不能給第三者；要轉發的是上面這條。
+                </p>
+              </div>
+            )}
+
+            <p>
+              <a className="primary big as-button" href={localizeUrl(created.game.hostUrl)}>
+                以房主身分進入 →
+              </a>
+            </p>
+            <p className="muted small">
+              若上方分享連結的網域與此頁不同（開發模式常見），對手仍應使用伺服器發出的連結。
+            </p>
+            </>
+          )}
         </section>
       )}
     </main>
@@ -664,6 +898,28 @@ const CREATE_CSS = `
   font-size: 0.78rem;
   line-height: 1.5;
 }
+/* 對手: the first question on the screen, so it gets a rule under it rather
+   than sitting flush against the clock row */
+.screen-create .c-opponent {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.screen-create .c-bot-row { align-items: flex-start; flex-wrap: wrap; margin-top: 14px; }
+.screen-create .c-bot-row .c-num-label { padding-top: 6px; }
+
+/* the created panel of a bot game: no links, one fact per line, one way out */
+.screen-create .c-bot-created {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #3d6d97;
+  background: rgba(110, 193, 255, 0.06);
+  border-radius: 8px;
+}
+.screen-create .c-bot-headline { font-size: 1.02rem; }
+.screen-create .c-bot-seat { margin-top: 6px; color: var(--gold); }
+.screen-create .c-bot-created > p:last-child { margin-bottom: 0; }
+
 .screen-create .c-bad { color: var(--danger); }
 .screen-create .c-sq {
   background: #0f1114;

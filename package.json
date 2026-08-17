@@ -17,6 +17,7 @@
     "build:server": "npm run build -w @xiyang/server",
     "build:web": "npm run build -w @xiyang/web",
     "test": "npm run test -w @xiyang/rules",
+    "bot": "npm run build -w @xiyang/rules && npm run build -w @xiyang/bot && node packages/bot/dist/cli.js",
     "start": "node packages/server/dist/index.js",
     "dev": "npm run build -w @xiyang/rules && concurrently -k -n server,web -c blue,magenta \"npm run dev -w @xiyang/server\" \"npm run dev -w @xiyang/web\""
   },

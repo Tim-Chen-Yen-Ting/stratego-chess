@@ -14,6 +14,11 @@
  * spectator-of-white, spectator-of-black), so a broadcast renders each distinct
  * view exactly once and no view can ever be sent to the wrong audience.
  *
+ * A bot seat has no socket and no viewer identity here at all: it is driven
+ * in-process by rooms.ts, which hands its policy the same `serialiseFor` payload
+ * a human would get. Nothing on this transport can join it, act as it, or
+ * subscribe to its view — see `issuedViewers` and the `join` guard.
+ *
  * Incoming payloads are typed `unknown` on purpose: they come off the wire, so
  * they are shape-checked here before they reach the rules engine.
  */
@@ -25,6 +30,7 @@ import type { Carrier, Color, Move, PieceId, Rank, Square, Viewer, ViewerState }
 import {
   COLORS,
   RoomError,
+  isBotSeatViewer,
   playMove,
   resignPlayer,
   resolveToken,
@@ -107,18 +113,26 @@ function viewerRoomName(gameId: string, viewer: Viewer): string {
   }
 }
 
-/** The four viewer identities the server actually issues tokens for. */
 /**
- * Every viewer identity a game hands out. `broadcastState` fans out over this
+ * Every viewer identity THIS GAME hands out. `broadcastState` fans out over this
  * list, so anything missing here receives its join payload and then silently
  * never updates again — a frozen board with no error, which is how the public
  * observer shipped broken the first time.
+ *
+ * A bot seat contributes NOTHING to this list: no player view and no bound
+ * spectator view for its colour. That is not an optimisation. The bot's seat
+ * carries its whole deployment, and the guarantee that nobody can subscribe to
+ * it should not rest on "no token was minted" alone — this makes the view
+ * unrenderable on the socket path as well, so two independent mistakes would be
+ * needed to put it on the wire.
  */
-function issuedViewers(): Viewer[] {
+function issuedViewers(room: Room): Viewer[] {
   const viewers: Viewer[] = []
   for (const color of COLORS) {
-    viewers.push({ kind: 'player', color })
-    viewers.push({ kind: 'spectator', bound: color })
+    const player: Viewer = { kind: 'player', color }
+    const spectator: Viewer = { kind: 'spectator', bound: color }
+    if (!isBotSeatViewer(room, player)) viewers.push(player)
+    if (!isBotSeatViewer(room, spectator)) viewers.push(spectator)
   }
   viewers.push({ kind: 'spectator-public' })
   return viewers
@@ -209,7 +223,11 @@ export function registerSocketHandlers(io: GameServer, log: ServerLog = NO_LOG):
         return
       }
       const session = resolveToken(token)
-      if (session === undefined) {
+      // The bot's seat is never issued a token, so the second test can only fire
+      // on a bug in issuance — and it is exactly the bug that would put sixteen
+      // hidden 兵種 into somebody's browser. Refused as "unknown", because from
+      // the outside that seat genuinely has no address.
+      if (session === undefined || isBotSeatViewer(session.room, session.viewer)) {
         fail(socket, 'unknown token')
         return
       }
@@ -297,7 +315,7 @@ function sendState(socket: GameSocket, session: Resolved): void {
 /** Fan a state change out to every connected viewer, one render per identity. */
 export function broadcastState(io: GameServer, room: Room): void {
   const occupied = io.sockets.adapter.rooms
-  for (const viewer of issuedViewers()) {
+  for (const viewer of issuedViewers(room)) {
     const name = viewerRoomName(room.id, viewer)
     if (!occupied.has(name)) continue
     io.to(name).emit('state', serialiseFor(room, viewer))

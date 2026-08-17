@@ -14,7 +14,9 @@ import {
   PROMOTION_CHOICES,
   RANK_LABEL,
 } from '../constants.js'
-import { colorLabel, formatClock, formatScore, resultText, squareName } from '../format.js'
+import { colorLabel, formatClock, formatScore, other, resultText, squareName } from '../format.js'
+import { botPolicyLabel, fetchOpponent, readBotSeat, recallBotGame } from '../socket.js'
+import type { BotSeat, OpponentAnswer } from '../socket.js'
 import {
   canAct,
   captureRecords,
@@ -100,6 +102,58 @@ export function Game({ view }: GameProps) {
   const myTurn = seated && me === view.toMove && playing
 
   const moves = myLegalMoves(view)
+
+  /*
+   * ---- 機器人對局 -------------------------------------------------------
+   *
+   * Two facts, and only two: that the other chair holds a bot, and which policy
+   * is driving it. Both are public in the sense that matters — they are how the
+   * game was created, not anything about the position. The bot's 兵種 are not in
+   * this payload and this screen would have nothing to draw them with if they
+   * were: a bot is a PLAYER (規則書 §10.1), served
+   * `stateForViewer(state, {kind:'player', color})` exactly like the human, and
+   * neither side is ever handed the other's army.
+   *
+   * Three sources, strongest first, because this screen is reached by a fresh
+   * page load that knows only its token:
+   *
+   *   1. a marker on the state itself, if a build ever puts one there;
+   *   2. `GET /api/links/:token` — the server's own answer, and the only one
+   *      that works in a browser that did not create the game;
+   *   3. the local memo the create screen wrote, which paints immediately while
+   *      (2) is still in flight.
+   *
+   * (2) is allowed to say 「human」 and retire the memo. An answer of null from
+   * any of them means "did not say", never "no bot" — so a failed fetch leaves
+   * whatever the weaker source knew rather than erasing it.
+   */
+  const [fetchedOpponent, setFetchedOpponent] = useState<OpponentAnswer>(null)
+  useEffect(() => {
+    if (shareToken === null) return
+    let live = true
+    void fetchOpponent(shareToken).then((answer) => {
+      if (live) setFetchedOpponent(answer)
+    })
+    return () => {
+      live = false
+    }
+  }, [shareToken])
+
+  const rememberedBot = useMemo(
+    () => (shareToken === null ? null : recallBotGame(shareToken)),
+    [shareToken],
+  )
+  const confirmedBot: BotSeat | null =
+    fetchedOpponent === null
+      ? rememberedBot
+      : fetchedOpponent === 'human'
+        ? null
+        : fetchedOpponent
+  const bot = readBotSeat(view) ?? confirmedBot
+  /** which seat the bot sits in: what it said, else the side I am not */
+  const botColor: Color | null = bot === null ? null : (bot.color ?? (me === null ? null : other(me)))
+  /** the bot is on the clock right now, and the board is waiting for it */
+  const botThinking = bot !== null && playing && botColor !== null && view.toMove === botColor
 
   // The notepad belongs to THIS game AND THIS seat: two tabs of one browser are
   // two seats, and they must not share (or overwrite) one notepad. The
@@ -325,7 +379,9 @@ export function Game({ view }: GameProps) {
         ? '點一顆有亮框的棋子，再點目標格。'
         : `已選 ${squareName(selected)} — 點目標格，或再點一次取消。`
     }
-    return playing ? '等待對手行動…' : ''
+    if (!playing) return ''
+    // the bot's turn already has a line of its own directly above this one
+    return botThinking ? '' : '等待對手行動…'
   }
 
   const hint = hintText()
@@ -364,6 +420,20 @@ export function Game({ view }: GameProps) {
             分數線 {view.config.scoreTarget} · 黑方貼目 +{formatScore(view.config.komi)} · 停滯{' '}
             {view.noProgressTurns}/{view.config.noProgressTurns} 回合
           </div>
+          {/* who is across the table. Says it once, permanently, so the
+              thinking indicator below reads as an opponent and not a stall */}
+          {bot !== null && (
+            <div className="xy-bot-chip" title="機器人只收到自己視角的盤面（規則書 §10），與你拿到的是同一種資料">
+              <span className="xy-bot-mark" aria-hidden="true">
+                ⌬
+              </span>
+              <span>
+                {seated ? '對手：' : ''}機器人
+                {botColor === null ? '' : `（${colorLabel(botColor)}）`} ·{' '}
+                {botPolicyLabel(bot.policy)}
+              </span>
+            </div>
+          )}
         </div>
       </header>
 
@@ -507,6 +577,29 @@ export function Game({ view }: GameProps) {
             )}
           </div>
 
+          {/*
+           * The bot is on the clock. Without this the board simply stops
+           * responding for however long the server takes, which reads as a
+           * frozen page rather than as an opponent thinking — the same thing a
+           * human opponent's absence would look like, and the one state where
+           * this game gives no other signal.
+           *
+           * A pure reflection of `view.toMove`: it appears when the state says
+           * the bot is to move and disappears when the next state arrives. It
+           * runs no timer of its own and predicts nothing, so it can never
+           * claim the bot is thinking when the server thinks otherwise.
+           */}
+          {botThinking && (
+            <div className="xy-bot-thinking" role="status">
+              <span className="xy-bot-dots" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+              <span>機器人思考中…</span>
+            </div>
+          )}
+
           <p className="muted small">{hint}</p>
 
           {/*
@@ -640,6 +733,45 @@ const STYLE = `
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+/* 機器人對局: who is across the table, and whether they are thinking */
+.screen-game .xy-bot-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 1px 10px;
+  font-size: 0.8rem;
+  color: var(--fg);
+  background: rgba(110, 193, 255, 0.08);
+  border: 1px solid #3d6d97;
+  border-radius: 999px;
+}
+.screen-game .xy-bot-mark { color: var(--accent); }
+.screen-game .xy-bot-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  color: var(--accent);
+}
+.screen-game .xy-bot-dots { display: inline-flex; gap: 4px; }
+.screen-game .xy-bot-dots > i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: xy-bot-blink 1.1s ease-in-out infinite;
+}
+.screen-game .xy-bot-dots > i:nth-child(2) { animation-delay: 0.18s; }
+.screen-game .xy-bot-dots > i:nth-child(3) { animation-delay: 0.36s; }
+@keyframes xy-bot-blink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+/* the indicator must still be legible as text when animation is unwelcome */
+@media (prefers-reduced-motion: reduce) {
+  .screen-game .xy-bot-dots > i { animation: none; opacity: 0.7; }
 }
 .xy-grid {
   display: grid;

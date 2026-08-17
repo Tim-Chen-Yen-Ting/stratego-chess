@@ -618,6 +618,17 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
     lines.push('here. Pawns move and capture exactly as in chess. So does everything else.')
     lines.push('')
     lines.push(
+      "SAME RULE FOR THE SETTINGS. If you were given a strategy guide, it does NOT know this",
+    )
+    lines.push(
+      "game's configuration — 結算格, 兵種 counts, X and N are all per-game (附錄 B). The",
+    )
+    lines.push(
+      "squares listed under Scoring squares below are THIS game's, and they are the only ones",
+    )
+    lines.push("that score. Where a guide names squares and this view disagrees, THIS VIEW WINS.")
+    lines.push('')
+    lines.push(
       'IF YOUR TOOLS WILL NOT FETCH A URL YOU FOUND IN THIS PAGE — many will only fetch a',
     )
     lines.push(

@@ -18,12 +18,18 @@
  * the bottom of this file is the test that says so. Without it a regression to
  * either of the other two rules is invisible: every other test here would still
  * pass with white quietly a point ahead per acquisition.
+ *
+ * Level income is still not a level game, though — white reaches any given total
+ * half a turn earlier simply by moving first. That one belongs to §7.4② rather
+ * than to settlement (X is read only at the close of a turn, never mid-turn), and
+ * the last block in this file pins the two rules together: a mirror game is where
+ * the difference between them is visible with nothing else in play.
  */
 
 import { describe, expect, it } from 'vitest'
 import { applyMove } from '../src/game.js'
 import { createGame } from '../src/setup.js'
-import { CENTER_SQUARES } from '../src/constants.js'
+import { CENTER_SQUARES, DEFAULT_CONFIG } from '../src/constants.js'
 import type { Color, GameState, Rank } from '../src/types.js'
 import { PASS, lastEvent, mv, pieceById, position, sq } from './helpers.js'
 
@@ -252,8 +258,12 @@ function mirrorSquare(nm: string): string {
  * A mirror-image opening: every white man has a black counterpart on the
  * reflected square, carrying the SAME 兵種 — so nothing but the colour and the
  * move order differs between the two sides.
+ *
+ * `scoreTarget` defaults to the config default, which the five-move script below
+ * never comes near; the §7.4② block at the bottom lowers it on purpose so the
+ * line is crossed inside the script.
  */
-function mirrorGame(komi: number): GameState {
+function mirrorGame(komi: number, scoreTarget: number = DEFAULT_CONFIG.scoreTarget): GameState {
   const white: { at: string; carrier: 'pawn' | 'knight' | 'bishop'; rank: Rank }[] = [
     { at: 'd2', carrier: 'pawn', rank: 'engineer' },
     { at: 'e2', carrier: 'pawn', rank: 'platoon' },
@@ -273,7 +283,7 @@ function mirrorGame(komi: number): GameState {
         id: `B${i}`,
       },
     ]),
-    { config: { komi } },
+    { config: { komi, scoreTarget } },
   )
 }
 
@@ -382,5 +392,64 @@ describe('§7 symmetry — equal EXPOSURE, not just equal counting', () => {
     expect(whiteEarned).toBe(1)
     expect(blackEarned).toBe(1)
     expect(whiteEarned).toBe(blackEarned)
+  })
+})
+
+describe('§7.4② symmetry — equal MOVES at the moment X is read', () => {
+  /**
+   * Settlement symmetry is only half of it. Even with the income dead level, the
+   * side that moves first reaches any given total half a turn earlier — so a
+   * target read after every settlement stops the game on a turn black was never
+   * allowed to finish, and white wins on one extra move.
+   *
+   * The mirror game shows it with nothing else in play: identical armies on
+   * reflected squares, black answering every white move with its reflection.
+   * Put X where white's fourth settlement lands and the two rules disagree about
+   * a game in which neither side has done anything the other did not do:
+   *
+   *   read after every settlement   stop at ply 7,  7 : 5.5  → white
+   *   read at the close of the turn  stop at ply 8,  7 : 7.5  → black, on 貼目
+   *
+   * Only the second survives the question "how many moves has each side had?" —
+   * four apiece, rather than four against three.
+   */
+  it('does not stop on white\'s crossing ply; black\'s reflection takes the turn', () => {
+    let s = mirrorGame(0.5, 7)
+    for (const [from, to] of MIRROR_SCRIPT.slice(0, 3)) {
+      s = applyMove(s, mv(from, to))
+      s = applyMove(s, mv(mirrorSquare(from), mirrorSquare(to)))
+    }
+    expect(s.score).toEqual({ white: 5, black: 5.5 })
+    expect(s.status).toEqual({ kind: 'playing' })
+
+    const [from, to] = MIRROR_SCRIPT[3]!
+    const w = applyMove(s, mv(from, to))
+    expect(w.score).toEqual({ white: 7, black: 5.5 })
+    expect(w.score.white).toBeGreaterThanOrEqual(w.config.scoreTarget)
+    expect(w.status, 'white crossed X on its own ply — the turn is not over')
+      .toEqual({ kind: 'playing' })
+
+    const b = applyMove(w, mv(mirrorSquare(from), mirrorSquare(to)))
+    expect(b.score).toEqual({ white: 7, black: 7.5 })
+    expect(b.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'black' } })
+
+    expect(b.log.filter((e) => e.color === 'white')).toHaveLength(4)
+    expect(b.log.filter((e) => e.color === 'black')).toHaveLength(4)
+  })
+
+  /**
+   * 貼目 = 0 is a 附錄 B knob, and it is the one setting that can produce the tie
+   * §7.4② says cannot happen — reading X per turn is what makes a perfect mirror
+   * arrive at it. The fallback must stay deterministic rather than award the game
+   * to whoever happened to move.
+   */
+  it('falls back to black on an exact tie, which only 貼目 = 0 can produce', () => {
+    let s = mirrorGame(0, 7)
+    for (const [from, to] of MIRROR_SCRIPT.slice(0, 4)) {
+      s = applyMove(s, mv(from, to))
+      s = applyMove(s, mv(mirrorSquare(from), mirrorSquare(to)))
+    }
+    expect(s.score).toEqual({ white: 7, black: 7 })
+    expect(s.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'black' } })
   })
 })
