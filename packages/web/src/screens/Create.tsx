@@ -398,9 +398,10 @@ export function Create() {
                     <span className="c-num-label" id="c-bot-label">
                       機器人
                     </span>
-                    {/* same card shape as the 兵種配置 picker: three options that
+                    {/* same card shape as the 兵種配置 picker: four options that
                         each need a sentence saying what they will actually do to
-                        you */}
+                        you. Ordered strongest first (socket.ts), so the top card
+                        is both the default and the real opponent. */}
                     <div className="c-choices" role="group" aria-labelledby="c-bot-label">
                       {BOT_POLICIES.map((policy) => {
                         const active = botPolicy === policy.id
@@ -425,6 +426,18 @@ export function Create() {
                       })}
                     </div>
                   </div>
+                  {/*
+                   * Which of the four is worth your time, said plainly. Only the
+                   * first is a player; the other three were built to MEASURE the
+                   * board (notebook §9.1) and are kept because a result against
+                   * an instrument is still a reading. Saying so is the whole
+                   * point of listing them — a roster that offers four names and
+                   * ranks none of them invites the player to pick the weakest.
+                   */}
+                  <p className="muted small c-hint">
+                    只有<strong>推測</strong>是對手，其餘三個是量測儀器：它們是為了量棋盤而寫的，
+                    棋力低且各有一件事永遠不做（不吃子、不估勝算、不思考）。想下棋就用預設那個。
+                  </p>
                   {/*
                    * The claim that makes a bot an opponent rather than a
                    * demonstration, said once, here, where the choice is made.

@@ -71,9 +71,15 @@ export function connectGame(token: string, handlers: GameSocketHandlers): GameSo
  * only part that travels: the label and the sentence are this client's words for
  * it. The roster is duplicated here rather than imported because `@xiyang/bot`
  * is a Node package and the web client takes no new dependency for a list of
- * three strings — an unknown id therefore renders as itself (see
+ * four strings — an unknown id therefore renders as itself (see
  * `botPolicyLabel`) instead of vanishing, which is what an out-of-date roster
  * should look like.
+ *
+ * DUPLICATION MEANS THIS LIST CAN GO STALE, AND IT DID. `belief` shipped in
+ * `POLICIES` and was never added here, so for ten recorded games the only
+ * opponent a browser could actually choose was `contest` — the 1-ply instrument
+ * (§9.1: 量測儀器，不是對手). Every id below must exist as a key of `POLICIES`;
+ * one that does not is a 400 from POST /api/game, not a quiet fallback.
  */
 export interface BotPolicyInfo {
   /** the policy key the server understands */
@@ -85,36 +91,46 @@ export interface BotPolicyInfo {
 }
 
 /**
- * Ordered strongest-intent first. `contest` is the default because it is the
- * only one that starts fights: `greedy` never initiates a capture at all, and a
- * first game against an opponent that refuses every contact would show none of
- * the hidden layer this game is about.
+ * ORDERED BY STRENGTH, strongest first, and the order is measured rather than
+ * asserted: `belief` beats `contest` 70.0% / 66.3% over 200 games a seat on both
+ * boards, both seats (notebook §11.3), and `contest` beats `greedy` by being
+ * willing to take a square back.
+ *
+ * `belief` is the default because it is the only entry that is an OPPONENT. The
+ * other three are instruments — they were built to measure the board, and each
+ * line below says so rather than dressing it up. Playing the instrument and
+ * calling it 「the bot」 is the mistake this roster just cost us ten games of.
  */
 export const BOT_POLICIES: readonly BotPolicyInfo[] = [
   {
+    id: 'belief',
+    label: '推測',
+    line: '真正的對手：它從公開資訊（翻明、接觸結果、事件紀錄——跟你手上的線索同一份）推測你每顆棋子可能是什麼兵種，再把每次吃子換算成分數，划算才打；自我對局中對「爭奪」勝率約七成。弱點是只看眼前這一手：看不到你的回手，也不會注意誰正沿著空線衝向它的軍旗。',
+  },
+  {
     id: 'contest',
     label: '爭奪',
-    line: '先佔沒人站的計分格；沒有空格可佔時，就直接撞上對手正踩著的那一格。中央四格很快就沒有空位，所以它真的會跟你打——不知道對面是什麼兵種也照撞。',
+    line: '先佔沒人站的計分格；沒有空格可佔時，就直接撞上對手正踩著的那一格。中央四格很快就沒有空位，所以它真的會跟你打——但它不知道自己在撞什麼，不估勝算也不估損失。這是用來量「棋盤有多逼人動手」的儀器，不是對手。',
   },
   {
     id: 'greedy',
     label: '佔點',
-    line: '只走能多佔一格計分格的著法：從不主動吃子，也絕不移動軍旗。安靜，而且比看起來難纏——它不會犯錯，只會一直加分。',
+    line: '只走能多佔一格計分格的著法：從不主動吃子，也絕不移動軍旗。你去撞它，它不會還手。這是純收租速率的對照組——量測儀器，不是對手。',
   },
   {
     id: 'random',
     label: '亂走',
-    line: '在合法著法裡均勻亂選。這是基準線而不是對手：用來對照別的機器人有多強，拿來練棋沒有意義。',
+    line: '在合法著法裡均勻亂選。基準線：用來知道「什麼都不會」能拿幾分，好讀懂其他數字。拿來練棋沒有意義。',
   },
 ]
 
-export const DEFAULT_BOT_POLICY = 'contest'
+export const DEFAULT_BOT_POLICY = 'belief'
 
 export function botPolicyInfo(id: string): BotPolicyInfo | undefined {
   return BOT_POLICIES.find((p) => p.id === id)
 }
 
-/** 「爭奪（contest）」, or the bare id when this build does not know the name. */
+/** 「推測（belief）」, or the bare id when this build does not know the name. */
 export function botPolicyLabel(id: string): string {
   if (id === '') return '機器人'
   const info = botPolicyInfo(id)

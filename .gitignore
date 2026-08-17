@@ -12,3 +12,8 @@ npm-debug.log*
 
 .DS_Store
 Thumbs.db
+
+# Playtest exports. Local research data, not part of the project: they contain
+# full deployments, they are large, and they are the input to notebook §6/§9,
+# not a build artifact anyone else needs.
+games/

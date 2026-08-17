@@ -162,14 +162,19 @@ function readConfig(input: unknown): Partial<GameConfig> | undefined {
 // --------------------------------------------------------------- opponent input
 
 /**
- * `{ opponent: { kind: 'bot', policy: 'contest' } }` — who takes the other seat.
+ * `{ opponent: { kind: 'bot', policy: 'belief' } }` — who takes the other seat.
  *
  * Default is a human, so a body that says nothing behaves exactly as before.
  * An unknown policy name is a 400 and never a quiet fallback: a caller that
  * asked for `greedy` and silently got `contest` would have no way to notice, and
  * every game it recorded would be attributed to the wrong opponent.
  */
-const DEFAULT_BOT_POLICY = 'contest'
+// `belief` is the only entry that is an OPPONENT: contest/greedy/random are the
+// measuring instruments from notebook §9.1. This must stay in step with
+// DEFAULT_BOT_POLICY in packages/web/src/socket.ts — a caller that sends no
+// policy lands here, so a disagreement means the browser and a bare API call
+// deal different opponents and every recorded game is mis-attributed.
+const DEFAULT_BOT_POLICY = 'belief'
 
 /** Bound and de-fang a caller-supplied string before it goes into a message. */
 function echoable(raw: string): string {
