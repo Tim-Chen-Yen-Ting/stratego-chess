@@ -1,5 +1,5 @@
 /**
- * 軍旗 — §5 and §7①.
+ * 軍旗 — §5 and §7.5①.
  *
  *   「軍旗以任何方式離開棋盤，該方立即判負（含被吃、主動撞擊他子、與敵方軍旗
  *     同歸於盡）。」
@@ -28,7 +28,7 @@ function duel(whiteRank: Rank, blackRank: Rank, extra: Parameters<typeof positio
   )
 }
 
-describe('§7① 奪旗 — instant loss', () => {
+describe('§7.5① 奪旗 — instant loss', () => {
   it('loses instantly when the 軍旗 is captured', () => {
     const s = applyMove(duel('general', 'flag'), mv('b2', 'b7'))
     expect(s.status).toEqual({ kind: 'over', result: { kind: 'flag', winner: 'white' } })
@@ -46,7 +46,7 @@ describe('§7① 奪旗 — instant loss', () => {
   it('is a DRAW when both 軍旗 leave together — the only draw in the game', () => {
     const s = applyMove(duel('flag', 'flag'), mv('b2', 'b7'))
     // The announcement says only that both pieces went. That the two were 軍旗
-    // is公開 by the result itself (§7① ends the game), not by the outcome — and
+    // is公開 by the result itself (§7.5① ends the game), not by the outcome — and
     // the outcome must stay opaque, or every OTHER 同歸於盡 becomes readable too.
     expect(lastEvent(s).combat?.outcome).toEqual({ kind: 'mutual-destruction' })
     expect(s.status).toEqual({ kind: 'over', result: { kind: 'flag-both' } })
@@ -72,7 +72,7 @@ describe('§7① 奪旗 — instant loss', () => {
   })
 })
 
-describe('§7① 奪旗 resolves in ① 行動階段, BEFORE ② 結算階段', () => {
+describe('§7.5① 奪旗 resolves in ① 行動階段, BEFORE ② 結算階段', () => {
   const before = duel('general', 'flag', [
     { at: 'e4', color: 'white', carrier: 'queen', rank: 'commander', id: 'WQ' },
     { at: 'd5', color: 'black', carrier: 'knight', rank: 'division', id: 'BN' },

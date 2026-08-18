@@ -451,10 +451,42 @@ function formatClock(ms: number): string {
 }
 
 /**
+ * 吃子得分係數 k (§7.3), as one column of the settings table.
+ *
+ * Zero is the shipped default and reads as an explicit "off" rather than a bare
+ * 0: a model that has just been told points exist must be able to see that this
+ * particular source of them is switched off in the game it is actually in.
+ */
+function captureScoreText(config: GameConfig): string {
+  return config.captureScoreK === 0
+    ? '0 — 吃子 pays no points in this game'
+    : `${config.captureScoreK} × the WINNER's 階級 number, to the winner's side`
+}
+
+/** 有煙無傷獎勵 (§7.3, §5.4) — a FLAT amount, never a function of any 兵種. */
+function fizzleBonusText(config: GameConfig): string {
+  return config.fizzleBonus === 0
+    ? '0 — a 有煙無傷 pays no points in this game'
+    : `${config.fizzleBonus} points to the SURVIVING side of a 有煙無傷`
+}
+
+/**
  * The primer itself is `renderRulesForLLM` — the rules package owns every word of
- * it, because it is a statement of the rules. What is appended here is only this
+ * it, because it is a statement of the rules. What is appended here is this
  * game's tunable NUMBERS (gamebook 附錄 B: settings, never hard-coded), read off
- * the redacted ViewerState. No rule is stated here.
+ * the redacted ViewerState.
+ *
+ * That split used to have one exception. The primer's 「## Scoring」 section
+ * presented 佔領計分格 as the only source of points — true at the shipped k = 0
+ * and false at any other value — so this block carried a conditional paragraph
+ * about what the coefficient multiplies, to stop a bare 「capture score k  2」
+ * underneath it from handing the model a number it had been told could not
+ * exist. `renderRulesForLLM` now states §7.3 itself: both §7.1 sources, the three
+ * outcome rows, that ① is paid in the action phase and therefore need not land on
+ * the mover, and that the amounts are settings which may be zero. The paragraph
+ * has moved there, as its own comment said it should, and this block is numbers
+ * alone at every k. The one-line descriptions beside the two §7.3 numbers stay —
+ * they say what the VALUE is, which is this block's job, not what the rule is.
  */
 function settingsBlock(state: ViewerState): string {
   const config: GameConfig = state.config
@@ -466,6 +498,8 @@ function settingsBlock(state: ViewerState): string {
 score target      ${config.scoreTarget} points
 stagnation limit  ${config.noProgressTurns} full turns
 komi              ${config.komi} to Black
+capture score k   ${captureScoreText(config)}
+fizzle bonus      ${fizzleBonusText(config)}
 clock             ${clock}
 `
 }

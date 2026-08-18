@@ -183,7 +183,7 @@ export interface BehaviouralWeights {
    * Applied once per rank of forward progress the piece has ever made.
    *
    * A 軍旗 marching up the board is a piece being walked towards the one event
-   * that loses the game outright (§7④①), and 攻略 §9 is blunt about it: 「絕對不要
+   * that loses the game outright (§7.5①), and 攻略 §9 is blunt about it: 「絕對不要
    * 拿軍旗去撞任何東西」. Below 1, so advance is evidence AGAINST 軍旗; mild,
    * because a pawn 旗 that stepped once is a real and recommended deployment.
    */
@@ -292,7 +292,7 @@ function isWeakerThan(candidate: Rank, winner: Rank): boolean {
  *    removes both and announces 同歸於盡 (§4.3); touching 工兵/軍旗 makes it the
  *    loser but announces 有煙無傷 (§5.4). A decisive outcome therefore proves two
  *    階級 were compared, and 爆裂物 has none.
- *  · 軍旗, because 「軍旗以任何方式離開棋盤，該方立即判負」 (§5.3, §7④①). Had the
+ *  · 軍旗, because 「軍旗以任何方式離開棋盤，該方立即判負」 (§5.3, §7.5①). Had the
  *    loser been the 軍旗 the game would have stopped on that ply; the game went
  *    on, so it was not. This is the inference notebook §1.2 turns into a
  *    certainty for 排長: below 排長(8) sit only 工兵(9) and 軍旗(10), and one of
@@ -492,7 +492,7 @@ export function enemyFacts(view: ViewerState, color: Color): Map<PieceId, EnemyF
 
   // ---- facts that come off the position rather than off an event -----------
   //
-  // 「己方任何一顆棋子陣亡而遊戲繼續，該子必定不是軍旗」 (notebook §1.3, from §7④①).
+  // 「己方任何一顆棋子陣亡而遊戲繼續，該子必定不是軍旗」 (notebook §1.3, from §7.5①).
   // This is NOT an inference from any particular announcement — it applies to
   // every removal, 同歸於盡 included — which is why it is applied here, once,
   // over the final position rather than inside the switch above. It is also the
@@ -509,7 +509,7 @@ export function enemyFacts(view: ViewerState, color: Color): Map<PieceId, EnemyF
     const t = track.get(piece.id)
     if (!t) continue
     if (!gameOver && piece.square === null && piece.rank === null) {
-      narrow(piece.id, notFlag, 'removed while the game continued — not the 軍旗 (§7④①, §1.3)')
+      narrow(piece.id, notFlag, 'removed while the game continued — not the 軍旗 (§7.5①, §1.3)')
     }
     const slot = startingSlot(piece.id)
     out.set(piece.id, {
@@ -842,7 +842,7 @@ export function priorBelief(view: ViewerState): RankBelief {
  * P(this piece sits strictly lower on the §2 ladder than `rank`).
  *
  * The literal (R, 工兵] mass of notebook §1.2, 軍旗 included — hitting the 軍旗
- * ends the game on the spot (§7④①), so a policy weighing an attack wants it
+ * ends the game on the spot (§7.5①), so a policy weighing an attack wants it
  * inside the "I win" bucket, not outside.
  *
  * 爆裂物 is excluded because it HAS no 階級 (§2): it is neither weaker nor
@@ -864,7 +864,7 @@ export function pBomb(belief: RankBelief): number {
   return belief.bomb
 }
 
-/** P(軍旗). Taking this piece ends the game immediately (§7④①). */
+/** P(軍旗). Taking this piece ends the game immediately (§7.5①). */
 export function pFlag(belief: RankBelief): number {
   return belief.flag
 }

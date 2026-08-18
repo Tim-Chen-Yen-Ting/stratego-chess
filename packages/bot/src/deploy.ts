@@ -105,7 +105,7 @@ export interface CarrierSet {
   /**
    * Admit only a pawn this deployment is NOT sending at a 結算格.
    *
-   * The 軍旗 may never move into anything (§7①), so parking it on the pawn that
+   * The 軍旗 may never move into anything (§7.5①), so parking it on the pawn that
    * was about to take a 結算格 forfeits that square for the whole game.
    */
   readonly quiet?: boolean

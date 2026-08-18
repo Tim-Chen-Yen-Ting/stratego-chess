@@ -66,14 +66,20 @@ export type ScoringAreaId = 'center' | 'wide'
 /**
  * A 計分區 the Create screen offers.
  *
- * There is deliberately NO score-target multiplier here any more. The wide area
- * used to carry `scoreTargetFactor: 2`, because settlement credited both players
- * after every ply and eight squares therefore paid at twice the rate of four.
- * Settlement now credits only the side that just moved (§7), so a side banks
- * once per full turn on any board: widening the area raises how much a single
- * settlement CAN pay, not how often one happens. Both presets take
- * `DEFAULT_CONFIG.scoreTarget` unscaled, and the field is gone rather than set
- * to 1 so that nothing can quietly start multiplying by it again.
+ * There is deliberately NO score-target multiplier field here: X is a number the
+ * creator sets, not one a preset applies behind their back. That is a decision
+ * about the FORM, not a claim that one X suits both areas — it does not.
+ *
+ * Settlement credits only the side that just moved (§7.1), so each side banks
+ * once per full turn on either area, but it banks every square it HOLDS: about
+ * two on 中央四格 and about four here. A settlement therefore pays roughly double
+ * on the wide area and the same X is a much shorter game — at X=40, n=300 bot
+ * games average 35.5 手 on 中央四格 against 22.0 手 on 側翼八格 (《對局筆記》§9.3,
+ * mechanism in §10.2). 附錄 B lists X as 中央四格 40, 側翼八格 待定, so
+ * `DEFAULT_CONFIG.scoreTarget` is the CENTRE area's number and the wide area has
+ * none yet; near 80 would match the length. Create.tsx says this in words under
+ * the 目標分數 X field — if that ever moves back into data, it is a per-area
+ * DEFAULT for the creator to override, never a silent multiplier.
  */
 export interface ScoringAreaPreset {
   id: ScoringAreaId

@@ -381,6 +381,18 @@ export interface CreatedGame {
   /** what the server actually built — may differ from what was requested */
   setupTimeoutMs?: number
   scoreTarget?: number
+  /**
+   * 吃子得分係數 k (§7.3), and the flat 有煙無傷 bonus beside it. Both are 0 in a
+   * game that did not ask for them — 附錄 B lists both as 待定, so the engine ships
+   * them off and 佔領計分格 stays the only source of points.
+   *
+   * Optional for the same reason as every other field on this list: a server
+   * build that predates §7.3 omits them entirely, and the client cannot prove
+   * which build it is talking to. Absent means 「this payload does not say」 and
+   * never 「zero」.
+   */
+  captureScoreK?: number
+  fizzleBonus?: number
   noProgressTurns?: number
   clockEnabled?: boolean
   scoringSquares?: readonly number[]

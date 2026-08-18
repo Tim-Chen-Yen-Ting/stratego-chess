@@ -35,6 +35,7 @@ export type {
 // game with, and `DISTRIBUTION` is the default one. Anything that validates,
 // counts or explains a deployment reads `config.distribution`.
 export { carrierMoves, reachableSquares } from './publicmoves.js'
+export { replayGame } from './replay.js'
 
 export {
   ALL_COLORS,
@@ -132,10 +133,17 @@ export { isBombImmune, rankOrder, resolveCombat, resolvePieceCombat } from './co
 export type { CombatResolution } from './combat.js'
 
 // ---------- game loop (§4, §6, §7, §8) ----------
-// `scoringPoints` / `scoringSquares` take the game's config; `centerPoints` /
-// `centerSquares` are their deprecated former names.
+// The two score sources of §7.1 have one function each: `captureScore` is ①
+// 吃子得分 (§7.3), `scoringPoints` is ② 佔領計分格 (§7.2). Both take the game's
+// config; `centerPoints` / `centerSquares` are deprecated former names.
+//
+// `captureScore` is exported because it reads ONLY a public `CombatOutcome` plus
+// the config (附錄 A(d)), so anything holding a redacted log — a bot policy, the
+// record renderer, a UI annotating a contact — can price a capture for itself
+// instead of re-deriving the table and getting it subtly wrong.
 export {
   applyMove,
+  captureScore,
   centerPoints,
   centerSquares,
   flagFall,

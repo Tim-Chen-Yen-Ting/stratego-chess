@@ -182,7 +182,7 @@ describe('§5 升變 does not count as 離開棋盤 for a 軍旗', () => {
     expect(lastEvent(s).promoted).toBe('queen')
   })
 
-  it('a 軍旗 pawn LOSING on the 8th rank still loses the game (§7①)', () => {
+  it('a 軍旗 pawn LOSING on the 8th rank still loses the game (§7.5①)', () => {
     const s = applyMove(capturingRunner('flag', 'general'), mv('b7', 'a8', 'queen'))
     expect(pieceById(s, P).square).toBeNull()
     expect(s.status).toEqual({ kind: 'over', result: { kind: 'flag', winner: 'black' } })

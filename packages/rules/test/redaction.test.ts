@@ -219,7 +219,7 @@ describe('entitledToRank — gamebook §10', () => {
     }
   })
 
-  it('opens everything the instant §7① 奪旗 ends the game, not before', () => {
+  it('opens everything the instant §7.5① 奪旗 ends the game, not before', () => {
     const before = position([
       { at: 'b2', color: 'white', carrier: 'rook', rank: 'general', id: 'W' },
       { at: 'b7', color: 'black', carrier: 'rook', rank: 'flag', id: 'B' },

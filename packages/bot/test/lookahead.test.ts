@@ -209,7 +209,7 @@ describe('squareSafety — §15.1, can the 軍旗 stand here', () => {
     expect(two.plies).toBe(2)
   })
 
-  it('knows when the occupant is our 軍旗 — the §7④① stake', () => {
+  it('knows when the occupant is our 軍旗 — the §7.5① stake', () => {
     const s = started('flag')
     const flag = s.pieces.find((p) => p.color === 'white' && p.rank === 'flag')!
     expect(flag.square).not.toBeNull()

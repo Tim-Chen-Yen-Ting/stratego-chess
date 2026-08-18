@@ -92,6 +92,22 @@ function clampNumber(value: unknown, min: number, max: number): number | undefin
 }
 
 /**
+ * As `clampNumber`, but the result is a whole number.
+ *
+ * For the §7.3 amounts only, and it is a RULE, not tidiness: §7.4 guarantees
+ * 「貼目為非整數，故分數永不相等」and that guarantee holds only while 貼目 is the
+ * ONLY non-integer contributor. 佔領分 are counts, so they always are. A
+ * fractional k makes white's column fractional too, both sides can then land on
+ * the same number, and `leader()` in game.ts hands the game to black on a
+ * comparison rather than on a rule — the exact failure the komi floor below
+ * exists to prevent, re-entered by another door.
+ */
+function clampWholeNumber(value: unknown, min: number, max: number): number | undefined {
+  const n = clampNumber(value, min, max)
+  return n === undefined ? undefined : Math.round(n)
+}
+
+/**
  * Whatever the caller sends is untrusted input, not a rules decision: the bounds
  * below only stop a client from parking the server on an absurd timer. Anything
  * omitted keeps the rules engine's own default (gamebook 附錄 B).
@@ -107,11 +123,38 @@ function readConfig(input: unknown): Partial<GameConfig> | undefined {
   const noProgressTurns = clampNumber(raw['noProgressTurns'], 1, 10_000)
   if (noProgressTurns !== undefined) config.noProgressTurns = noProgressTurns
 
-  // §7.3: 貼目's only remaining job is making ties impossible, so zero is not a
+  // §7.4: 貼目's only remaining job is making ties impossible, so zero is not a
   // legal value — at komi 0 a 停滯 finish at level scores has no winner and
-  // game.ts silently hands it to black.
+  // game.ts silently hands it to black. (The section number was §7.3 under an
+  // earlier numbering; §7.3 is now 吃子得分, immediately below, so the two must
+  // not be confused.)
   const komi = clampNumber(raw['komi'], 0.5, 1_000)
   if (komi !== undefined) config.komi = komi
+
+  // §7.3 ①吃子得分. Both are 待定 in 附錄 B and both ship at 0, so an omitted field
+  // keeps the game the notebook's numbers were measured on — 佔領計分格 as the
+  // only live source of points.
+  //
+  // WHOLE NUMBERS, required by 附錄 B and §7.4. A fractional k (0.5 looks like the
+  // natural way to price a 吃子 at half a 佔格) makes white's column fractional as
+  // well, so both sides can land on exactly the same score and §7.4's 「分數永不相等」
+  // stops being true — see `clampWholeNumber`. If a 吃子 should be worth less than
+  // a 佔格, scale X instead; that keeps every score an integer plus 貼目.
+  //
+  // Floor 0 because §7.3 only ever describes a PAYMENT (勝方得 / 存活方得); a
+  // negative k would make winning a contact cost points, which is a different rule
+  // and not one that has been written. Ceiling 1_000 because the largest 階級
+  // number is 10 (軍旗), so k × 10 tops out at 10_000 — the same ceiling
+  // scoreTarget itself has, i.e. no single contact can be made to pay more than
+  // the longest game this server will build.
+  const captureScoreK = clampWholeNumber(raw['captureScoreK'], 0, 1_000)
+  if (captureScoreK !== undefined) config.captureScoreK = captureScoreK
+
+  // 有煙無傷獎勵 — a FLAT amount in points, so it takes the same ceiling as the
+  // score line it is spent against. 同歸於盡 has no knob here at all: 附錄 B fixes
+  // it at zero, which is what keeps 爆裂物 uncountable from the score column.
+  const fizzleBonus = clampWholeNumber(raw['fizzleBonus'], 0, 10_000)
+  if (fizzleBonus !== undefined) config.fizzleBonus = fizzleBonus
 
   const clockInitialMs = clampNumber(raw['clockInitialMs'], 1_000, 86_400_000)
   if (clockInitialMs !== undefined) config.clockInitialMs = clockInitialMs
@@ -467,6 +510,12 @@ function describeNewRoom(room: Room): Record<string, unknown> {
     // that was clamped or dropped on the way in is worse than not confirming it.
     setupTimeoutMs: config.setupTimeoutMs,
     scoreTarget: config.scoreTarget,
+    // §7.3: the two ①吃子 amounts, echoed for the same reason as everything else
+    // on this list — they are settings, not state, and a value that was clamped
+    // on the way in must be confirmed as what actually landed. Both are 0 unless
+    // the creator moved them, so a caller that never sent them reads two zeros.
+    captureScoreK: config.captureScoreK,
+    fizzleBonus: config.fizzleBonus,
     noProgressTurns: config.noProgressTurns,
     clockEnabled: config.clockEnabled,
     scoringSquares: config.scoringSquares,

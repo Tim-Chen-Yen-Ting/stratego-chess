@@ -35,6 +35,7 @@
  */
 
 import {
+  DEFAULT_CONFIG,
   DISTRIBUTION_SCOUTS,
   DISTRIBUTION_STANDARD,
   DISTRIBUTION_TOP_HEAVY,
@@ -134,7 +135,7 @@ export interface GameOutcome {
   policies: Record<Color, string>
   /** null only when the game was truncated before reaching a result */
   result: Result | null
-  /** the winner, or null for 雙方軍旗同時離場 — the only draw (§7④) — or a truncation */
+  /** the winner, or null for 雙方軍旗同時離場 — the only draw (§7.5①) — or a truncation */
   winner: Color | null
   truncated: boolean
   plies: number
@@ -312,7 +313,7 @@ export interface Aggregate {
   meanLongestZeroRun: number
   /** notebook §3.3d's 落點率 — kept, and kept suspect: it counts arrivals, not departures */
   meanObjectiveRatio: number | null
-  /** games lost to §7① 奪旗 */
+  /** games lost to §7.5① 奪旗 */
   flagLosses: number
   /** contacts this side STARTED. The greedy instrument's headline invariant is that this is 0. */
   capturesInitiated: number
@@ -616,6 +617,8 @@ export function runCli(argv: readonly string[]): string {
       '  --target X         score line (default 40)',
       '  --stall N          停滯 turns (default 30)',
       '  --komi K           貼目 for black (default 0.5)',
+      `  --k C              吃子得分係數 k, §7.3 (default ${DEFAULT_CONFIG.captureScoreK})`,
+      `  --fizzle F         有煙無傷獎勵, §7.3 (default ${DEFAULT_CONFIG.fizzleBonus})`,
       '  --max-plies M      ply cap per game (default 1000)',
       '  --no-swap          do NOT replay every seat swapped (swapping is the default)',
       '  --json             emit the summary as JSON instead of a table',
@@ -632,6 +635,16 @@ export function runCli(argv: readonly string[]): string {
   if (!distribution) {
     throw new Error(`unknown distribution '${distName}'. Known: ${Object.keys(DISTRIBUTIONS).join(', ')}`)
   }
+  // §7.3's two knobs, 附錄 B 待定. The fallback is the ENGINE's default rather than a
+  // literal here, so this CLI cannot quietly play a different economy from the one
+  // `DEFAULT_CONFIG` ships — and both appear in the title, because a run at a
+  // non-zero k is a separate series that must never be pooled with the k=0 ones.
+  //
+  // Rounded, because 附錄 B requires whole numbers: 貼目 must stay the ONLY
+  // non-integer source of points or §7.4's 「分數永不相等」 stops holding and a 分數
+  // finish can end level, which the rulebook says cannot happen.
+  const captureScoreK = Math.round(numberFlag(argv, 'k', DEFAULT_CONFIG.captureScoreK))
+  const fizzleBonus = Math.round(numberFlag(argv, 'fizzle', DEFAULT_CONFIG.fizzleBonus))
 
   const summary = runMatch({
     seed: numberFlag(argv, 'seed', 1),
@@ -646,6 +659,8 @@ export function runCli(argv: readonly string[]): string {
       scoreTarget: numberFlag(argv, 'target', 40),
       noProgressTurns: numberFlag(argv, 'stall', 30),
       komi: numberFlag(argv, 'komi', 0.5),
+      captureScoreK,
+      fizzleBonus,
     },
   })
 
@@ -653,7 +668,8 @@ export function runCli(argv: readonly string[]): string {
   return formatSummary(
     summary,
     `${white.name} vs ${black.name} · ${boardName} · ${distName}`
-    + ` · X=${numberFlag(argv, 'target', 40)} · N=${numberFlag(argv, 'stall', 30)}`,
+    + ` · X=${numberFlag(argv, 'target', 40)} · N=${numberFlag(argv, 'stall', 30)}`
+    + ` · k=${captureScoreK} · 有煙無傷=${fizzleBonus}`,
   )
 }
 

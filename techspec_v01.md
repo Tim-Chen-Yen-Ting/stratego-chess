@@ -1,15 +1,17 @@
 # 行軍西洋棋 — Technical Specification v01
 
-Implementation contract for `gamebook_v04.md`. Where this document and the gamebook disagree about **rules**, the gamebook wins. This document is authoritative for **structure, types and APIs**.
+Implementation contract for `gamebook_v05.md`. Where this document and the gamebook disagree about **rules**, the gamebook wins. This document is authoritative for **structure, types and APIs**.
 
 Document set:
 | File | Role |
 |---|---|
-| `gamebook_v04.md` | **The rules.** What is legal. Normative. |
+| `CLAUDE.md` | Repo map: file roles, code invariants, working conventions, mistakes already made. |
+| `gamebook_v05.md` | **The rules.** What is legal. Normative. |
 | `notebook_v01.md` | Derivations, emergent interactions, playtest data. Never normative. |
 | `strategy_v01.md` | Player-facing攻略 — how to play well. No data, no hedging. Never normative. |
+| `fogofwar_v01.md` | Design doc for an unbuilt optional mode. Not implemented, not normative. |
 | `techspec_v01.md` | This file — structure, types, APIs. |
-| `gamebook.md`, `gamebook_v02.md`, `gamebook_v03.md`, `plan_v01.md` | Superseded. Kept for history. |
+| `gamebook.md`, `gamebook_v02.md`, `gamebook_v03.md`, `gamebook_v04.md`, `plan_v01.md` | Superseded. Kept for history. |
 
 ---
 
@@ -182,7 +184,9 @@ export interface GameEvent {
 }
 
 export interface GameConfig {
-  scoreTarget: number        // X, default 40 on EVERY 結算格 preset
+  scoreTarget: number        // X. Default 40 = 附錄 B's 中央四格 value; X varies with
+                             // 結算格 and 側翼八格 is 待定 (筆記 §9.3: same X=40 runs
+                             // 35.5 手 on 中央四格 vs 22.0 手 on 側翼八格, n=300)
   noProgressTurns: number    // N, default 30
   komi: number               // default 0.5, credited to black
   /** §7 settlement squares. Default SCORING_CENTRE_4; SCORING_WIDE_8 adds a/h flanks.
@@ -217,7 +221,7 @@ export interface GameState {
   score: { white: number; black: number }
   log: GameEvent[]
   clockMs: { white: number; black: number }
-  /** consecutive FULL TURNS with no capture and no point scored (§7③) */
+  /** consecutive FULL TURNS with no capture and no point scored (§7.5③) */
   noProgressTurns: number
   status: GameStatus
   config: GameConfig
@@ -338,11 +342,11 @@ Cross-reference the gamebook section given; do not reimplement from memory.
 1. **Combat occupancy (§4).** Attacker wins → attacker occupies the target square. Attacker loses → attacker removed *from its origin*, defender unmoved, target square unchanged. Tie → both removed, square empty.
 2. **En passant (§4).** Retained. Attacker wins → captured pawn removed from *its* square, attacker lands on the *skipped* square. Attacker loses → attacker removed from origin, skipped square stays empty.
 3. **Bomb (§5).** Ties with everything except 工兵/軍旗, against which it **loses** in both directions. A surviving 工兵/軍旗 attacker **advances onto the target square** and is **not revealed**. If it reaches the 8th rank this way it **promotes** (§6).
-4. **Reveal (§4.3 table).** Only the WINNER is revealed; the loser never is. Every both-die contact emits a bare `mutual-destruction` carrying no rank and no colour — an equal-rank meeting, a detonation and bomb-vs-bomb MUST be indistinguishable (gamebook v04 §4.3). `fizzle` announces nothing either, but is observably different because a piece survives, which makes it the only event that still identifies a 爆裂物. Reveal flags must be OFF for all three both-die cases: a revealed rank is republished through the piece list to every viewer, which would undo the opaque outcome.
-5. **Settlement (§7.1).** After every ply, ONLY the side that just moved scores +1 per own piece on a 結算格 (gamebook v04). A pass settles too — the passer is the mover. Crediting both sides gave White one extra settlement per acquiring move; crediting once per full turn fixes the count but breaks exposure instead. Black's score starts at `komi`.
-6. **Flag (§5, §7①).** Any 軍旗 leaving the board loses instantly, resolved in the ACTION sub-step before settlement. Both flags leaving simultaneously is a draw. Promotion and castling do **not** count as leaving the board.
+4. **Reveal (§4.3 table).** Only the WINNER is revealed; the loser never is. Every both-die contact emits a bare `mutual-destruction` carrying no rank and no colour — an equal-rank meeting, a detonation and bomb-vs-bomb MUST be indistinguishable (§4.3). `fizzle` announces nothing either, but is observably different because a piece survives, which makes it the only event that still identifies a 爆裂物. Reveal flags must be OFF for all three both-die cases: a revealed rank is republished through the piece list to every viewer, which would undo the opaque outcome.
+5. **Settlement (§7.1).** After every ply, ONLY the side that just moved scores +1 per own piece on a 結算格. A pass settles too — the passer is the mover. Crediting both sides gave White one extra settlement per acquiring move; crediting once per full turn fixes the count but breaks exposure instead. Black's score starts at `komi`.
+6. **Flag (§5, §7.5①).** Any 軍旗 leaving the board loses instantly, resolved in the ACTION sub-step before settlement. Both flags leaving simultaneously is a draw. Promotion and castling do **not** count as leaving the board.
 7. **Pass (§3④).** Always legal. Increment is granted on a move, or on a pass when the player had **zero** other legal moves; never on a voluntary pass (§8).
-8. **No-progress (§7③).** Increment `noProgressTurns` after a full turn in which no capture occurred and neither score changed. Any capture or any point resets it to 0. At N, higher score wins.
+8. **No-progress (§7.5③).** Increment `noProgressTurns` after a full turn in which no capture occurred and neither score changed. Any capture or any point resets it to 0. At N, higher score wins.
 9. **No** insufficient-material, **no** threefold repetition, **no** 50-move rule, **no** stalemate (§3③⑤⑥).
 10. `applyMove` is **pure** — never mutate the input state.
 

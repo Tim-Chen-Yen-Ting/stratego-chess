@@ -246,7 +246,7 @@ describe('§4 「攻方失敗時…此點影響升變與易位權」', () => {
   })
 })
 
-describe('§7③ 「本計數僅在中央四格完全淨空…時前進」', () => {
+describe('§7.5③ 「本計數僅在中央四格完全淨空…時前進」', () => {
   it('never advances while anybody holds a 中央格', () => {
     let s = position(
       [

@@ -154,7 +154,7 @@ import { moveKey, occupancy, shapeOfMove } from './policy.js'
  * A distribution over 兵種 for one piece.
  *
  * Deliberately `Partial`, so a caller can hand in a literal `{ commander: 1 }`
- * — which is how the tests pin §5.4 and §7④① without manufacturing a position —
+ * — which is how the tests pin §5.4 and §7.5① without manufacturing a position —
  * and so `belief.ts`'s `RankBelief` (a full `Record`) is assignable to it.
  */
 export type RankProbs = Readonly<Partial<Record<Rank, number>>>
@@ -226,7 +226,7 @@ export interface ExposedPiece {
   readonly carrier: Carrier
   /** standing on a 結算格 (§7.1), so losing it costs income as well as material */
   readonly onScoring: boolean
-  /** it is our 軍旗 — losing it loses the game outright (§5.3, §7④①) */
+  /** it is our 軍旗 — losing it loses the game outright (§5.3, §7.5①) */
   readonly isFlag: boolean
   /** every reply that reaches it, most dangerous first */
   readonly attackers: readonly ReplyAttacker[]
@@ -297,7 +297,7 @@ export interface Safety {
   /** no piece of ours stands there; the answer is for a piece that arrives */
   readonly hypothetical: boolean
   readonly onScoring: boolean
-  /** the occupant is our 軍旗 — §15.1's question, and §7④①'s stake */
+  /** the occupant is our 軍旗 — §15.1's question, and §7.5①'s stake */
   readonly isFlag: boolean
   /** replies that take it on the opponent's very NEXT move */
   readonly attackers: readonly ReplyAttacker[]
@@ -574,7 +574,7 @@ function expectedValue(probs: RankProbs, rankValue: (rank: Rank) => number): num
  * a pawn that moved two ranks along one file, which no capture in the game is.
  *
  * **Do not hand the result to `beliefFor`.** It is a movement-and-occupancy view.
- * The score is not settled (§7.1), the status is not re-tested (§7④), and the
+ * The score is not settled (§7.1), the status is not re-tested (§7.5), and the
  * removed piece is removed on an assumption rather than on an event.
  */
 export function viewAfter(view: ViewerState, color: Color, move: Move): ViewerState | null {
@@ -899,7 +899,7 @@ function exposedFrom(
   const collateral = !relocated.has(victim.id)
   const tags = [
     onScoring ? '結算格' : null,
-    victim.rank === 'flag' ? '軍旗 — §7④① loses the game outright' : null,
+    victim.rank === 'flag' ? '軍旗 — §7.5① loses the game outright' : null,
     newlyExposed && collateral ? 'newly exposed by this move' : null,
   ].filter((t): t is string => t !== null)
 
@@ -1258,7 +1258,7 @@ export function squareSafety(
 
   const why = (() => {
     const who = hypothetical ? 'a piece of ours arriving on' : `${victim.id} on`
-    const head = `${who} ${squareName(square)}${onScoring ? ' (結算格)' : ''}${isFlag ? ' — the 軍旗 (§5.3, §7④①)' : ''}`
+    const head = `${who} ${squareName(square)}${onScoring ? ' (結算格)' : ''}${isFlag ? ' — the 軍旗 (§5.3, §7.5①)' : ''}`
     if (attackers.length > 0) return `${head}: ${pct(pHolds1)} holds — ${attackers[0]!.why}`
     if (!searchLining) return `${head}: nothing reaches it this ply`
     if (lining.length === 0) {

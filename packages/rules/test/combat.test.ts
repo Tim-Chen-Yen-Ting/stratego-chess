@@ -232,7 +232,7 @@ describe.each(DIRECTIONS)('§4 combat matrix — $attacker attacks $defender', (
         winnerRank: 'engineer',
       })
       expect(pieceById(d.after, ATT).revealed).toBe(true)
-      // §7① — the 軍旗 left the board, so its owner loses on the spot.
+      // §7.5① — the 軍旗 left the board, so its owner loses on the spot.
       expect(d.after.status).toEqual({ kind: 'over', result: { kind: 'flag', winner: attacker } })
     })
 

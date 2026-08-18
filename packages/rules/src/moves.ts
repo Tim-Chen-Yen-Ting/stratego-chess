@@ -12,7 +12,7 @@
  *   §3④  pass is always legal, whether or not other moves exist.
  *   §4    moving onto ANY enemy piece is legal, including a move you know
  *        loses, and including moving your 軍旗 into a piece (which loses the
- *        game on the spot, §7①). Legality never depends on the rank layer —
+ *        game on the spot, §7.5①). Legality never depends on the rank layer —
  *        it must not, or the move list itself would leak 兵種 (附錄 A).
  */
 

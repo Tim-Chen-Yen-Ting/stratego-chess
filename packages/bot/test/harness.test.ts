@@ -31,7 +31,7 @@ import { deriveSeed, makeRng } from '../src/prng.js'
 import { randomAssignment } from '../src/policy.js'
 import type { Policy } from '../src/policy.js'
 import { POLICIES } from '../src/index.js'
-import { UsageError, parseArgs, policyNamed } from '../src/cli.js'
+import { UsageError, parseArgs, policyNamed, run } from '../src/cli.js'
 
 // ---------------------------------------------------------------------------
 // Stub policies — view-only, seeded, deterministic
@@ -377,5 +377,107 @@ describe('the command line', () => {
     const options = parseArgs([])
     expect(options).toMatchObject({ white: 'random', black: 'random', games: 100, seed: 1 })
     expect(options.config).toEqual({})
+  })
+})
+
+/**
+ * §7.3's two knobs, end to end.
+ *
+ * The failure this guards against is the one CLAUDE.md §5 records: a flag that
+ * parses, compiles and is never reachable — `belief` was registered in the CLI
+ * while absent from the browser, and four games were written up under the wrong
+ * opponent's name. So the assertions below do not stop at `parseArgs`. The
+ * report's config line is read back off `state.config` (the ENGINE's config,
+ * after `createGame`), which means a flag that were accepted and then dropped on
+ * the way to `runMatches` would print its default and fail here.
+ *
+ * The knobs ship at 0 and the harness passes no value of its own, so a run that
+ * names neither is byte-identical to what every notebook measurement was taken
+ * against — that is asserted too, in both directions.
+ */
+describe('§7.3 吃子得分 is settable and recorded', () => {
+  it('parses --k and --fizzle in either spelling', () => {
+    const options = parseArgs(['--k', '2', '--fizzle=1'])
+    expect(options.config.captureScoreK).toBe(2)
+    expect(options.config.fizzleBonus).toBe(1)
+  })
+
+  /*
+   * INVERTED. This test used to assert 「decimals included」 — `--k 2.5` parsing
+   * to 2.5 — on the reasoning that a sweep which can only step in whole points
+   * cannot find a fractional optimum.
+   *
+   * That reasoning was wrong, and the new assertion is the strict one. §7.4's
+   * 「貼目為非整數，故分數永不相等」 holds only while 貼目 is the ONLY non-integer
+   * source of points, so 附錄 B now requires k and 有煙無傷獎勵 to be whole
+   * numbers. At k = 0.5 a 司令 win pays exactly 貼目, both columns can land on
+   * the same number, and `leader()` hands the game to black on a comparison
+   * rather than on a rule — in a game the rulebook says cannot be tied.
+   *
+   * A fractional value must therefore be REFUSED, not rounded: rounding would
+   * label the run with a k it did not play, which is the same trustworthiness
+   * failure the test below is about.
+   */
+  it('refuses a fractional k or 有煙無傷獎勵 — 附錄 B requires whole numbers', () => {
+    expect(() => parseArgs(['--k', '2.5'])).toThrow(UsageError)
+    expect(() => parseArgs(['--k', '2.5'])).toThrow(/integer/)
+    expect(() => parseArgs(['--fizzle=1.5'])).toThrow(/integer/)
+  })
+
+  it('refuses a value that does not parse, rather than falling back to 0', () => {
+    // A silent fallback would label a k=0 run as the k it was asked for, and the
+    // whole point of this tool is that the label is trustworthy.
+    expect(() => parseArgs(['--k', 'lots'])).toThrow(UsageError)
+    expect(() => parseArgs(['--k', 'lots'])).toThrow(/expected an integer/)
+    expect(() => parseArgs(['--fizzle', ''])).toThrow(/expected an integer/)
+    expect(() => parseArgs(['--k'])).toThrow(/needs a value/)
+  })
+
+  it('leaves the config untouched when neither flag is named', () => {
+    // Not "sets them to 0": the engine's DEFAULT_CONFIG owns the default, and the
+    // CLI must not pin a 附錄 B value that a sweep may one day fix elsewhere.
+    const options = parseArgs(['--games', '10'])
+    expect('captureScoreK' in options.config).toBe(false)
+    expect('fizzleBonus' in options.config).toBe(false)
+  })
+
+  it('reaches the engine, and the report says which values produced the run', () => {
+    const text = run(['--white', 'greedy', '--black', 'random', '--games', '3',
+      '--seed', '77', '--max-plies', '200', '--k', '5', '--fizzle', '2'])
+    expect(text).toContain('吃子 k 5 · 有煙無傷 2')
+    // the caveat only earns its place when a knob is live
+    expect(text).toContain('§7.3 吃子得分 IS LIVE')
+  })
+
+  it('prints the zeros and no caveat when the knobs are left alone', () => {
+    const text = run(['--white', 'greedy', '--black', 'random', '--games', '3',
+      '--seed', '77', '--max-plies', '200'])
+    expect(text).toContain('吃子 k 0 · 有煙無傷 0')
+    expect(text).not.toContain('IS LIVE')
+  })
+
+  it('changes the measured run — and the run it changes is not contact-free', () => {
+    // Without the contact assertion this comparison could pass vacuously on a
+    // corpus where nothing ever met, which would prove only that two identical
+    // strings differ somewhere in the header.
+    const plain = runMatches(grabby, scatter, {}, 99, 12, 200)
+    const paid = runMatches(grabby, scatter, { captureScoreK: 5, fizzleBonus: 2 }, 99, 12, 200)
+
+    const contacts = plain.reduce((n, m) => n + m.result.duels.contacts, 0)
+    expect(contacts).toBeGreaterThan(0)
+
+    for (const match of paid) {
+      expect(match.state.config.captureScoreK).toBe(5)
+      expect(match.state.config.fizzleBonus).toBe(2)
+    }
+    for (const match of plain) {
+      // the harness adds nothing of its own — the engine default stands
+      expect(match.state.config.captureScoreK).toBe(0)
+      expect(match.state.config.fizzleBonus).toBe(0)
+    }
+
+    const report = (m: typeof plain): string =>
+      formatReport(aggregate(m, { seed: 99, maxPlies: 200 }))
+    expect(report(paid)).not.toBe(report(plain))
   })
 })

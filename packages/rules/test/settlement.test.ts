@@ -20,7 +20,7 @@
  * pass with white quietly a point ahead per acquisition.
  *
  * Level income is still not a level game, though — white reaches any given total
- * half a turn earlier simply by moving first. That one belongs to §7.4② rather
+ * half a turn earlier simply by moving first. That one belongs to §7.5② rather
  * than to settlement (X is read only at the close of a turn, never mid-turn), and
  * the last block in this file pins the two rules together: a mirror game is where
  * the difference between them is visible with nothing else in play.
@@ -30,7 +30,7 @@ import { describe, expect, it } from 'vitest'
 import { applyMove } from '../src/game.js'
 import { createGame } from '../src/setup.js'
 import { CENTER_SQUARES, DEFAULT_CONFIG } from '../src/constants.js'
-import type { Color, GameState, Rank } from '../src/types.js'
+import type { Color, GameConfig, GameState, Move, Rank } from '../src/types.js'
 import { PASS, lastEvent, mv, pieceById, position, sq } from './helpers.js'
 
 describe('§7 貼目 — black starts at komi', () => {
@@ -122,29 +122,72 @@ describe('§7 settlement runs every ply and credits ONLY the mover', () => {
     expect(applyMove(four, mv('a1', 'b1')).score).toEqual({ white: 4, black: 0.5 })
   })
 
-  it('exactly one side\'s score can move per ply, and it is the mover\'s', () => {
-    const start = position([
-      { at: 'd4', color: 'white', carrier: 'knight', rank: 'general', id: 'WN' },
-      { at: 'd5', color: 'black', carrier: 'knight', rank: 'division', id: 'BN' },
-      { at: 'a1', color: 'white', carrier: 'king', rank: 'commander', id: 'WK' },
-      { at: 'a8', color: 'black', carrier: 'king', rank: 'battalion', id: 'BK' },
-    ])
-    let s = start
-    for (const m of [
-      mv('a1', 'b1'), mv('a8', 'b8'),
-      mv('b1', 'c1'), mv('b8', 'c8'),
-      mv('c1', 'b1'), mv('c8', 'b8'),
-    ]) {
-      s = applyMove(s, m)
-    }
+  /** Six plies of tempo with the two 計分格 holders never moving and never met. */
+  const MIRROR: Move[] = [
+    mv('a1', 'b1'), mv('a8', 'b8'),
+    mv('b1', 'c1'), mv('b8', 'c8'),
+    mv('c1', 'b1'), mv('c8', 'b8'),
+  ]
 
-    let prev = { white: 0, black: start.config.komi }
+  function mirror(config?: Partial<GameConfig>): GameState {
+    const start = position(
+      [
+        { at: 'd4', color: 'white', carrier: 'knight', rank: 'general', id: 'WN' },
+        { at: 'd5', color: 'black', carrier: 'knight', rank: 'division', id: 'BN' },
+        { at: 'a1', color: 'white', carrier: 'king', rank: 'commander', id: 'WK' },
+        { at: 'a8', color: 'black', carrier: 'king', rank: 'battalion', id: 'BK' },
+      ],
+      config ? { config } : {},
+    )
+    let s = start
+    for (const m of MIRROR) s = applyMove(s, m)
+    return s
+  }
+
+  it('② credits the mover alone — the idle column moves only when ① pays it', () => {
+    // INVERTED, title and all. This was 「exactly one side's score can move per
+    // ply, and it is the mover's」, and it asserted
+    //   expect(e.scoreAfter[idle]).toBe(prev[idle])
+    // as a statement about the whole score. §7.1 has TWO sources and that is
+    // only true of ②. §7.3① pays the WINNER of a 決定性勝負 and 存活方 of a
+    // 有煙無傷, so a 守方勝 — or a 爆裂物 that attacked and fizzled — moves the
+    // idle column on the mover's ply. `capturescore.test.ts` holds the worked
+    // counterexamples; the whole-game corpora in `fuzz.test.ts` and
+    // `scoring-squares.test.ts` run it at k > 0.
+    //
+    // The new form is stricter because it stops assuming ① is zero and starts
+    // requiring it. This fixture never produces a contact, so `captureScore` has
+    // nothing to pay from — and the `e.combat` assertion below is what makes
+    // that a checked premise rather than a silent one. The mover's +1 is then
+    // attributable to ② alone, which is the claim the test is here to make; the
+    // old line would have read identically on a ply where ① quietly paid ② its
+    // point for it.
+    const s = mirror()
+
+    let prev = { white: 0, black: DEFAULT_CONFIG.komi }
     for (const e of s.log) {
       const idle: Color = e.color === 'white' ? 'black' : 'white'
-      expect(e.scoreAfter[idle], `ply ${e.ply}: ${idle} moved without moving`).toBe(prev[idle])
+      expect(e.combat, `ply ${e.ply}: fixture produced a 接觸, ① is no longer zero`)
+        .toBeUndefined()
+      expect(e.scoreAfter[idle], `ply ${e.ply}: ② credited the side that did not move`)
+        .toBe(prev[idle])
       expect(e.scoreAfter[e.color], `ply ${e.ply}: mover was not paid`).toBe(prev[e.color] + 1)
       prev = e.scoreAfter
     }
+  })
+
+  it('…and ② pays the same with 吃子得分 switched on, because ② never reads k', () => {
+    // The other half of the same claim, and the reason the fixture above is not
+    // merely a k = 0 accident: 附錄 B's ① knobs are turned up to whole numbers
+    // well clear of a settlement's 1 point, and the six plies settle identically
+    // — same score, same log, ply for ply. A ② that had picked up any dependence
+    // on `captureScoreK` or `fizzleBonus` would diverge here even though not one
+    // piece in this position ever meets another.
+    const plain = mirror()
+    const scored = mirror({ captureScoreK: 3, fizzleBonus: 5 })
+    expect(scored.score).toEqual({ white: 3, black: DEFAULT_CONFIG.komi + 3 })
+    expect(scored.score).toEqual(plain.score)
+    expect(scored.log).toEqual(plain.log)
   })
 })
 
@@ -260,7 +303,7 @@ function mirrorSquare(nm: string): string {
  * move order differs between the two sides.
  *
  * `scoreTarget` defaults to the config default, which the five-move script below
- * never comes near; the §7.4② block at the bottom lowers it on purpose so the
+ * never comes near; the §7.5② block at the bottom lowers it on purpose so the
  * line is crossed inside the script.
  */
 function mirrorGame(komi: number, scoreTarget: number = DEFAULT_CONFIG.scoreTarget): GameState {
@@ -395,7 +438,7 @@ describe('§7 symmetry — equal EXPOSURE, not just equal counting', () => {
   })
 })
 
-describe('§7.4② symmetry — equal MOVES at the moment X is read', () => {
+describe('§7.5② symmetry — equal MOVES at the moment X is read', () => {
   /**
    * Settlement symmetry is only half of it. Even with the income dead level, the
    * side that moves first reaches any given total half a turn earlier — so a
@@ -439,7 +482,7 @@ describe('§7.4② symmetry — equal MOVES at the moment X is read', () => {
 
   /**
    * 貼目 = 0 is a 附錄 B knob, and it is the one setting that can produce the tie
-   * §7.4② says cannot happen — reading X per turn is what makes a perfect mirror
+   * §7.5② says cannot happen — reading X per turn is what makes a perfect mirror
    * arrive at it. The fallback must stay deterministic rather than award the game
    * to whoever happened to move.
    */

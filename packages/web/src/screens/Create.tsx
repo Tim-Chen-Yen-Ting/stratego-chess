@@ -55,6 +55,14 @@ type OpponentMode = 'human' | 'llm'
 interface CreateOptions {
   clockEnabled: boolean
   scoreTarget: number
+  /**
+   * 吃子得分 (gamebook §7.3, 附錄 B) — the second source of points, and the one
+   * that is off unless this screen turns it on. Both default to 0, which is the
+   * engine's own default: 附錄 B lists both as 待定, so a game created without
+   * touching these two fields scores exactly the way every recorded game did.
+   */
+  captureScoreK: number
+  fizzleBonus: number
   noProgressTurns: number
   setupTimeoutMs: number
   /** 計分區 (gamebook §7, 附錄 B) — which squares score, for this game only. */
@@ -150,7 +158,10 @@ async function postCreateGame(
  * 貼目 0.5 is NOT that compensation and is not advertised as such. Settlement
  * credits only the side that just moved, which is what makes the counting even;
  * the half point exists so the score can never tie, so every score-decided
- * ending has a winner (§7.3/§7.4). The seat label says "+0.5" and nothing more.
+ * ending has a winner (§7.4/§7.5②). The seat label says "+0.5" and nothing more.
+ * (These were written as §7.3/§7.4 under an earlier numbering; §7.3 is now
+ * 吃子得分, which this screen also configures, so the old pair would read as a
+ * claim about capture scoring.)
  */
 function seatLabel(color: Color): string {
   return color === 'white' ? '執白（先手）' : '執黑（後手，貼目 +0.5）'
@@ -175,6 +186,25 @@ function llmForm(playUrl: string): string {
 function readPositiveInt(raw: string, fallback: number): number {
   const parsed = Number.parseInt(raw, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+/**
+ * The §7.3 amounts: whole numbers, and zero is a legal value.
+ *
+ * `readPositiveInt` is wrong because it rejects 0 — which is the DEFAULT here
+ * and means 「吃子 pays nothing」, so zero has to survive. Anything unreadable or
+ * negative falls back rather than travelling: §7.3 only ever describes a payment
+ * (勝方得／存活方得), so a negative amount is not a value of this setting.
+ *
+ * ROUNDED, because 附錄 B requires whole numbers. §7.4 guarantees 「分數永不相等」
+ * only while 貼目 is the sole non-integer source of points; a fractional k makes
+ * white's column fractional too and a 分數 finish can then end level, with the
+ * winner decided by a comparison in game.ts rather than by a rule. The server
+ * clamps this as well — this is the friendlier of the two doors, not the lock.
+ */
+function readNonNegative(raw: string, fallback: number): number {
+  const parsed = Number.parseFloat(raw)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : fallback
 }
 
 /**
@@ -224,26 +254,39 @@ export function Create() {
     setupMinutes ?? String(clockEnabled ? SETUP_MINUTES_TIMED : SETUP_MINUTES_UNTIMED)
 
   /*
-   * X no longer moves with the scoring area: BOTH presets default to
-   * DEFAULT_CONFIG.scoreTarget.
+   * This field starts at DEFAULT_CONFIG.scoreTarget whichever 計分區 is picked,
+   * and the creator moves it. That is a choice about the form — X is theirs to
+   * set, not something a preset multiplies behind their back — and NOT a claim
+   * that 40 fits both areas. It does not, and the hint under the field says so.
    *
-   * The wide-8 preset used to double it, because settlement credited both
-   * players after every ply and twice the area meant twice the rate. Settlement
-   * now credits only the side that just moved, so every game banks half as
-   * often as the number 80 was built for; 40 — the figure the centre-four
-   * default was already set at for a once-per-turn rate — is the sane default
-   * for both areas. The wide area still fills faster per settlement, so an
-   * eight-square game does run shorter at the same X; the hint below says so,
-   * and the field is right there for anyone who wants the longer game back.
+   * The wide area used to double X automatically. The doubling was dropped when
+   * settlement changed to credit only the side that just moved, on the grounds
+   * that a game now banks half as often as the number 80 was built for — but
+   * that halving hit BOTH areas identically, so it cancels out of the comparison
+   * between them and never justified handing the wide area the centre area's
+   * number. What does not cancel is the income per settlement: a side holds
+   * about two squares on 中央四格 and about four on 側翼八格, so a settlement
+   * there pays roughly double and the score line arrives roughly twice as soon.
+   * Same X=40, n=300 bot games: 35.5 手 on 中央四格, 22.0 手 on 側翼八格
+   * (《對局筆記》§9.3; §10.2 gives the mechanism on the current ruleset).
    *
-   * `ScoringAreaPreset.scoreTargetFactor` in constants.ts is what used to apply
-   * that doubling and is deliberately NOT read here any more. It is dead; do not
-   * multiply by it again on the strength of the field still existing.
+   * 附錄 B therefore lists X as 中央四格 40, 側翼八格 待定. The length-matched wide
+   * figure is near 80 — every eight-square game on record used X=80 (§6.2–§6.5),
+   * though those were played under the v03 ruleset and do not transfer.
    *
    * Same touched-flag pattern as 佈署時限: null until the player types, so the
    * defaults keep applying without ever discarding something they chose.
    */
   const [scoreTarget, setScoreTarget] = useState<string | null>(null)
+  /*
+   * 吃子得分 (§7.3). Plain string state seeded from DEFAULT_CONFIG rather than the
+   * null-until-touched pattern above, because nothing else on this screen moves
+   * these two: they do not follow the 計分區 preset or the clock preset, so there
+   * is no default to keep re-applying. DEFAULT_CONFIG has both at 0 (附錄 B: 待定)
+   * and that is what a creator who never opens 進階設定 sends.
+   */
+  const [captureScoreK, setCaptureScoreK] = useState(String(DEFAULT_CONFIG.captureScoreK))
+  const [fizzleBonus, setFizzleBonus] = useState(String(DEFAULT_CONFIG.fizzleBonus))
   const scoreTargetDefault = DEFAULT_CONFIG.scoreTarget
   const scoreTargetShown = scoreTarget ?? String(scoreTargetDefault)
   /** wider than the centre preset — read off the squares, not off a preset id */
@@ -269,6 +312,8 @@ export function Create() {
     const options: CreateOptions = {
       clockEnabled,
       scoreTarget: readPositiveInt(scoreTargetShown, scoreTargetDefault),
+      captureScoreK: readNonNegative(captureScoreK, DEFAULT_CONFIG.captureScoreK),
+      fizzleBonus: readNonNegative(fizzleBonus, DEFAULT_CONFIG.fizzleBonus),
       noProgressTurns: readPositiveInt(noProgressTurns, DEFAULT_CONFIG.noProgressTurns),
       setupTimeoutMs:
         readPositiveInt(setupMinutesShown, clockEnabled ? SETUP_MINUTES_TIMED : SETUP_MINUTES_UNTIMED) *
@@ -577,11 +622,64 @@ export function Create() {
                   />
                 </label>
                 <p className="muted small c-hint">
-                  先達到 X 分者獲勝（兩種計分區的預設皆為 {scoreTargetDefault}）。每一手只有
-                  <strong>剛行動的一方</strong>結算，因此每方每個完整回合恰好結算一次。
+                  先達到 X 分者獲勝。每一手只有<strong>剛行動的一方</strong>結算，因此每方每個完整
+                  回合恰好結算一次；但一次結算拿的是<strong>當下持有的格數</strong>，
+                  所以 <strong>X 要隨計分區調整</strong>。附錄 B 只定了四格版的{' '}
+                  {scoreTargetDefault} 分，八格版<strong>待定</strong>——這個欄位兩種都先填{' '}
+                  {scoreTargetDefault}。
                   {wideArea
-                    ? '八格版每次結算能拿的分較多，同樣的 X 會早一點結束；想要跟四格版差不多長就把 X 調高。'
+                    ? '八格版一次結算約 4 分、四格版約 2 分：同樣 X=40，n=300 的機器對局平均 22.0 手，四格版是 35.5 手（《對局筆記》§9.3）。想要跟四格版差不多長，X 大約要 80。'
                     : '試玩短局時調低。'}
+                </p>
+
+                {/*
+                 * 吃子得分 (§7.3) — the OTHER source of points, and the only one
+                 * that is off by default. It sits directly under 目標分數 X
+                 * because it is the same currency: whatever is set here is spent
+                 * against that line.
+                 */}
+                <label className="c-num-row">
+                  <span className="c-num-label">吃子得分係數 k</span>
+                  <input
+                    className="c-num"
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={captureScoreK}
+                    onChange={(e) => setCaptureScoreK(e.target.value)}
+                  />
+                </label>
+                <p className="muted small c-hint">
+                  分數的第二個來源（規則書 §7.3）：決定性勝負時，<strong>勝方</strong>得 k ×（
+                  <strong>勝方</strong>階級數字）。階級數字為 司令 1 … 軍旗 10，數字越大代表越弱，
+                  所以以弱勝強拿得越多。得分只看勝方的階級——那顆棋子在同一則公告裡已被強制翻明——
+                  永遠不看敗方的。
+                </p>
+                <p className="muted small c-hint">
+                  <strong>0 表示關閉吃子得分</strong>：分數只來自佔領計分格，與這裡至今每一局都相同。
+                  附錄 B 尚未定案，故預設 {DEFAULT_CONFIG.captureScoreK}。此分於行動階段①即時入帳，
+                  因此奪旗結束的那一手照樣付（§7.6）。<strong>必須為整數</strong>——貼目須是唯一的
+                  非整數分數來源，否則 §7.4 的「分數永不相等」不再成立。
+                </p>
+
+                <label className="c-num-row">
+                  <span className="c-num-label">有煙無傷獎勵</span>
+                  <input
+                    className="c-num"
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={fizzleBonus}
+                    onChange={(e) => setFizzleBonus(e.target.value)}
+                  />
+                </label>
+                <p className="muted small c-hint">
+                  工兵或軍旗碰上爆裂物時（有煙無傷 §5.4），<strong>存活方</strong>得這筆固定額。
+                  固定額，且與存活者是誰無關：工兵與軍旗若給的分不同，這一分本身就把兵種報了出來。
+                  同歸於盡則雙方皆零分，沒有這個旋鈕——那正是爆裂物無法從分數欄被數出來的原因。
+                  <strong>0 表示拆彈不另外給分</strong>（預設 {DEFAULT_CONFIG.fizzleBonus}）。
                 </p>
 
                 <label className="c-num-row">
@@ -643,7 +741,12 @@ export function Create() {
             {created.options.clockEnabled ? `計時 ${CLOCK_SUMMARY}` : '不計時'} · 計分區{' '}
             {created.options.scoringSquares.length} 格 · 兵種配置{' '}
             {distributionName(created.options.distribution)} · 目標 {created.options.scoreTarget} 分
-            · 無進展 {created.options.noProgressTurns} 回合 · 佈署時限{' '}
+            {/* §7.3 is off unless it was switched on, and a line reading
+                「吃子 k 0」 would suggest otherwise — so a default game's summary
+                is byte-for-byte the one it printed before this setting existed. */}
+            {created.options.captureScoreK > 0 && <> · 吃子 k {created.options.captureScoreK}</>}
+            {created.options.fizzleBonus > 0 && <> · 有煙無傷 +{created.options.fizzleBonus}</>}
+            {' '}· 無進展 {created.options.noProgressTurns} 回合 · 佈署時限{' '}
             {Math.round(created.options.setupTimeoutMs / 60_000)} 分
           </p>
 

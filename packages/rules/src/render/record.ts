@@ -14,7 +14,26 @@
  *  · The input is ALREADY redacted. `stateForViewer` decided what this viewer
  *    may see; a hidden 兵種 arrives here as `rank: null`. Nothing in this file
  *    imports `GameState`, `entitledToRank` or the piece table, so there is no
- *    path by which it could reach around that boundary.
+ *    path by which it could reach around that boundary. The one thing it imports
+ *    from the engine is `captureScore`, which is a pricing function over an
+ *    announced outcome, a colour and the config — see the next bullet.
+ *  · A score change has TWO sources (§7.1) and this file KEEPS THEM APART: the
+ *    ① 吃子得分 paid in the action phase (§7.3) and the ② 佔領計分格 settlement
+ *    (§7.2). Differencing `scoreAfter` gives their sum; the ① half is recovered
+ *    by calling the engine's own `captureScore` on the event's announced
+ *    `CombatOutcome`, and ② is the remainder.
+ *
+ *    That recomputation is not a second path into the state. 附錄 A(d) fixes the
+ *    payment as a function of the announcement alone — the winner's 階級 is the
+ *    only 兵種 it can read, and §4.3 forced that one 翻明 in the very event
+ *    carrying it — so the strictest viewer in the system derives the same number
+ *    from its own copy of the log. Nothing here re-resolves a contact; the engine
+ *    did that, privately, and the record only prices what was announced.
+ *
+ *    The split is load-bearing, not decoration. Every figure below that claims to
+ *    be about SQUARES — the mean, the peak, the zero runs — reads ② alone. Left
+ *    fused, a game played with k > 0 would report captures as squares held and
+ *    quietly corrupt the archive it feeds.
  *  · A rank is printed only when it came from `ViewerPiece.rank` (non-null) or
  *    from a `CombatOutcome` field, which §4「翻明總表」defines as announced to
  *    everyone. 爆裂物 is named on a 有煙無傷 for the same reason: that event
@@ -46,12 +65,14 @@ import {
   RANK_NAMES_ZH,
   RANK_ORDER,
 } from '../constants.js'
+import { captureScore } from '../game.js'
 import { viewerColor } from '../redact.js'
 import { encodeSetupCode, setupCodeSlots } from '../setupcode.js'
 import type {
   Carrier,
   Color,
   CombatOutcome,
+  GameConfig,
   GameEvent,
   PieceId,
   Rank,
@@ -104,9 +125,15 @@ export interface MutualDestruction {
 /**
  * The longest streak of consecutive OWN SETTLEMENTS crediting nothing.
  *
- * Own settlements, not plies: §7 settles after every ply but credits only the
+ * Own settlements, not plies: §7.1 settles after every ply but credits only the
  * mover, so a side is never credited on the opponent's plies and counting those
  * zeros would report half of every game as a drought for both sides.
+ *
+ * ② ONLY. A settlement is the ② 佔領計分格 phase, so a ply on which this side was
+ * paid for a capture (§7.3, phase ①) but stood on no 結算格 is still a settlement
+ * that credited nothing, and it is counted here. Folding ① in would report a
+ * drought as broken by a kill that held no ground — which is the opposite of what
+ * this number is for.
  */
 export interface ZeroRun {
   length: number
@@ -123,15 +150,20 @@ export interface ZeroRun {
 /**
  * The most 結算格 a side stood on at the same moment.
  *
- * §7② credits exactly +1 per own piece standing on a scoring square, so a
- * settlement's income IS the number of squares held at that settlement, and this
- * is the maximum of that series. It is the one figure a score column will not
- * give up at a glance: notebook §3.3b's whole finding — White reaching six of
+ * §7.5② credits exactly +1 per own piece standing on a scoring square, so a
+ * settlement's ② INCOME is the number of squares held at that settlement, and
+ * this is the maximum of that series. It is the one figure a score column will
+ * not give up at a glance: notebook §3.3b's whole finding — White reaching six of
  * eight at once while Black never held two — had to be hand-derived from a
  * running total.
  *
+ * The ② income, not the ply's score change. Since §7.3 a contact also pays, in
+ * phase ①, and that payment is not a square: counting the whole delta would
+ * report a 決定性勝負 worth k×10 as ten squares held on a board that only has
+ * four. The ① half is subtracted out before this series is built.
+ *
  * Sampled on the side's OWN plies, because those are the only plies it is
- * credited on (§7: only the mover settles). A square held across the opponent's
+ * SETTLED on (§7.1: only the mover settles). A square held across the opponent's
  * reply is still held when the side's next settlement comes round.
  *
  * Nothing here is about identity. It counts squares.
@@ -198,20 +230,48 @@ export interface SideStats {
   color: Color
   /** final score as the ViewerState reports it — 貼目 included for black */
   score: number
-  /** points credited by 結算, i.e. `score` minus the starting 貼目 credit */
+  /**
+   * Everything this side banked, i.e. `score` minus the starting 貼目 credit.
+   *
+   * BOTH of §7.1's sources are in here. `earnedFromCaptures + earnedFromSettlement`
+   * is exactly this number, by construction, and which of the two a game's points
+   * came out of is the first thing a tuning sweep asks.
+   */
   earned: number
   /**
+   * ① 吃子得分 (§7.3) — the part of `earned` that was paid for contacts.
+   *
+   * Summed over EVERY ply, not just this side's. A 決定性勝負 pays the WINNER, so
+   * a defender that holds its square is credited on the opponent's ply, and
+   * 有煙無傷 pays whichever colour survived; 同歸於盡 pays nobody. Restricting the
+   * sum to own plies would drop exactly the income a side did not move for.
+   *
+   * 0 for the whole game whenever `config.captureScoreK` and `config.fizzleBonus`
+   * are both 0, which is the shipped default (附錄 B lists both as 待定).
+   */
+  earnedFromCaptures: number
+  /**
+   * ② 佔領計分格 (§7.2) — the part of `earned` that was paid for standing on
+   * squares. This is the series `earnedPerSettlement` averages and
+   * `peakSquaresHeld` maxes, and it is the only one of the two that is a count of
+   * squares.
+   */
+  earnedFromSettlement: number
+  /**
    * This side's own 結算 — one per ply it moved, and the only plies it is
-   * credited on (§7: settlement runs after every ply but credits only the
+   * SETTLED on (§7.1: settlement runs after every ply but credits only the
    * mover). It is the denominator of `earnedPerSettlement` and of
    * `zeroSettlements`, and it is carried so a reader can convert between the
    * two rates below without knowing whose ply came last.
+   *
+   * It is NOT the count of plies this side was paid on: since §7.3 a contact can
+   * credit the side that did not move, and that payment is not a settlement.
    */
   settlements: number
   /** score / plies — the headline rate over GAME LENGTH, 貼目 included */
   pointsPerPly: number
   /**
-   * earned / plies — the same series with 貼目 taken out.
+   * earned / plies — the same series with 貼目 taken out, BOTH sources included.
    *
    * This is not a second name for `pointsPerPly`. That one answers "how fast did
    * the score move", which is what 分數線 X is checked against, and it carries
@@ -220,26 +280,34 @@ export interface SideStats {
    * three games up by per-ply rate and every Black entry in it is shifted by
    * komi/plies.
    *
-   * It is NOT the mean number of squares held: a side settles on half the plies,
-   * so this runs at about half of `earnedPerSettlement`. Comparing it with
-   * numbers from before settlement became mover-only will read as a collapse in
-   * play that is really just the rule change.
+   * It is NOT the mean number of squares held, for two separate reasons now: a
+   * side settles on half the plies, so it runs at about half of
+   * `earnedPerSettlement`; and it counts 吃子 income, which is not squares at all.
+   * A game played with k > 0 is not comparable with one played at k = 0 on this
+   * figure — the same hard boundary the v03→v04 settlement change drew.
    */
   earnedPerPly: number
   /**
-   * earned / settlements — the MEAN number of squares this side held at its own
-   * settlements, of which `peakSquaresHeld` is the maximum. Max and mean of one
-   * series; read together they say how much was held and how steadily.
+   * earnedFromSettlement / settlements — the MEAN number of squares this side
+   * held at its own settlements, of which `peakSquaresHeld` is the maximum. Max
+   * and mean of one series; read together they say how much was held and how
+   * steadily.
+   *
+   * The numerator is the ② half alone, deliberately. `earned / settlements` would
+   * divide capture income — which can arrive on the opponent's ply — by a count
+   * of this side's settlements, and call the quotient squares.
    */
   earnedPerSettlement: number
   /** the most scoring squares held at once, and when — see {@link PeakHold} */
   peakSquaresHeld: PeakHold
   /**
-   * Own settlements that credited nothing, out of `settlements`.
+   * Own settlements that credited nothing in ②, out of `settlements`.
    *
    * Not "plies scoring zero", which is what this used to be. Under mover-only
    * settlement every one of the opponent's plies credits this side nothing, so
-   * counting plies would bury a real drought under a structural one.
+   * counting plies would bury a real drought under a structural one. And not
+   * "settlements that paid nothing at all" either: a ply that was paid for a
+   * capture and held no square is a zero 結算 — see {@link ZeroRun}.
    */
   zeroSettlements: number
   longestZeroRun: ZeroRun
@@ -345,25 +413,74 @@ interface PlyIncome {
   black: number
 }
 
+/** One ply's score movement, split by the source §7.1 paid it out of. */
+interface PlySources {
+  /** ① 吃子得分 (§7.3), settled inside the ACTION phase */
+  capture: PlyIncome
+  /** ② 佔領計分格 (§7.2), settled in the SETTLEMENT phase */
+  settlement: PlyIncome
+  /** the two together — what differencing `scoreAfter` gives */
+  total: PlyIncome
+}
+
+const NO_INCOME: PlyIncome = { white: 0, black: 0 }
+
 /**
- * Per-ply income for both sides, parallel to `vs.log`.
+ * What this ply's contact paid, from the ANNOUNCEMENT and the config.
  *
- * Derived by differencing the log's `scoreAfter`, which is public. Two entries
- * are structurally zero and neither is a fact about play:
+ * `captureScore` is the engine's own function, called here on the public
+ * `CombatOutcome` the event carries and on this game's 附錄 B knobs — not on the
+ * board, not on a piece, not on a rank anybody is hiding. `e.color` is the
+ * attacker, because a move never contacts a friendly piece, so the mover is the
+ * side that walked into the contact.
  *
- *  · the side that did NOT move. §7 settles after every ply but credits only the
- *    mover, so a ply's income belongs to `e.color` and the other column is 0 on
- *    every single ply. Everything downstream that asks "how much was held" reads
- *    the mover's column only.
- *  · a ply that ended the game by 奪旗 ran no 結算 at all (§7①), so it shows 0
- *    for both — that is what the record says happened, and the record is what
- *    this file reports.
+ * It THROWS on a 'bomb' winnerRank, which `resolveCombat` provably never emits
+ * (§5: every 爆裂物 branch announces 同歸於盡 or 有煙無傷). That is the right
+ * failure: the alternative is a NaN payment silently propagating into every
+ * figure below and into the archived record.
  */
-function incomePerPly(vs: ViewerState): PlyIncome[] {
-  const out: PlyIncome[] = []
+function capturePay(e: GameEvent, config: GameConfig): PlyIncome {
+  return e.combat ? captureScore(e.combat.outcome, e.color, config) : NO_INCOME
+}
+
+/**
+ * Per-ply income for both sides, SPLIT BY SOURCE, parallel to `vs.log`.
+ *
+ * `total` is the difference of the log's public `scoreAfter`. `capture` is
+ * recomputed from the announcement (see {@link capturePay}) and `settlement` is
+ * what is left — the ② the engine credited the mover for standing on 結算格.
+ *
+ * The old version of this function returned the total alone and documented two
+ * structural zeros. **Both of them were true only while 吃子 paid nothing, and
+ * neither survives §7.3:**
+ *
+ *  · "the side that did not move is 0 on every ply" — false. A 決定性勝負 pays the
+ *    WINNER, so a defender holding its square is credited on the opponent's ply,
+ *    and 有煙無傷 pays whichever colour survived. Only the `settlement` column
+ *    still has that shape, and everything downstream that asks "how much was
+ *    held" now reads that column rather than the total.
+ *  · "a ply that ended the game by 奪旗 shows 0 for both" — false. 奪旗 fires in
+ *    phase ① and skips 結算階段② alone (§7.6), so the ply that takes a 軍旗 keeps
+ *    the capture points it earned on the way in. Its `settlement` is 0; its
+ *    `capture` need not be.
+ */
+function incomePerPly(vs: ViewerState): PlySources[] {
+  const out: PlySources[] = []
   let prev = startingScore(vs)
   for (const e of vs.log) {
-    out.push({ white: e.scoreAfter.white - prev.white, black: e.scoreAfter.black - prev.black })
+    const total: PlyIncome = {
+      white: e.scoreAfter.white - prev.white,
+      black: e.scoreAfter.black - prev.black,
+    }
+    const capture = capturePay(e, vs.config)
+    out.push({
+      capture,
+      settlement: {
+        white: total.white - capture.white,
+        black: total.black - capture.black,
+      },
+      total,
+    })
     prev = { white: e.scoreAfter.white, black: e.scoreAfter.black }
   }
   return out
@@ -498,25 +615,30 @@ function replayMovers(log: readonly GameEvent[]): PlyMover[] {
 function sideStats(
   vs: ViewerState,
   color: Color,
-  income: readonly PlyIncome[],
+  income: readonly PlySources[],
   movers: readonly PlyMover[],
 ): SideStats {
   const plies = income.length
   const score = vs.score[color]
   const earned = score - startingScore(vs)[color]
   // §7.1: 奪旗 fires in the action phase and stops the game, so the winning ply
-  // never reached 結算.
+  // never reached 結算階段②. It DID reach ①, so a capture on it still paid — see
+  // the capture accumulator in the loop below, which is outside that guard.
   const endedOnFlag =
     vs.status.kind === 'over' &&
     (vs.status.result.kind === 'flag' || vs.status.result.kind === 'flag-both')
 
+  // ① 吃子 (§7.3), accumulated over EVERY ply — this side's and the opponent's.
+  // The two sources are split rather than summed because only ② is squares.
+  let captured = 0
+
   // The 結算 series and the move series are both walked here, in ONE pass over
-  // the log. They share a filter — `e.color === color` — because under §7 a side
-  // settles on exactly the plies it moves on: settlement follows every ply and
-  // credits the mover, so this side's settlements and this side's actions are
-  // the same list of plies. A pass is one of them (the passer is the mover), and
-  // it settles like any other; what it is NOT is a move (§3④), which is why the
-  // move counters below sit past an extra early return.
+  // the log. They share a filter — `e.color === color` — because under §7.1 a
+  // side settles on exactly the plies it moves on: settlement follows every ply
+  // and credits the mover, so this side's settlements and this side's actions
+  // are the same list of plies. A pass is one of them (the passer is the mover),
+  // and it settles like any other; what it is NOT is a move (§3④), which is why
+  // the move counters below sit past an extra early return.
   let settlements = 0
   let zeroSettlements = 0
   let longest = 0
@@ -542,24 +664,30 @@ function sideStats(
   const bombPlies: number[] = []
 
   vs.log.forEach((e, i) => {
-    // Read off EVERY ply, the opponent's included: 有煙無傷 names the side whose
-    // 爆裂物 was lost regardless of who was moving.
+    // Both of these are read off EVERY ply, the opponent's included.
+    //   · 有煙無傷 names the side whose 爆裂物 was lost regardless of who moved.
+    //   · ① 吃子 pays the WINNER, not the mover (§7.3), so a defender that held
+    //     its square banks points on the opponent's ply. This accumulator is
+    //     therefore above BOTH early returns — including the 奪旗 one, since
+    //     §7.6 skips 結算階段② alone and the flag-taking ply keeps its ①.
+    captured += income[i]?.capture[color] ?? 0
     if (e.combat && knownBombLoser(e.combat.outcome) === color) bombPlies.push(e.ply)
     if (e.color !== color) return
 
-    // A ply that ended the game on 奪旗 ran NO settlement at all (§7.1: the
+    // A ply that ended the game on 奪旗 ran NO settlement at all (§7.5①: the
     // 奪旗 判定 fires in the action phase and the game stops there). Counting it
-    // would report a settlement that paid zero, inventing a zero-income run out
-    // of the winning move.
+    // would report a settlement that paid zero, inventing a zero-② run out of
+    // the winning move.
     if (endedOnFlag && i === vs.log.length - 1) return
 
     // --- this side's 結算 ------------------------------------------------
-    const inc = income[i]?.[color] ?? 0
+    // The ② column, never the ply's total: a capture is not a square.
+    const inc = income[i]?.settlement[color] ?? 0
     settlements++
 
-    // §7② credits +1 per own piece standing on a 結算格, so this settlement's
-    // income IS the count of squares held at it — an integer by construction.
-    // Rounding clears the float dust a rational 貼目 (附錄 B) leaves behind.
+    // §7.5② credits +1 per own piece standing on a 結算格, so this settlement's
+    // ② income IS the count of squares held at it — an integer by construction.
+    // Rounding clears the float dust a rational 貼目 or k (附錄 B) leaves behind.
     const held = Math.round(inc)
     // strictly greater: a repeat of the peak keeps the FIRST ply that reached it
     if (held > peak) {
@@ -606,14 +734,26 @@ function sideStats(
     }
   })
 
+  // ② is taken as the REMAINDER rather than summed from the per-ply column, so
+  // that `earnedFromCaptures + earnedFromSettlement === earned` holds exactly,
+  // by construction, whatever float dust a rational k leaves behind. The two
+  // agree: per-ply settlement is per-ply total minus per-ply capture, and the
+  // totals telescope to `earned`.
+  const fromSettlement = earned - captured
+
   return {
     color,
     score,
     earned,
+    earnedFromCaptures: captured,
+    earnedFromSettlement: fromSettlement,
     settlements,
     pointsPerPly: plies === 0 ? 0 : score / plies,
     earnedPerPly: plies === 0 ? 0 : earned / plies,
-    earnedPerSettlement: settlements === 0 ? 0 : earned / settlements,
+    // ② over own settlements — the mean of the series `peakSquaresHeld` maxes.
+    // Dividing the TOTAL by settlements would put capture income, which can be
+    // credited on the opponent's ply, into a per-own-settlement square count.
+    earnedPerSettlement: settlements === 0 ? 0 : fromSettlement / settlements,
     peakSquaresHeld: { count: peak, ply: peakPly },
     zeroSettlements,
     longestZeroRun: { length: longest, startPly: longestStart, endPly: longestEnd },
@@ -1047,6 +1187,11 @@ function distributionLine(vs: ViewerState): string {
   return `${DISTRIBUTION_LINE_PREFIX} ${items} — ${total} per side`
 }
 
+/** True when 吃子 could not have moved the score at all in this game. */
+function captureScoringOff(c: GameConfig): boolean {
+  return isZero(c.captureScoreK) && isZero(c.fizzleBonus)
+}
+
 /**
  * The settings the game was played under.
  *
@@ -1054,6 +1199,13 @@ function distributionLine(vs: ViewerState): string {
  * produced it (附錄 B), so every tunable is printed, and the scoring squares are
  * printed BY NAME — `[27,28,35,36]` is unreadable and an off-by-one in it is
  * invisible.
+ *
+ * The two §7.3 knobs are the newest and the most dangerous to omit: they change
+ * where a game's points came FROM, not just how many there were, so a record
+ * that does not name them cannot be pooled with anything. Both are 待定 in 附錄 B
+ * and ship at 0, and the record says so in words when they are — an archive of
+ * games played before the sweep must be self-evidently an archive of games with
+ * one live source.
  */
 function configLines(vs: ViewerState): string[] {
   const c = vs.config
@@ -1066,34 +1218,78 @@ function configLines(vs: ViewerState): string[] {
       + ` · setup limit ${clockText(c.setupTimeoutMs)}`
     : `disabled · setup limit ${clockText(c.setupTimeoutMs)}`
 
-  return [
+  const out = [
     `- 分數線 X (score target): ${fmt(c.scoreTarget)}`,
     `- 停滯 N (no-progress full turns): ${fmt(c.noProgressTurns)}`,
     `- 貼目 komi: ${fmt(c.komi)}, credited to Black before ply 1`,
+    `- 吃子得分係數 k (§7.3): ${fmt(c.captureScoreK)}`
+    + ' — a 決定性勝負 pays k × the WINNER’s 階級 number to the winner’s side',
+    `- 有煙無傷獎勵 fizzle bonus (§7.3, §5.4): ${fmt(c.fizzleBonus)}`
+    + ' — flat, to the surviving colour; 同歸於盡 pays both sides zero',
     `- Scoring squares (結算格): ${squares}`,
     `- Clock (讀秒): ${clock}`,
     distributionLine(vs),
   ]
+  if (captureScoringOff(c)) {
+    out.push(
+      '- **吃子得分 was OFF in this game** (k = 0 and the 有煙無傷 bonus = 0), so'
+      + ' every point below came from ② 佔領計分格 and the ① column is empty'
+      + ' throughout. Do not pool per-ply rates from this game with ones played at'
+      + ' k > 0 — that is a different scoring system, not a different result.',
+    )
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------
 // exportMarkdown
 // ---------------------------------------------------------------------------
 
+/**
+ * One row per ply, and — when 吃子 could have paid — the row says which of
+ * §7.1's two sources moved the score.
+ *
+ * The running total alone is not enough any more. A 決定性勝負 and a piece
+ * standing on a 結算格 both push the same column, so a reader differencing the
+ * score would read a k×10 capture as ten squares held on a board that has four.
+ * The ① and ② columns are the difference of `scoreAfter` split by source: ① is
+ * priced off this event's own announced `CombatOutcome`, ② is the remainder.
+ *
+ * The two columns appear ONLY when `captureScoreK` or `fizzleBonus` is nonzero.
+ * At the shipped defaults ① is provably zero on every row and ② is the score
+ * delta restated, so the pair would add two columns of noise to every row of
+ * every archived game while carrying no information — and `configLines` already
+ * states in words that ① was off. Their presence is therefore itself a signal:
+ * a log with these columns is a log from a game with two live sources.
+ */
 function moveLogLines(vs: ViewerState): string[] {
   if (vs.log.length === 0) return ['(no moves yet)']
 
-  const out = [
-    '| Ply | Side | Move | Announced outcome | Score W–B |',
-    '| ---: | :---: | :--- | :--- | :--- |',
-  ]
-  for (const e of vs.log) {
+  const split = !captureScoringOff(vs.config)
+  const income = split ? incomePerPly(vs) : []
+
+  const out = split
+    ? [
+      '| Ply | Side | Move | Announced outcome | ① 吃子 W–B | ② 佔格 W–B | Score W–B |',
+      '| ---: | :---: | :--- | :--- | :--- | :--- | :--- |',
+    ]
+    : [
+      '| Ply | Side | Move | Announced outcome | Score W–B |',
+      '| ---: | :---: | :--- | :--- | :--- |',
+    ]
+  vs.log.forEach((e, i) => {
     const outcome = e.combat ? outcomeText(e) : '—'
+    const src = income[i]
+    // Never a partial row: if the split is on, both columns are printed for
+    // every ply, and the unreachable missing entry prints as the zeros it is.
+    const sources = split
+      ? `| ${scorePair(src?.capture ?? NO_INCOME)} | ${scorePair(src?.settlement ?? NO_INCOME)} `
+      : ''
     out.push(
       `| ${e.ply} | ${e.color === 'white' ? 'W' : 'B'} | ${plyNotation(e)} `
-      + `| ${outcome} | ${scorePair(e.scoreAfter)} |`,
+      + `| ${outcome} ${sources}| ${scorePair(e.scoreAfter)} |`,
     )
-  }
+  })
   return out
 }
 
@@ -1209,6 +1405,20 @@ function statsLines(vs: ViewerState, stats: GameStats): string[] {
   out.push('| Per side | White | Black |')
   out.push('| :--- | ---: | ---: |')
   out.push(`| Total score (貼目 included) | ${fmt(w.score)} | ${fmt(b.score)} |`)
+  // §7.1's two sources, always printed and always in this order. Unconditional,
+  // unlike the per-ply columns in the move log: these are two rows, not two per
+  // ply, and「① was 0 all game」is itself the fact a pooled analysis needs — an
+  // absent row would leave a reader to guess whether the split was measured or
+  // merely came out empty.
+  out.push(`| Earned (貼目 excluded) | ${fmt(w.earned)} | ${fmt(b.earned)} |`)
+  out.push(
+    `| …from ① 吃子得分 (§7.3) | ${fmt(w.earnedFromCaptures)} `
+    + `| ${fmt(b.earnedFromCaptures)} |`,
+  )
+  out.push(
+    `| …from ② 佔領計分格 (§7.2) | ${fmt(w.earnedFromSettlement)} `
+    + `| ${fmt(b.earnedFromSettlement)} |`,
+  )
   // TWO rate rows, and they are two measurements now. They were one when both
   // sides settled on every ply: a piece on a scoring square scored a point per
   // ply, so "squares held" and "points per ply" differed only by 貼目/plies and
@@ -1236,6 +1446,19 @@ function statsLines(vs: ViewerState, stats: GameStats): string[] {
   out.push(`| 爆裂物 KNOWN lost (有煙無傷 only) | ${bombsKnown(w)} | ${bombsKnown(b)} |`)
   out.push(`| …on plies | ${plyList(w.bombsLost.knownPlies)} | ${plyList(b.bombsLost.knownPlies)} |`)
   out.push(`| 爆裂物 truly lost (終局 only) | ${bombsActual(w)} | ${bombsActual(b)} |`)
+  out.push('')
+  out.push(
+    '> §7.1 pays out of TWO sources and the three rows under the score keep them'
+    + ' apart: ① 吃子得分 (§7.3) is paid in the action phase for winning a contact,'
+    + ' ② 佔領計分格 (§7.2) is paid in 結算 for standing on a 結算格. They sum to'
+    + ' 「Earned」 exactly. Only ② is a count of squares, and every row below it —'
+    + ' the mean, the peak, the zero runs — reads ② alone; fusing them would report'
+    + ' a kill as ground held. They also differ in WHO is paid: ② credits the side'
+    + ' that just moved and nobody else, while ① pays the winner of the contact, so'
+    + ' a defender that held its square banks ① on the opponent’s ply. Two games'
+    + ' played with different ① settings are two scoring systems, not two results —'
+    + ' the Configuration block above records which one this was.',
+  )
   out.push('')
   out.push(
     '> The two 爆裂物 rows answer different questions, and the top one is a FLOOR,'
@@ -1289,7 +1512,14 @@ export function exportMarkdown(vs: ViewerState): string {
   lines.push('')
   lines.push(
     'Coordinate notation. A promotion suffix appears only where the pawn actually'
-    + ' promoted — a pawn that lost or tied on the 8th rank did not (§6).',
+    + ' promoted — a pawn that lost or tied on the 8th rank did not (§6).'
+    + (captureScoringOff(vs.config)
+      ? ' 吃子得分 was off, so every point in the score column was paid by'
+        + ' ② 佔領計分格 and the running total is the whole story.'
+      : ' The ① and ② columns split each ply’s score change by the source §7.1'
+        + ' paid it out of: ① 吃子得分 for the contact, ② 佔領計分格 for the'
+        + ' 結算格 held. ① is priced from the announced outcome in the same row.'
+        + ' ② is 0 for the side that did not move; ① need not be.'),
   )
   lines.push('')
   lines.push(...moveLogLines(vs))
@@ -1338,11 +1568,50 @@ export interface RecordMoveJson {
   } | null
   score_after: { white: number; black: number }
   /**
-   * Points credited by this ply's 結算. §7 credits only the side that just
-   * moved, so the other colour's entry is 0 on every ply — a structural zero,
-   * not a statement that the side held nothing.
+   * The ply's WHOLE score movement — the difference of `score_after`, i.e. both
+   * of §7.1's sources added together. The value and the way it is computed are
+   * unchanged; what is gone is the invariant this field used to document.
+   *
+   * It used to read「§7 credits only the side that just moved, so the other
+   * colour's entry is 0 on every ply — a structural zero」. That is false since
+   * §7.3. A 決定性勝負 pays the WINNER, so a defender that held its square is
+   * credited on the opponent's ply, and 有煙無傷 pays whichever colour survived.
+   * The structural zero did not disappear, it moved: `settlement_income` is now
+   * the only one of the three columns that has it.
+   *
+   * Never read this as squares held. That is `settlement_income`, and at k > 0
+   * the two are different numbers.
    */
   income: { white: number; black: number }
+  /**
+   * ① 吃子得分 (§7.3) — what this ply's contact paid, and 0 on a ply with none.
+   *
+   * Priced by the engine's own `captureScore` from the ANNOUNCED `CombatOutcome`
+   * in `combat` and this game's 附錄 B knobs (`config.capture_score_k`,
+   * `config.fizzle_bonus`), so a consumer can re-derive every entry from fields
+   * that are already in this file. Nothing hidden goes into it: 附錄 A(d) fixes
+   * the payment as a function of the announcement alone.
+   *
+   * It can be nonzero on the ply that ENDED the game by 奪旗. 奪旗 fires in the
+   * action phase and skips 結算階段② alone (§7.6), so the flag-taking ply keeps
+   * the capture points it earned on the way in while its `settlement_income` is
+   * 0.
+   *
+   * Zero throughout any game played at the shipped defaults, both knobs being
+   * 0 — see the `config` block, which records what they actually were.
+   */
+  capture_income: { white: number; black: number }
+  /**
+   * ② 佔領計分格 (§7.2) — `income` minus `capture_income`: +1 per own piece
+   * standing on a 結算格 when this ply settled.
+   *
+   * THIS is the column with the structural zero for the side that did not move
+   * (§7.1 settles after every ply and credits only the mover), and it is the
+   * only per-ply figure in the record that counts squares. Every aggregate in
+   * `stats` that claims to be about squares is built from this column and not
+   * from `income`.
+   */
+  settlement_income: { white: number; black: number }
 }
 
 export interface RecordJson {
@@ -1359,6 +1628,15 @@ export interface RecordJson {
     score_target: number
     no_progress_turns: number
     komi: number
+    /**
+     * k in §7.3 — a 決定性勝負 pays k × the WINNER's 階級 number to the winner's
+     * side. Recorded because it decides where a game's points came FROM, not
+     * merely how many there were: two games with the same score line are not
+     * the same experiment if this differs. 待定 in 附錄 B, ships at 0.
+     */
+    capture_score_k: number
+    /** 有煙無傷 flat bonus to the surviving colour (§7.3, §5.4). 待定, ships at 0. */
+    fizzle_bonus: number
     scoring_squares: { square: Square; name: string }[]
     clock_enabled: boolean
     clock_initial_ms: number
@@ -1403,7 +1681,10 @@ export function exportJson(vs: ViewerState): unknown {
   const income = incomePerPly(vs)
 
   const moves: RecordMoveJson[] = vs.log.map((e, i) => {
-    const inc = income[i] ?? { white: 0, black: 0 }
+    // `income` is built from `vs.log` and is parallel to it, so the fallback is
+    // unreachable; it is here because the index signature is checked, and it
+    // pays nothing rather than inventing a number.
+    const inc = income[i] ?? { capture: NO_INCOME, settlement: NO_INCOME, total: NO_INCOME }
     return {
       ply: e.ply,
       color: e.color,
@@ -1428,7 +1709,11 @@ export function exportJson(vs: ViewerState): unknown {
         }
         : null,
       score_after: { white: e.scoreAfter.white, black: e.scoreAfter.black },
-      income: { white: inc.white, black: inc.black },
+      // Fresh objects, not the PlySources members: `NO_INCOME` is one shared
+      // constant and handing it out would alias it into every zero-income ply.
+      income: { white: inc.total.white, black: inc.total.black },
+      capture_income: { white: inc.capture.white, black: inc.capture.black },
+      settlement_income: { white: inc.settlement.white, black: inc.settlement.black },
     }
   })
 
@@ -1455,6 +1740,8 @@ export function exportJson(vs: ViewerState): unknown {
       score_target: vs.config.scoreTarget,
       no_progress_turns: vs.config.noProgressTurns,
       komi: vs.config.komi,
+      capture_score_k: vs.config.captureScoreK,
+      fizzle_bonus: vs.config.fizzleBonus,
       scoring_squares: vs.config.scoringSquares.map((sq) => ({ square: sq, name: squareName(sq) })),
       clock_enabled: vs.config.clockEnabled,
       clock_initial_ms: vs.config.clockInitialMs,

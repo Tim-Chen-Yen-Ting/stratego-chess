@@ -6,12 +6,12 @@
  * it, so the tests are about the PRICE, not about the moves it happens to like:
  *
  *   1. it never crashes the 軍旗 into an occupied square (攻略 §9). This is not
- *      "a bad move" — §5.3 and §7④① make it a resignation, and a policy that
+ *      "a bad move" — §5.3 and §7.5① make it a resignation, and a policy that
  *      does it occasionally would show up in the arena as a mysterious 奪旗 rate.
  *   2. it attacks what the belief says is weaker and declines what it says is
  *      stronger. Without both, the belief is decoration.
  *   3. the two 兵種 exceptions are priced as exceptions: a possible 軍旗 is a WIN
- *      (§7④①, the game ends — it is not a captured piece), and a 工兵 hitting a
+ *      (§7.5①, the game ends — it is not a captured piece), and a 工兵 hitting a
  *      爆裂物 is a WIN (§5.4), not the 同歸於盡 every other rank would get.
  *   4. it parks (攻略 §3) — it does not step off income for nothing.
  *   5. it WALKS to a 結算格 it does not hold, with the piece that can get there.
@@ -197,7 +197,7 @@ function flagIdOf(outcome: GameOutcome, color: Color): PieceId {
 }
 
 // ---------------------------------------------------------------------------
-// 1. the 軍旗 never crashes into anything — 攻略 §9, §5.3, §7④①
+// 1. the 軍旗 never crashes into anything — 攻略 §9, §5.3, §7.5①
 // ---------------------------------------------------------------------------
 
 describe('the 軍旗 never enters an occupied square', () => {
@@ -238,7 +238,7 @@ describe('the 軍旗 never enters an occupied square', () => {
   it('refuses to take even a free piece with the 軍旗', () => {
     // The 軍旗 on c3 with a lone, undefended enemy pawn on d4 — a capture that
     // gains a 結算格 and would be the best move on the board for any other piece.
-    // §7④① settles it before any EV is computed: the 軍旗 leaving the board loses
+    // §7.5① settles it before any EV is computed: the 軍旗 leaving the board loses
     // the game, and it leaves the board whether it wins or loses the contact.
     const view = scene({
       color: 'white',
@@ -293,7 +293,7 @@ describe('the belief decides the attack', () => {
     // 翻明 fifteen of Black's sixteen pieces. The §2 數量表 is a bijection (§9), so
     // the sixteenth is the 軍旗 — no probability involved, just the pool. A 排長 is
     // the second-weakest 兵種 on the board and it is the right piece to send,
-    // because winning ends the game (§7④①) rather than winning a piece.
+    // because winning ends the game (§7.5①) rather than winning a piece.
     const others: Rank[] = [
       'commander', 'general', 'division', 'brigade', 'brigade', 'regiment', 'regiment',
       'battalion', 'battalion', 'company', 'platoon', 'engineer', 'engineer', 'bomb', 'bomb',
@@ -336,7 +336,7 @@ const TERMS: ContactTerms = {
   valueOf: () => 2,
 }
 
-describe('a possible 軍旗 is a win, not a captured piece (§7④①)', () => {
+describe('a possible 軍旗 is a win, not a captured piece (§7.5①)', () => {
   it('classifies it apart from an ordinary win and prices it at the win value', () => {
     expect(classifyContact('brigade', 'flag')).toBe('flag-win')
     expect(classifyContact('brigade', 'platoon')).toBe('win')
@@ -420,7 +420,7 @@ describe('it parks on income (攻略 §3)', () => {
   it('prices a 結算格 off X, the score and the rate — never off a constant', () => {
     const fresh = stateForViewer(deployedGame(), { kind: 'player', color: 'white' })
     const opening = economyOf(fresh, 'white')
-    // Nobody is scoring yet, so nothing but the 停滯 fuse (§7④③, N) bounds the game.
+    // Nobody is scoring yet, so nothing but the 停滯 fuse (§7.5③, N) bounds the game.
     expect(opening.square).toBe(fresh.config.noProgressTurns)
 
     // Two squares held, 30 of 40 banked: five settlements left, so a square is
@@ -435,7 +435,7 @@ describe('it parks on income (攻略 §3)', () => {
     expect(endgame.square).toBeLessThan(opening.square)
 
     // And it collapses further when the OPPONENT is about to cross X: the game
-    // ends when either side gets there (§7④②), however far we still have to go.
+    // ends when either side gets there (§7.5②), however far we still have to go.
     const theirs = stateForViewer(deployedGame(), { kind: 'player', color: 'white' })
     theirs.score = { white: 0, black: 38.5 }
     theirs.pieces.find((p) => p.id === 'b-d7')!.square = sq('d5')

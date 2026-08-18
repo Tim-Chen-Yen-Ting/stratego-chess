@@ -31,7 +31,16 @@ import {
 } from '../src/render/record.js'
 import { createGame, submitAssignment } from '../src/setup.js'
 import { decodeSetupCode } from '../src/setupcode.js'
-import type { Color, GameState, Move, Rank, Result, Viewer, ViewerState } from '../src/types.js'
+import type {
+  Color,
+  GameConfig,
+  GameState,
+  Move,
+  Rank,
+  Result,
+  Viewer,
+  ViewerState,
+} from '../src/types.js'
 import { PASS, mv, position, sq } from './helpers.js'
 
 /**
@@ -73,7 +82,13 @@ function withoutTrueBombCount(g: GameStats): GameStats {
 // Fixture A — the scripted game
 // ---------------------------------------------------------------------------
 
-function scriptedStart(): GameState {
+/**
+ * `config` is threaded so the SAME script can be replayed under the §7.3 knobs
+ * (fixture C below). Everything else about the position is identical, which is
+ * the point: the two runs differ only in what a contact was worth, so any figure
+ * that moves between them is a figure that reads ① 吃子.
+ */
+function scriptedStart(config: Partial<GameConfig> = {}): GameState {
   return position(
     [
       { at: 'a1', color: 'white', carrier: 'rook', rank: 'commander', id: 'WA' },
@@ -92,7 +107,7 @@ function scriptedStart(): GameState {
       { at: 'g8', color: 'black', carrier: 'rook', rank: 'bomb', id: 'BG' },
       { at: 'h8', color: 'black', carrier: 'rook', rank: 'engineer', id: 'BH' },
     ],
-    { id: 'rec-a', toMove: 'white' },
+    { id: 'rec-a', toMove: 'white', config },
   )
 }
 
@@ -207,10 +222,16 @@ describe('gameStats over the public log', () => {
     // Bombs: White spent both — g1 on ply 11 and h1 on ply 13 — but only ply 13
     // is KNOWN, because that one fizzled. Ply 11 announced 同歸於盡 and nothing
     // else. The true 2 comes from the piece list at 終局, not from the log.
+    // The fixture is played at the shipped default (k = 0, fizzle bonus = 0), so
+    // ① 吃子 paid nothing across six contacts and all 4 points are ② 佔領計分格.
+    // Asserted rather than omitted: this is the whole-shape assertion that makes
+    // a new SideStats field impossible to add silently.
     expect(stats.sides.white).toEqual({
       color: 'white',
       score: 4,
       earned: 4,
+      earnedFromCaptures: 0,
+      earnedFromSettlement: 4,
       settlements: 7,
       pointsPerPly: 4 / 14,
       earnedPerPly: 4 / 14,
@@ -242,6 +263,9 @@ describe('gameStats over the public log', () => {
       color: 'black',
       score: 3.5,
       earned: 3,
+      // k = 0 here too; 貼目 is in `score` and in neither source.
+      earnedFromCaptures: 0,
+      earnedFromSettlement: 3,
       settlements: 7,
       pointsPerPly: 3.5 / 14,
       earnedPerPly: 3 / 14,
@@ -259,20 +283,35 @@ describe('gameStats over the public log', () => {
     expect(stats.sides.black.earnedPerPly).toBeCloseTo(0.2143, 4)
   })
 
-  it('a side is never credited on the opponent’s ply (§7 mover-only 結算)', () => {
-    // The structural fact every counter above is built on. Differencing the
-    // public `scoreAfter` column, exactly one side moves on any ply, and it is
-    // always the side that just played.
+  it('② 佔領計分格 never credits the side that did not move (§7.1 mover-only 結算)', () => {
+    // INVERTED from「a side is never credited on the opponent's ply」, which was
+    // a true statement about the whole score column only while 吃子 paid nothing.
+    // §7.3 broke it: a 決定性勝負 pays the WINNER, so a defender that holds its
+    // square banks ① on the opponent's ply, and 有煙無傷 pays the surviving
+    // colour whoever moved. What survived §7.3 is the narrower and now STRICTER
+    // claim — the structural zero belongs to the ② column alone — so that is
+    // what is asserted here, on `settlement_income` rather than on the total.
     const json = exportJson(asBlackDone) as RecordJson
-    expect(json.moves.map((m) => m.income.white)).toEqual(
+    expect(json.moves.map((m) => m.settlement_income.white)).toEqual(
       [0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0],
     )
-    expect(json.moves.map((m) => m.income.black)).toEqual(
+    expect(json.moves.map((m) => m.settlement_income.black)).toEqual(
       [0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
     )
     for (const m of json.moves) {
-      const idle = m.color === 'white' ? m.income.black : m.income.white
-      expect(idle, `ply ${m.ply} credited the side that did not move`).toBe(0)
+      const idle = m.color === 'white'
+        ? m.settlement_income.black
+        : m.settlement_income.white
+      expect(idle, `ply ${m.ply} settled for the side that did not move`).toBe(0)
+    }
+    // This fixture runs at k = 0, so here — and ONLY because of that — the total
+    // column still coincides with ②. Stated explicitly so the coincidence is on
+    // the record rather than being mistaken for the invariant above.
+    expect(json.config.capture_score_k).toBe(0)
+    expect(json.config.fizzle_bonus).toBe(0)
+    for (const m of json.moves) {
+      expect(m.capture_income).toEqual({ white: 0, black: 0 })
+      expect(m.income).toEqual(m.settlement_income)
     }
     // …so both sides settle the same number of times over a full-turn game
     expect(stats.sides.white.settlements).toBe(7)
@@ -665,6 +704,12 @@ describe('exportMarkdown — the thing you paste into a chat', () => {
     expect(md).toContain('- 分數線 X (score target): 40')
     expect(md).toContain('- 停滯 N (no-progress full turns): 30')
     expect(md).toContain('- 貼目 komi: 0.5, credited to Black before ply 1')
+    // 附錄 B's two §7.3 knobs. Printed even at the default, because「k was 0」is
+    // the fact that makes this game poolable with the rest of the archive and
+    // not with a game played at k > 0 — the record has to say it, not imply it.
+    expect(md).toContain('- 吃子得分係數 k (§7.3): 0')
+    expect(md).toContain('- 有煙無傷獎勵 fizzle bonus (§7.3, §5.4): 0')
+    expect(md).toContain('**吃子得分 was OFF in this game**')
     expect(md).toContain('- Scoring squares (結算格): d4 e4 d5 e5 (4)')
     expect(md).toContain('- Clock (讀秒): 15:00 + 0:10 per move · setup limit 3:00')
     expect(md).toContain('司令×1 · 軍長×1 · 師長×1 · 旅長×2')
@@ -1147,7 +1192,13 @@ describe('exportJson — arrays of records, for a script', () => {
         survivor_square_name: 'a8',
       },
       score_after: { white: 0, black: 0.5 },
+      // Three income columns, not one: the total and §7.1's two sources. Ply 1
+      // is an attacker-wins on 司令, which at k > 0 would pay White k×1 in ①;
+      // this fixture is at the default k = 0, so it pays nothing and all three
+      // columns are zero.
       income: { white: 0, black: 0 },
+      capture_income: { white: 0, black: 0 },
+      settlement_income: { white: 0, black: 0 },
     })
     expect(json.moves[3]).toMatchObject({ ply: 4, notation: 'pass', move_kind: 'pass', combat: null })
   })
@@ -1164,6 +1215,293 @@ describe('exportJson — arrays of records, for a script', () => {
     const round = JSON.parse(JSON.stringify(json)) as RecordJson
     expect(round.stats).toEqual(json.stats)
     expect(round.moves).toHaveLength(14)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fixture C — the same script at k > 0
+//
+// Everything above runs at the shipped default, where ① 吃子 pays nothing and
+// the ①/② split is the trivial one. That makes it exactly the wrong fixture to
+// prove the split works: at k = 0 a renderer that fused the two sources and one
+// that separated them emit identical bytes. Fixture C replays SCRIPT move for
+// move with the §7.3 knobs turned on, so every number below moves if — and only
+// if — the renderer is reading ① and attributing it correctly.
+//
+// k = 3 and fizzle bonus = 2 are chosen to be mutually indivisible and unequal
+// to any ② amount in the game, so a misattributed point cannot land on the right
+// total by coincidence.
+//
+//   ply  1  W a1a8  attacker-wins,  winnerRank 司令(1)  → ① White 3×1 = 3
+//   ply  5  W c1c8  defender-wins,  winnerRank 司令(1)  → ① BLACK 3×1 = 3
+//   ply 13  W h1h8  fizzle,         survivor Black      → ① BLACK       2
+//   plies 3, 9, 11  mutual-destruction                  → ① nobody, by §7.3
+//
+// Plies 5 and 13 are the whole reason this fixture exists: both are WHITE's
+// plies and both pay BLACK. A record that assumes「only the mover is credited」
+// books those 5 points as squares Black stood on, and 5 squares is more than the
+// board has.
+// ---------------------------------------------------------------------------
+
+const K = 3
+const FIZZLE = 2
+
+/**
+ * `scoreTarget` is lifted out of the way on purpose. At k = 3 the script's
+ * capture income would cross the default 40 before ply 14 and 分數 would end the
+ * game early, silently shortening the fixture; the two runs must be the same 14
+ * plies or nothing below is a comparison.
+ */
+/** After ply 14, still `playing` — the only state with anything left hidden. */
+const SCORED_MID = (() => {
+  let s = scriptedStart({ captureScoreK: K, fizzleBonus: FIZZLE, scoreTarget: 500 })
+  for (const move of SCRIPT) s = applyMove(s, move)
+  return s
+})()
+/** Black resigns on ply 15, exactly as in fixture A. */
+const SCORED = resign(SCORED_MID, 'black')
+
+const asBlackScored: ViewerState = stateForViewer(SCORED, { kind: 'player', color: 'black' })
+
+describe('§7.3 — the record splits 吃子 from 佔領計分格', () => {
+  const stats = gameStats(asBlackScored)
+  const json = exportJson(asBlackScored) as RecordJson
+  const md = exportMarkdown(asBlackScored)
+
+  it('is the same 14 plies as fixture A, with the same six announcements', () => {
+    // The premise. If the score change moved the game off SCRIPT, every
+    // comparison below is between two different games.
+    expect(SCORED.log).toHaveLength(14)
+    expect(stats.contactsByOutcome).toEqual({
+      'attacker-wins': 1,
+      'defender-wins': 1,
+      'mutual-destruction': 3,
+      fizzle: 1,
+    })
+    // Move for move and announcement for announcement against fixture A. Only
+    // the score column may differ between the two runs.
+    expect(SCORED.log.map((e) => JSON.stringify(e.move)))
+      .toEqual(DONE.log.map((e) => JSON.stringify(e.move)))
+    expect(SCORED.log.map((e) => JSON.stringify(e.combat?.outcome ?? null)))
+      .toEqual(DONE.log.map((e) => JSON.stringify(e.combat?.outcome ?? null)))
+  })
+
+  it('② is untouched by k — the same 4 and 3 squares as at the default', () => {
+    // The control. 佔領計分格 does not know what a contact was worth, so turning
+    // ① on must not move ② by a point. If this moves, the split is leaking one
+    // source into the other.
+    expect(stats.sides.white.earnedFromSettlement).toBe(4)
+    expect(stats.sides.black.earnedFromSettlement).toBe(3)
+    expect(stats.sides.white.peakSquaresHeld).toEqual({ count: 1, ply: 7 })
+    expect(stats.sides.black.peakSquaresHeld).toEqual({ count: 1, ply: 2 })
+    expect(stats.sides.white.zeroSettlements).toBe(3)
+    expect(stats.sides.black.zeroSettlements).toBe(4)
+  })
+
+  it('① is 3 to White and 5 to Black — and 5 of those 8 points are not squares', () => {
+    expect(stats.sides.white.earnedFromCaptures).toBe(K * 1)
+    expect(stats.sides.black.earnedFromCaptures).toBe(K * 1 + FIZZLE)
+    // The two sources reconstruct `earned` exactly, which is what makes the
+    // split safe to archive: nothing is dropped and nothing is double-counted.
+    for (const c of ['white', 'black'] as const) {
+      const s = stats.sides[c]
+      expect(s.earnedFromCaptures + s.earnedFromSettlement).toBeCloseTo(s.earned, 9)
+    }
+    expect(stats.sides.white.earned).toBe(7)
+    expect(stats.sides.black.earned).toBe(8)
+    expect(SCORED.score).toEqual({ white: 7, black: 8.5 })
+  })
+
+  it('credits the NON-MOVER when the announcement says so (§7.3)', () => {
+    // The assertion the old「never credited on the opponent's ply」was inverted
+    // into. Plies 5 and 13 are White's; both pay Black, and both pay it in ①.
+    const ply5 = json.moves[4]!
+    expect(ply5.color).toBe('white')
+    expect(ply5.combat!.outcome).toEqual({ kind: 'defender-wins', winnerRank: 'commander' })
+    expect(ply5.capture_income).toEqual({ white: 0, black: K * 1 })
+    expect(ply5.settlement_income).toEqual({ white: 0, black: 0 })
+
+    const ply13 = json.moves[12]!
+    expect(ply13.color).toBe('white')
+    expect(ply13.combat!.outcome).toEqual({ kind: 'fizzle', survivorColor: 'black' })
+    expect(ply13.capture_income).toEqual({ white: 0, black: FIZZLE })
+    // White is standing on e4 by ply 13, so its ② is 1 on the same ply that pays
+    // Black 2 in ①. One ply, both sources, two different sides — the case that
+    // fusing the columns makes unreadable.
+    expect(ply13.settlement_income).toEqual({ white: 1, black: 0 })
+    expect(ply13.income).toEqual({ white: 1, black: FIZZLE })
+  })
+
+  it('pays 同歸於盡 nothing, so a 爆裂物 stays uncountable from the score (附錄 A(d))', () => {
+    for (const i of [2, 8, 10]) {
+      const m = json.moves[i]!
+      expect(m.combat!.outcome).toEqual({ kind: 'mutual-destruction' })
+      expect(m.capture_income).toEqual({ white: 0, black: 0 })
+    }
+    // Stronger: plies 9 and 11 are a 爆裂物 taking an ordinary piece and 爆裂物
+    // vs 爆裂物, and ply 3 is an ordinary rank tie. Three different engine paths,
+    // and the ① column cannot tell them apart either.
+    const paid = [2, 8, 10].map((i) => JSON.stringify(json.moves[i]!.capture_income))
+    expect(new Set(paid).size).toBe(1)
+  })
+
+  it('every ① entry is re-derivable from the public event and the config alone', () => {
+    // 附錄 A(d) as an executable claim. The strictest viewer in the system holds
+    // the announced outcome, the mover's colour and the config; pricing those
+    // three by hand must reproduce the record's ① column entry for entry, with
+    // no reference to the board, the piece list or a hidden 兵種.
+    const order: Record<string, number> = {
+      commander: 1, general: 2, division: 3, brigade: 4, regiment: 5,
+      battalion: 6, company: 7, platoon: 8, engineer: 9, flag: 10,
+    }
+    for (const m of json.moves) {
+      const want = { white: 0, black: 0 }
+      const o = m.combat?.outcome
+      if (o?.kind === 'attacker-wins') {
+        want[m.color] = json.config.capture_score_k * order[o.winnerRank]!
+      } else if (o?.kind === 'defender-wins') {
+        want[m.color === 'white' ? 'black' : 'white'] =
+          json.config.capture_score_k * order[o.winnerRank]!
+      } else if (o?.kind === 'fizzle') {
+        want[o.survivorColor] = json.config.fizzle_bonus
+      }
+      expect(m.capture_income, `ply ${m.ply}`).toEqual(want)
+    }
+  })
+
+  it('is INDISTINGUISHABLE across the hidden 兵種 — pricing reads nothing private', () => {
+    // The redaction property, applied to the new column. Rotating every 兵種 this
+    // viewer may not see gives an equally legal world; if any ① figure moved, the
+    // payment would be reading a rank that was never announced.
+    //
+    // Taken on the LIVE state, not the resigned one: §10.5 opens every 兵種 at
+    // 終局, so nothing is hidden there and the permutation would be a no-op —
+    // a vacuously green property test.
+    const viewer: Viewer = { kind: 'player', color: 'black' }
+    const base = exportJson(stateForViewer(SCORED_MID, viewer)) as RecordJson
+    const { state, changed } = permuteHiddenRanks(SCORED_MID, viewer)
+    expect(changed, 'the permutation must actually change something').toBe(true)
+    const other = exportJson(stateForViewer(state, viewer)) as RecordJson
+    expect(other.moves.map((m) => m.capture_income))
+      .toEqual(base.moves.map((m) => m.capture_income))
+    expect(other.moves.map((m) => m.settlement_income))
+      .toEqual(base.moves.map((m) => m.settlement_income))
+    // and the ① column is not empty in the world being permuted, or the equality
+    // above would hold for a renderer that never priced anything at all
+    expect(base.moves.some((m) => m.capture_income.white + m.capture_income.black > 0))
+      .toBe(true)
+  })
+
+  it('names both knobs in the config block and drops the「OFF」note', () => {
+    expect(md).toContain('- 吃子得分係數 k (§7.3): 3')
+    expect(md).toContain('- 有煙無傷獎勵 fizzle bonus (§7.3, §5.4): 2')
+    expect(md).not.toContain('**吃子得分 was OFF in this game**')
+    expect(json.config.capture_score_k).toBe(3)
+    expect(json.config.fizzle_bonus).toBe(2)
+  })
+
+  it('prints the ①/② columns per ply, so no capture is read as ground held', () => {
+    expect(md).toContain('| ① 吃子 W–B | ② 佔格 W–B | Score W–B |')
+    // ply 1: White takes 3 in ①, holds nothing → 3 – 0 / 0 – 0, score 3 – 0.5
+    expect(md).toContain('| 3 – 0 | 0 – 0 | 3 – 0.5 |')
+    // ply 5: White moved, BLACK is paid 3 → the ① column carries it, ② is empty.
+    // Black is on 5.5 by then (0.5 貼目 + d5 held at its plies 2 and 4 + this 3),
+    // which is the reading the running total alone will not give you: the jump
+    // from 2.5 to 5.5 happened on a ply Black did not play.
+    expect(md).toContain('| 0 – 3 | 0 – 0 | 3 – 5.5 |')
+    // ply 2: the mirror case — a pure ② ply, nothing in ①
+    expect(md).toContain('| 2 | B | d8d5 | — | 0 – 0 | 0 – 1 | 3 – 1.5 |')
+    // ply 13: both sources on one ply, one each way
+    expect(md).toContain('| 0 – 2 | 1 – 0 | 7 – 8.5 |')
+    const rows = md.split('\n').filter((l) => /^\| \d+ \| [WB] \|/.test(l))
+    expect(rows).toHaveLength(14)
+  })
+
+  it('breaks the earned total out by source in the statistics table', () => {
+    expect(md).toContain('| Earned (貼目 excluded) | 7 | 8 |')
+    expect(md).toContain('| …from ① 吃子得分 (§7.3) | 3 | 5 |')
+    expect(md).toContain('| …from ② 佔領計分格 (§7.2) | 4 | 3 |')
+    // …and the squares rows still read ② alone: 4/7 and 3/7, not 7/7 and 8/7.
+    expect(md).toContain('| Mean squares held per own 結算 | 0.571 | 0.429 |')
+  })
+
+  it('leaves the k = 0 MOVE LOG exactly as it was — five columns, same rows', () => {
+    // The archive guarantee, stated narrowly because that is how far it goes.
+    // Every game in games/ was played at the default, and the split must not
+    // rewrite their per-ply rows: at k = 0 the ① column is provably zero on
+    // every row, so the two columns are suppressed and the log is unchanged.
+    //
+    // The STATISTICS table is a different matter and is NOT unchanged — it gains
+    // the three source rows and a note at every k, on purpose:「① was 0 all
+    // game」is a fact an archived record should state rather than imply. So this
+    // is not a claim that a k = 0 export is byte-identical to an old one.
+    const plain = exportMarkdown(asBlackDone)
+    expect(plain).not.toContain('① 吃子 W–B')
+    expect(plain).toContain('| Ply | Side | Move | Announced outcome | Score W–B |')
+    expect(plain).toContain('| 2 | B | d8d5 | — | 0 – 1.5 |')
+    expect(plain).toContain('| 14 | B | pass | — | 4 – 3.5 |')
+    // …and the stats table does carry the split, reading 0 for ① throughout
+    expect(plain).toContain('| …from ① 吃子得分 (§7.3) | 0 | 0 |')
+    expect(plain).toContain('| …from ② 佔領計分格 (§7.2) | 4 | 3 |')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 奪旗 pays ① and skips ② (§7.6)
+// ---------------------------------------------------------------------------
+
+describe('a ply that ends the game by 奪旗 keeps its ① and settles no ② (§7.6)', () => {
+  // Black's 軍旗 stands on d5, which is a 結算格. White's 司令 takes it from d1.
+  // The move both ends the game and lands on a scoring square, so the two phases
+  // are separable by the arithmetic alone:
+  //   ① 3 × 司令(1) = 3   ② would be +1 if 結算階段② had run — and it must not
+  // A total of 4 for White is the bug; 3 is the rule.
+  const start = position(
+    [
+      { at: 'd1', color: 'white', carrier: 'rook', rank: 'commander', id: 'WK' },
+      { at: 'd5', color: 'black', carrier: 'rook', rank: 'flag', id: 'BFLAG' },
+      { at: 'h8', color: 'black', carrier: 'king', rank: 'commander', id: 'BK' },
+    ],
+    { id: 'rec-flag', toMove: 'white', config: { captureScoreK: K, fizzleBonus: FIZZLE } },
+  )
+  const over = applyMove(start, mv('d1', 'd5'))
+  const vs = stateForViewer(over, { kind: 'omniscient' })
+  const json = exportJson(vs) as RecordJson
+  const stats = gameStats(vs)
+
+  it('really did end on 奪旗, on the ply with the contact', () => {
+    expect(over.status).toEqual({ kind: 'over', result: { kind: 'flag', winner: 'white' } })
+    expect(over.log).toHaveLength(1)
+    expect(over.log[0]!.combat!.outcome).toEqual({
+      kind: 'attacker-wins',
+      winnerRank: 'commander',
+    })
+  })
+
+  it('pays the capture — 奪旗 fires in ① and stops the ply before ②', () => {
+    expect(over.score).toEqual({ white: K * 1, black: 0.5 })
+    expect(json.moves[0]!.capture_income).toEqual({ white: K * 1, black: 0 })
+    // The load-bearing zero. White's 司令 is standing on d5, a 結算格, when the
+    // game ends; had ② run it would be 1 here and the total 4.
+    expect(json.moves[0]!.settlement_income).toEqual({ white: 0, black: 0 })
+    expect(json.moves[0]!.income).toEqual({ white: K * 1, black: 0 })
+  })
+
+  it('books all of it as ① and none of it as squares held', () => {
+    expect(stats.sides.white.earnedFromCaptures).toBe(K * 1)
+    expect(stats.sides.white.earnedFromSettlement).toBe(0)
+    // …and the winning ply is not counted as a settlement at all, so it cannot
+    // show up as a 結算 that paid zero either.
+    expect(stats.sides.white.settlements).toBe(0)
+    expect(stats.sides.white.peakSquaresHeld).toEqual({ count: 0, ply: null })
+    expect(stats.sides.white.zeroSettlements).toBe(0)
+  })
+
+  it('says so in the rendered record rather than leaving it to arithmetic', () => {
+    const md = exportMarkdown(vs)
+    expect(md).toContain('| 3 – 0 | 0 – 0 | 3 – 0.5 |')
+    expect(md).toContain('| …from ① 吃子得分 (§7.3) | 3 | 0 |')
+    expect(md).toContain('| …from ② 佔領計分格 (§7.2) | 0 | 0 |')
   })
 })
 

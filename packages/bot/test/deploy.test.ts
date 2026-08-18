@@ -329,7 +329,7 @@ describe('軍旗 placement', () => {
   })
 
   it('never puts the 軍旗 on a pawn this deployment is sending at a 結算格', () => {
-    // A 軍旗 that moves into anything loses the game outright (§7①), so the pawn
+    // A 軍旗 that moves into anything loses the game outright (§7.5①), so the pawn
     // it rides must be one with no job: parking it on the pawn that was about to
     // take a 結算格 forfeits that square for the whole game.
     for (const sample of SAMPLES) {

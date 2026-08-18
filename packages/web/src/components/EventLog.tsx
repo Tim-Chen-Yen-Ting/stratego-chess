@@ -15,39 +15,103 @@ import { eventLine } from '../format.js'
  * server never made, and a false one half the time. What that line legitimately
  * shows is what the board shows: both pieces went. The hover sentence
  * (`combatText`) states the ambiguity in words.
+ *
+ * ── The record as a means of NAVIGATION (replay) ───────────────────────────
+ *
+ * Once the game is over the board becomes steppable, and this panel becomes the
+ * index into it: `currentPly` marks the row the board is showing and `onSelectPly`
+ * jumps there. "What did the board look like when that happened" is the question
+ * a log is read to answer, and until now the answer was to count rows by hand.
+ *
+ * THE WHOLE LOG STAYS ON SCREEN, INCLUDING ROWS AFTER THE CURRENT ONE, and that
+ * is not a leak: every `GameEvent` is public by construction (techspec §3) and
+ * carries only what §4.3 says is announced out loud, so no row here holds a 兵種
+ * that was not announced at that ply to everybody. It is nevertheless the
+ * FUTURE relative to the position on the board, so those rows are dimmed and the
+ * caption says so — otherwise a viewer replaying one side's knowledge would read
+ * the not-yet-happened as part of what that side knew. What the board shows is
+ * entitlement; what this panel shows is the record. They are different questions
+ * and the dimming is where the difference is drawn.
  */
 
 export interface EventLogProps {
   log: readonly GameEvent[]
+  /**
+   * Replay only: the ply the board is currently showing. Its row is marked and
+   * scrolled into view; later rows are dimmed as the future. `null` while the
+   * board sits at the opening, before any move — every row is then the future.
+   * Omit entirely during a live game.
+   */
+  currentPly?: number | null
+  /**
+   * Replay only: jump the board to a ply. Its presence is what makes the rows
+   * interactive at all, so a live log stays plain text.
+   */
+  onSelectPly?: (ply: number) => void
 }
 
-export function EventLog({ log }: EventLogProps) {
+export function EventLog({ log, currentPly, onSelectPly }: EventLogProps) {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
+  const currentRef = useRef<HTMLLIElement | null>(null)
+
+  const replaying = onSelectPly !== undefined
+  /** at the opening frame nothing has been played, so everything is ahead */
+  const atPly = currentPly ?? 0
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'nearest' })
-  }, [log.length])
+    // Live: follow the tail, as before. Replay: follow the position instead —
+    // the tail is where the game ended, not where the viewer is looking.
+    if (!replaying) {
+      endRef.current?.scrollIntoView({ block: 'nearest' })
+      return
+    }
+    const box = scrollRef.current
+    const row = currentRef.current
+    if (box === null || row === null) return
+    // Scrolls THIS panel and nothing else. `scrollIntoView` would walk every
+    // scrollable ancestor including the document, which yanks the whole page
+    // sideways each time you step a ply.
+    const boxRect = box.getBoundingClientRect()
+    const rowRect = row.getBoundingClientRect()
+    if (rowRect.top < boxRect.top) {
+      box.scrollTop += rowRect.top - boxRect.top - 8
+    } else if (rowRect.bottom > boxRect.bottom) {
+      box.scrollTop += rowRect.bottom - boxRect.bottom + 8
+    }
+  }, [log.length, currentPly, replaying])
 
   return (
     <section className="log panel">
-      <h2>公開紀錄</h2>
-      <div className="log-scroll">
+      <style>{STYLE}</style>
+      <h2>
+        公開紀錄
+        {replaying && <span className="muted xy-log-hint"> · 點一列跳到那一手</span>}
+      </h2>
+      <div className="log-scroll" ref={scrollRef}>
         {log.length === 0 && <p className="muted small">尚無紀錄。</p>}
         <ol className="log-list">
           {log.map((ev) => {
             const line = eventLine(ev)
-            return (
-              <li
-                key={ev.ply}
-                className={`log-item log-${ev.color}`}
-                // The full sentence stays reachable on hover. The compact line
-                // is for reading at a glance; this is for settling a question.
-                title={
-                  [line.combat, line.enPassant ? 'en passant' : null, line.promoted]
-                    .filter(Boolean)
-                    .join('；') || undefined
-                }
-              >
+            const current = replaying && ev.ply === currentPly
+            const future = replaying && ev.ply > atPly
+            // The full sentence stays reachable on hover. The compact line
+            // is for reading at a glance; this is for settling a question.
+            const title =
+              [line.combat, line.enPassant ? 'en passant' : null, line.promoted]
+                .filter(Boolean)
+                .join('；') || undefined
+            const rowClass = [
+              'log-item',
+              `log-${ev.color}`,
+              current ? 'xy-log-current' : '',
+              future ? 'xy-log-future' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')
+
+            const body = (
+              <>
                 <span className="log-ply">{line.ply}</span>
                 <span className={`log-color log-color-${ev.color}`}>
                   {COLOR_LABEL[ev.color]}
@@ -60,12 +124,80 @@ export function EventLog({ log }: EventLogProps) {
                   {line.promoted && <i className="log-flag">↑</i>}
                 </span>
                 <span className="log-score">{line.score}</span>
+              </>
+            )
+
+            return (
+              <li
+                key={ev.ply}
+                className="xy-log-row"
+                ref={current ? currentRef : undefined}
+                aria-current={current ? 'true' : undefined}
+              >
+                {onSelectPly ? (
+                  <button
+                    type="button"
+                    className={`${rowClass} xy-log-btn`}
+                    title={title}
+                    aria-label={`跳到第 ${ev.ply} 手`}
+                    onClick={() => onSelectPly(ev.ply)}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className={rowClass} title={title}>
+                    {body}
+                  </div>
+                )}
               </li>
             )
           })}
         </ol>
         <div ref={endRef} />
       </div>
+      {replaying && (
+        <p className="muted small xy-log-foot">
+          棋盤停在{currentPly === null ? '開局' : `第 ${currentPly} 手`}
+          ；淡色的是之後才發生的手。紀錄本身全程對所有人公開（規則書 §10.3），棋盤顯示的兵種才依視角而定。
+        </p>
+      )}
     </section>
   )
 }
+
+/**
+ * Scoped to this panel. The shared stylesheet owns `.log-item` and the tags;
+ * only what the replay adds lives here, under an `xy-` prefix.
+ */
+const STYLE = `
+.log .xy-log-hint { font-weight: 400; font-size: 0.82rem; }
+.log .xy-log-row { list-style: none; }
+/* a row that is also a jump target. .log-item still supplies the grid, the
+   padding and the rule underneath; this only undoes what being a <button>
+   would otherwise impose on it. */
+.log .xy-log-btn {
+  width: 100%;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 0;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.log .xy-log-btn:hover { background: rgba(255, 255, 255, 0.055); }
+/* the same amber the board rings the current move with, so the two places
+   marking「this ply」are visibly the same mark */
+.log .xy-log-current {
+  background: rgba(255, 232, 140, 0.13);
+  box-shadow: inset 3px 0 0 #ffe88c;
+}
+.log .xy-log-btn.xy-log-current:hover { background: rgba(255, 232, 140, 0.2); }
+/* ahead of the board. Public record, but not yet part of the position on
+   screen — see the panel note. */
+.log .xy-log-future { opacity: 0.42; }
+.log .xy-log-btn.xy-log-future:hover { opacity: 0.75; }
+.log .xy-log-foot { margin: 8px 0 0; line-height: 1.5; }
+`

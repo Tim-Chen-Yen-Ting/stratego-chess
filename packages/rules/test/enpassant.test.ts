@@ -187,7 +187,7 @@ describe('§5 en passant — 爆裂物 rules apply unchanged (「一般吃法與
     expect(rankSeenBy(s, 'white', BP)).toBeNull()
   })
 
-  it('a 軍旗 taken en passant ends the game for its owner (§7①)', () => {
+  it('a 軍旗 taken en passant ends the game for its owner (§7.5①)', () => {
     const s = applyMove(afterDoubleStep('general', 'flag'), mv('b5', 'a6'))
     expect(pieceById(s, BP).square).toBeNull()
     expect(s.status).toEqual({ kind: 'over', result: { kind: 'flag', winner: 'white' } })

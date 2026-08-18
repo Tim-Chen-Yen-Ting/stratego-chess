@@ -7,7 +7,7 @@
  *   1. the greedy instrument never initiates a capture. If it did, its scoring
  *      rate would be contaminated by combat luck, which is the one variable
  *      notebook §6.6 says has already caused two conclusions to be reversed.
- *   2. it never moves its 軍旗. A flag that wanders loses games (§7①) and the
+ *   2. it never moves its 軍旗. A flag that wanders loses games (§7.5①) and the
  *      loss would be read as a weakness of the scoring strategy.
  *   3. a seed replays exactly. A surprising game that cannot be reopened is an
  *      anecdote, and anecdotes are what this package exists to replace.
@@ -160,7 +160,7 @@ describe('greedy never moves its 軍旗', () => {
         // promotes anywhere it could change it.
         const home = flagId.slice(2)
         const square = start?.square
-        // Either still home, or captured (§7① ends the game) — never elsewhere.
+        // Either still home, or captured (§7.5① ends the game) — never elsewhere.
         if (square !== null && square !== undefined) {
           const name = 'abcdefgh'[square & 7]! + String((square >> 3) + 1)
           expect(name, `${outcome.id} ${color} flag`).toBe(home)

@@ -28,6 +28,40 @@ import { useStore } from '../store.js'
  * §10). A piece with `rank === null` renders no 兵種 text at all.
  */
 
+/**
+ * The squares of the move the board is marking, with their ROLES named.
+ *
+ * This is the richer of the two forms `lastMove` accepts. The array form marks
+ * squares and says nothing about them, which is all a live board needs — a
+ * faint「上一手」trail. The replay is answering a different question,「這一手是
+ * 哪一手」, and for that the roles matter: which square the mover left, which it
+ * was heading for, and — the one case where those two do not cover the fight —
+ * where contact actually happened.
+ *
+ * The board draws the roles and interprets nothing. It does not know a castle
+ * from a capture and never derives these squares itself; the caller reads them
+ * off the public log with the engine's own geometry.
+ */
+export interface MoveMarks {
+  /** every square the move touched. A castle names all four (§3②). */
+  squares: readonly Square[]
+  /** where the mover started */
+  from: Square
+  /**
+   * Where it was heading. Note §4.1: an attacker that loses never arrives, and
+   * the mark still belongs here — this marks the MOVE that was played, not the
+   * outcome, which the log and the board itself already show.
+   */
+  to: Square
+  /**
+   * §4.2 en passant — the whole game's one case where the contact square is
+   * neither `from` nor `to`. Null or absent everywhere else, including an
+   * ordinary capture, where contact happens on `to` and marking it twice would
+   * say nothing.
+   */
+  contact?: Square | null
+}
+
 export interface BoardProps {
   pieces: readonly ViewerPiece[]
   /** which colour sits at the bottom */
@@ -46,8 +80,19 @@ export interface BoardProps {
   targets?: readonly Square[]
   /** squares with at least one legal move originating there */
   origins?: readonly Square[]
-  /** from/to of the previous ply, drawn faintly */
-  lastMove?: readonly Square[]
+  /**
+   * The move the board is marking. ONE prop, two forms of the same thing:
+   *
+   *   · `Square[]` — from/to of the previous ply, drawn faintly. Unchanged.
+   *   · `MoveMarks` — the same squares with their roles named, drawn
+   *     emphatically. Supplying it IS the request for emphasis: naming the
+   *     roles is something only a viewer examining one specific ply has cause
+   *     to do, and that viewer needs to see it from across the room.
+   *
+   * Deliberately not a second `replayMove` prop beside this one. Two props
+   * marking the same squares would eventually be passed together and disagree.
+   */
+  lastMove?: readonly Square[] | MoveMarks | null
   /** setup only: draft ranks that have not been submitted yet */
   rankOverride?: Readonly<Record<PieceId, Rank>>
   /** setup only: pieces still awaiting an assignment */
@@ -153,6 +198,43 @@ function pencilFullText(marks: readonly Rank[]): string {
   return `〔${marks.map((r) => RANK_LABEL[r]).join(PENCIL_SEPARATOR)}〕`
 }
 
+/** `lastMove` after both of its forms have been flattened into one. */
+interface ResolvedMarks {
+  squares: ReadonlySet<Square>
+  /** null in the array form, which names no roles */
+  from: Square | null
+  to: Square | null
+  contact: Square | null
+}
+
+const NO_MARKS: ResolvedMarks = {
+  squares: new Set<Square>(),
+  from: null,
+  to: null,
+  contact: null,
+}
+
+function resolveMarks(value: BoardProps['lastMove']): ResolvedMarks {
+  if (value === undefined || value === null) return NO_MARKS
+  if ('squares' in value) {
+    return {
+      squares: new Set(value.squares),
+      from: value.from,
+      to: value.to,
+      contact: value.contact ?? null,
+    }
+  }
+  return { squares: new Set(value), from: null, to: null, contact: null }
+}
+
+/** What this square is to the move being marked, for the label. */
+function markRole(sq: Square, marks: ResolvedMarks): string | null {
+  if (sq === marks.contact) return '本手接觸格'
+  if (sq === marks.from) return '本手起點'
+  if (sq === marks.to) return '本手終點'
+  return null
+}
+
 const FILE_LETTERS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
 /** Touch equivalent of a right-click. */
@@ -171,7 +253,7 @@ export function Board(props: BoardProps) {
     selected = null,
     targets = [],
     origins = [],
-    lastMove = [],
+    lastMove,
     rankOverride,
     pendingIds,
     pencilMarks,
@@ -242,7 +324,7 @@ export function Board(props: BoardProps) {
 
   const targetSet = new Set(targets)
   const originSet = new Set(origins)
-  const lastSet = new Set(lastMove)
+  const moveMarks = resolveMarks(lastMove)
   // `sq-center` / `center-dot` are the shared stylesheet's names for the
   // scoring highlight and stay as they are; only the membership is per-game.
   const centerSet = new Set(scoreSquares)
@@ -269,7 +351,12 @@ export function Board(props: BoardProps) {
               const pencilable = canPencil && (pencilTargets?.has(sq) ?? false)
               const classes = ['sq', isDarkSquare(sq) ? 'sq-dark' : 'sq-light']
               if (centerSet.has(sq)) classes.push('sq-center')
-              if (lastSet.has(sq)) classes.push('sq-last')
+              if (moveMarks.squares.has(sq)) classes.push('sq-last')
+              // roles on top of the trail — see `MoveMarks`. Only the structured
+              // form sets these, so a live board is untouched by them.
+              if (sq === moveMarks.from) classes.push('sq-move-from')
+              if (sq === moveMarks.to) classes.push('sq-move-to')
+              if (sq === moveMarks.contact) classes.push('sq-move-contact')
               if (sq === selected) classes.push('sq-selected')
               if (targetSet.has(sq)) classes.push(piece ? 'sq-capture' : 'sq-target')
               if (onSquareClick && (targetSet.has(sq) || originSet.has(sq))) {
@@ -291,7 +378,9 @@ export function Board(props: BoardProps) {
                 onSquareDragStart !== undefined &&
                 (dragSources?.has(sq) ?? false)
 
-              const label = describe(sq, piece, fact, marks, pendingIds)
+              const role = markRole(sq, moveMarks)
+              const described = describe(sq, piece, fact, marks, pendingIds)
+              const label = role === null ? described : `${described}（${role}）`
 
               return (
                 <button
@@ -580,6 +669,37 @@ function describe(
  * everything the on-board notepad needs lives here under an `xy-` prefix.
  */
 const STYLE = `
+/* ---- the ply being examined (replay) -------------------------------------
+   The shared stylesheet's faint .sq-last fill still marks every square the move
+   touched; these name the ROLES on top of it, which is what turns「上一手」into
+  「你正在看的這一手」. Drawn with ::before so nothing here fights .sq-center's
+   outline, .sq-target's ::after dot, or the box-shadow-based selection marks —
+   a square can legitimately be several of those at once. ::before precedes the
+   piece in DOM order, so the glyph still paints on top of the ring. */
+.sq-move-from::before,
+.sq-move-to::before,
+.sq-move-contact::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* the mover left here — dashed, because nothing is standing on it any more */
+.sq-move-from::before { border: 2px dashed rgba(255, 232, 140, 0.85); }
+/* where it was heading (§4.1 — it may not have arrived; the log says which) */
+.sq-move-to::before { border: 3px solid #ffe88c; }
+/* §4.2 en passant, the one move whose contact square is neither from nor to.
+   Red, the colour this board already uses for a capture, because that is what
+   happened on it. */
+.sq-move-contact::before { border: 3px solid var(--danger); }
+/* readable before the ring registers. Overrides .sq-last's fill by document
+   order — this element is injected after the stylesheet, same specificity. */
+.sq-move-from,
+.sq-move-to,
+.sq-move-contact {
+  box-shadow: inset 0 0 0 100px rgba(255, 232, 140, 0.2);
+}
+
 .sq-pencilable {
   -webkit-touch-callout: none;
   touch-action: manipulation;

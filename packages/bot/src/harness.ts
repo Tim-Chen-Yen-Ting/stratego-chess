@@ -301,7 +301,7 @@ export function runMatch(
   const policies: Record<Color, Policy> = { white, black }
 
   // The clock is off unless a caller insists: nothing here burns wall time, so
-  // §7④ 超時 is unreachable and 增秒 would tick on every ply for no reason.
+  // §7.5④ 超時 is unreachable and 增秒 would tick on every ply for no reason.
   let state = createGame(`bot-${matchSeed}`, { clockEnabled: false, ...config })
 
   // --- ① 佈署 (§9: 同時且互不可見) -------------------------------------------

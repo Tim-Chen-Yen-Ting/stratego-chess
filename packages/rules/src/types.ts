@@ -105,23 +105,40 @@ export interface GameEvent {
     survivorSquare: Square | null
   }
   promoted?: Carrier
+  /**
+   * Running total after this ply, carrying BOTH of §7.1's score sources — the
+   * ① 吃子 payment (§7.3) and the ② 佔領計分格 settlement (§7.2).
+   *
+   * There is deliberately no second field splitting the two. The capture half is
+   * already a pure function of `combat.outcome`, `color` and the config (附錄
+   * A(d): the payment reads only 兵種 the same event forced 翻明), so a viewer
+   * can recover it without being told — and every field that could carry it
+   * separately would be one more place for a rank to leak.
+   */
   scoreAfter: { white: number; black: number }
 }
 
 export interface GameConfig {
   /**
-   * X — 先達 X 分者獲勝 (§7④②). Default 40, for EVERY 結算格 preset.
+   * X — 先達 X 分者獲勝 (§7.5②). Default 40, which is 附錄 B's number for the
+   * DEFAULT 中央四格 board; X varies with the 結算格 setting and 附錄 B lists
+   * 側翼八格 as 待定.
    *
-   * A settlement credits only the side that just moved (§7), so one piece
+   * A settlement credits only the side that just moved (§7.1), so one piece
    * holding one scoring square earns 1 point per FULL TURN no matter how many
-   * squares the board has. Widening the board raises how much a turn can pay,
-   * not how often it pays, so the wide-8 preset takes the same 40 rather than
-   * double it.
+   * squares the board has — but a settlement pays for every square that side
+   * holds, about two on 中央四格 and about four on 側翼八格, and X counts POINTS
+   * rather than settlements. Widening the board therefore roughly doubles the
+   * income per settlement and roughly halves the game: at the same X = 40,
+   * n=300 `contest` vs `contest` runs 35.5 手 on 中央四格 and 22.0 手 on 側翼八格
+   * (notebook §9.3; §10.2 states the mechanism, measured on the current
+   * ruleset). A wide-8 game wanting the centre board's length needs its own X,
+   * near 80 — 待定 until a sweep fixes it.
    */
   scoreTarget: number
   noProgressTurns: number    // N, default 30
   /**
-   * 貼目 (§7③), credited to black at ply 0. Default 0.5.
+   * 貼目 (§7.4), credited to black at ply 0. Default 0.5.
    *
    * Its one job is making an exact tie impossible, so every score-decided ending
    * has a winner. It is NOT compensation for a first-move scoring edge: under
@@ -131,7 +148,35 @@ export interface GameConfig {
    */
   komi: number
   /**
-   * ② 結算階段 scoring squares (§7). Default `SCORING_CENTRE_4` — d4/e4/d5/e5,
+   * k — 吃子得分係數 (§7.3), paid in ① 行動階段. Default 0.
+   *
+   * A 決定性勝負 pays `k × the WINNER's 階級 number` to the WINNER's side. The
+   * 階級 numbers run 司令 1 … 軍旗 10, so a LARGER number is a WEAKER piece and a
+   * weak winner is therefore paid MORE — that direction is the rule, stated in
+   * §7.3 as 「階級數字越大代表越弱，故弱者獲勝得分越高」, not an inversion to
+   * correct.
+   *
+   * It reads the winner's 階級 and nothing else, which §4.3 forced 翻明 in the
+   * same event: 附錄 A(d) permits exactly that and forbids reading the loser's.
+   *
+   * 附錄 B lists k as 待定 — no sweep has fixed it yet — so the shipped default
+   * is 0, i.e. 吃子 pays nothing and 佔領計分格 is the only live source.
+   */
+  captureScoreK: number
+  /**
+   * 有煙無傷獎勵 (§7.3, §5.4), paid in ① to 存活方. Default 0.
+   *
+   * A FLAT amount, never a function of any 兵種. The survivor of a fizzle is 工兵
+   * or 軍旗 and the event says only which COLOUR lived; a bonus that differed
+   * between the two would name the piece and undo 附錄 A(a). 同歸於盡 has no knob
+   * at all — 附錄 B fixes it at 0 — which is what keeps 爆裂物 uncountable from
+   * the score column.
+   *
+   * 附錄 B lists it as 待定, so the shipped default is 0.
+   */
+  fizzleBonus: number
+  /**
+   * ② 結算階段 scoring squares (§7.2). Default `SCORING_CENTRE_4` — d4/e4/d5/e5,
    * the gamebook's 中央四格. `SCORING_WIDE_8` adds the a/h flanks.
    *
    * 附錄 B: the board shape is a tunable, so settlement reads THIS list and
@@ -181,7 +226,7 @@ export interface GameState {
   score: { white: number; black: number }
   log: GameEvent[]
   clockMs: { white: number; black: number }
-  /** consecutive FULL TURNS with no capture and no point scored (§7③) */
+  /** consecutive FULL TURNS with no capture and no point scored (§7.5③) */
   noProgressTurns: number
   status: GameStatus
   config: GameConfig

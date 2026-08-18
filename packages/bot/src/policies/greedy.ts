@@ -43,7 +43,7 @@
  *
  * The one 兵種 this policy reads is its OWN 軍旗 — which it is entitled to
  * (§10.1 玩家: 己方全部) and which it needs, because moving that piece loses the
- * game on the spot (§5.3, §7①). It reads no enemy rank, revealed or otherwise,
+ * game on the spot (§5.3, §7.5①). It reads no enemy rank, revealed or otherwise,
  * and would behave identically if every enemy rank in the payload were null.
  */
 

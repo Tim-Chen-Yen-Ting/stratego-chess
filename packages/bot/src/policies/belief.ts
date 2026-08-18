@@ -67,7 +67,7 @@
  * (the band was as wide as the entire positional signal, so the walk was a coin
  * flip and `pass` was in the pool). Two numbers, no new layer.
  *
- * It still takes 奪旗 wins (§7④①) off the public record — 21 of 600 中央四格 games
+ * It still takes 奪旗 wins (§7.5①) off the public record — 21 of 600 中央四格 games
  * and 28 of 600 側翼八格 games. Note that this is DOWN as a share of its wins,
  * from about one in five to about one in twenty, and that is the right direction:
  * a 奪旗 is a lottery ticket the loser buys. The old policy cashed them often
@@ -92,7 +92,7 @@
  *   旗負, undefended         35         64
  *
  * So: it removes four fifths to nine tenths of the games this policy loses to
- * §7④①, and pays about nothing for it. 「About nothing」 is the honest phrasing —
+ * §7.5①, and pays about nothing for it. 「About nothing」 is the honest phrasing —
  * +1.2 and +0.8 are both inside one standard error, so what the measurement
  * supports is 「not worse」, not 「better」. Against `contest`, which never hunts
  * anything and therefore cannot reward the defence at all, it is 68.1% vs 68.8%
@@ -232,7 +232,7 @@ const RANK_WEIGHT: Readonly<Record<Rank, number>> = Object.freeze({
   company: 0.3,
   platoon: 0.24,
   engineer: 0.28,
-  flag: 0, // never priced by weight — a 軍旗 is the game itself (§7④①)
+  flag: 0, // never priced by weight — a 軍旗 is the game itself (§7.5①)
   bomb: 0, // priced by BOMB_WEIGHT, which is doctrine rather than 階級
 })
 
@@ -620,7 +620,7 @@ export const MIXING_BAND_SQUARES = 0.02
  *
  * `RankBelief` with the fields optional, so the valuation functions below can
  * also be handed a hand-written `{ flag: 1 }` — which is how the tests pin the
- * exceptions of §5.4 and §7④① without having to manufacture a position that
+ * exceptions of §5.4 and §7.5① without having to manufacture a position that
  * produces them. Re-exported from `../lookahead.js` rather than declared twice:
  * the same distribution crosses that boundary in both directions.
  */
@@ -683,11 +683,11 @@ export interface Economy {
  * square we stand on (§7.1, mover-only settlement), so the value of holding one
  * more square is exactly the number of our own plies the game has left.
  *
- * The game ends when EITHER side crosses X (§7④②), so the horizon is the
+ * The game ends when EITHER side crosses X (§7.5②), so the horizon is the
  * smaller of the two projections — a square is worth little when the opponent
  * is two settlements from winning, however far WE still have to go. When
  * neither side scores at all, nothing ends the game except the 停滯 fuse, so N
- * (§7④③) is the horizon; that is a config value, not a constant.
+ * (§7.5③) is the horizon; that is a config value, not a constant.
  *
  * Deliberately computed from the CURRENT rate rather than the rate the move
  * being scored would produce. A per-move horizon would price each candidate's
@@ -771,7 +771,7 @@ export type ContactKind = 'win' | 'flag-win' | 'lose' | 'mutual'
  * distinctions a VALUATION needs and a resolution does not:
  *
  *   'flag-win'  the defender is the enemy 軍旗 — taking it ends the game on the
- *               spot (§7④①), so it is not a captured piece, it is a win.
+ *               spot (§7.5①), so it is not a captured piece, it is a win.
  *   'lose'      we come off the board and never enter the target square (§4.1
  *               「攻方從未進入目標格」). For a 爆裂物 meeting 工兵/軍旗 this is
  *               有煙無傷 (§5.4): the bomb is spent and the defender is untouched.
@@ -791,7 +791,7 @@ function resolutionOf(attacker: Rank, defender: Rank): { kind: ContactKind; reve
   return { kind: 'mutual', reveals: false }
 }
 
-/** What happens when our `attacker` meets `defender`. §4.1, §5.1, §5.4, §7④①. */
+/** What happens when our `attacker` meets `defender`. §4.1, §5.1, §5.4, §7.5①. */
 export function classifyContact(attacker: Rank, defender: Rank): ContactKind {
   return resolutionOf(attacker, defender).kind
 }
@@ -811,7 +811,7 @@ export function revealsOnWin(attacker: Rank, defender: Rank): boolean {
  *
  * belief.ts already answers three of them (`contactOdds(belief, mine)`); this
  * splits the fourth out of the win bucket, because 軍旗 is the one capture that
- * is not a capture — it ends the game (§7④①) and must not be priced as a piece.
+ * is not a capture — it ends the game (§7.5①) and must not be priced as a piece.
  */
 export function branchOdds(
   attacker: Rank,
@@ -853,7 +853,7 @@ export interface ContactTerms {
   attackerSquares: number
   /** rank value × P(the opponent still holds a deliverable 爆裂物) */
   revealCost: number
-  /** what ending the game as the winner is worth right now (§7④①) */
+  /** what ending the game as the winner is worth right now (§7.5①) */
   winValue: number
   /** posture, 攻略 §4 / §4-2 */
   tradeAppetite: number
@@ -873,7 +873,7 @@ export interface ContactTerms {
  *
  * Three things the plain three-branch form hides, all of them from §5 and §7:
  *
- *  · **軍旗 is not a captured piece.** Taking it ends the game (§7④①), so its
+ *  · **軍旗 is not a captured piece.** Taking it ends the game (§7.5①), so its
  *    share of P(win) is priced at `winValue` — a win outright — and pays no
  *    reveal cost, because there is no game left in which to be hunted.
  *  · **The reveal is priced only where a reveal happens.** 工兵/軍旗 beating a
@@ -1145,7 +1145,7 @@ function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolic
   const mine = ownPieces(view, color)
   const occ = occupancy(view)
 
-  // 攻略 §7④①: our own 軍旗 leaving the board loses instantly, so ending the game
+  // 攻略 §7.5①: our own 軍旗 leaving the board loses instantly, so ending the game
   // as the winner is worth every point we would otherwise still have to earn,
   // and never less than the best square on the board. Derived from X and the
   // score — near the end it is small, because by then we were going to win anyway.
@@ -1394,7 +1394,7 @@ function flagDefence(ctx: Ctx, shape: MoveShape, risk: ReplyRisk): number {
 }
 
 /**
- * How much of a defensive contact actually happens. §4.1, §7④①.
+ * How much of a defensive contact actually happens. §4.1, §7.5①.
  *
  * A defence that has to win a fight first only defends in the worlds where it
  * wins. Two shapes, and they take different odds: hitting the hunter itself is
@@ -1403,7 +1403,7 @@ function flagDefence(ctx: Ctx, shape: MoveShape, risk: ReplyRisk): number {
  * on the square — 「攻方從未進入目標格」 otherwise.
  *
  * And a third, which is not a defence at all until you look at it: taking THEIR
- * 軍旗 ends the game in our favour on the spot (§7④①), so in that slice of the
+ * 軍旗 ends the game in our favour on the spot (§7.5①), so in that slice of the
  * belief every threat to ours is answered as completely as by any block. Without
  * this term the arithmetic inverts in the one position where it is most obviously
  * wrong — a piece the pool has cornered as their 軍旗, while ours is under fire —
@@ -1580,7 +1580,7 @@ function evaluate(ctx: Ctx, move: Move): number | null {
   const flagMove = movesFlag(ctx, shape)
   // 攻略 §9, absolute and untested-by-EV: 「絕對不要拿軍旗去撞任何東西」. Moving the
   // 軍旗 onto an occupied square is not a bad move to be priced, it is a
-  // resignation (§5.3 + §7④①) — and the one case where it draws instead of
+  // resignation (§5.3 + §7.5①) — and the one case where it draws instead of
   // losing (軍旗 vs 軍旗) is a lottery ticket, not a plan. It stays absolute when
   // the 軍旗 is being hunted: a flag that runs into a piece has lost the game it
   // was running from, and it stays absolute when the square pays: 攻略 §9 outranks
@@ -1598,7 +1598,7 @@ function evaluate(ctx: Ctx, move: Move): number | null {
   // 攻略 §3 — 「佔到格子之後，除非有更好的理由，不要動它」. A move that steps off a
   // 結算格 without strictly improving the holding is refused. There are exactly
   // two reasons better than income, and they are the two ways the game ends:
-  // the target might be the 軍旗 (§7④①), or ours might be about to leave the
+  // the target might be the 軍旗 (§7.5①), or ours might be about to leave the
   // board (§5.3). Game 10 needed the second one — 白 held e4 with the king and
   // `e4d4` both kept the income and blocked the file, and the park filter as it
   // stood refused it before any of this was priced.

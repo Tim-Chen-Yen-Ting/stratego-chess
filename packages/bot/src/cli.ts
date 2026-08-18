@@ -62,7 +62,7 @@ export interface Options {
 
 const KNOWN_FLAGS = [
   'white', 'black', 'games', 'seed', 'squares', 'dist', 'x', 'n', 'komi',
-  'max-plies', 'list', 'help',
+  'k', 'fizzle', 'max-plies', 'list', 'help',
 ]
 
 /** A bad command line. Exported so a test can tell it from a crash. */
@@ -81,15 +81,27 @@ export const USAGE = `行軍西洋棋 bot harness — self-play measurement over
   --x <n>              X, 分數線                      (default ${DEFAULT_CONFIG.scoreTarget})
   --n <n>              N, 停滯回合數                   (default ${DEFAULT_CONFIG.noProgressTurns})
   --komi <n>           貼目, credited to black        (default ${DEFAULT_CONFIG.komi})
+  --k <n>              k, 吃子得分係數 (§7.3)         (default ${DEFAULT_CONFIG.captureScoreK})
+  --fizzle <n>         有煙無傷獎勵, 定額 (§7.3)      (default ${DEFAULT_CONFIG.fizzleBonus})
   --max-plies <n>      ply cap per match             (default 400)
   --list               list the policies this build knows
   --help               this text
 
-Every flag also accepts --flag=value. Unknown flags are an error, not a default.`
+Every flag also accepts --flag=value. Unknown flags are an error, not a default.
+
+--k and --fizzle are the two 附錄 B 待定 knobs of §7.3 吃子得分. Both ship at 0, so a
+run that names neither is the same economy every existing notebook measurement was
+taken under; any non-zero value is a DIFFERENT economy and its runs are a separate
+series, never pooled with the k=0 ones. The report prints both, read back off the
+engine's own config, so a sweep's output says which numbers produced it.`
 
 function integer(flag: string, raw: string, min: number): number {
   const value = Number(raw)
-  if (!Number.isInteger(value) || value < min) {
+  // The blank guard matters as much as the integer one, and for the same reason
+  // `decimal` has it: `Number('')` is 0, so without this `--seed ''` and
+  // `--fizzle ''` parse to a silent 0 whenever `min` is 0 — a run labelled with a
+  // value nobody asked for. Callers with min >= 1 were accidentally safe.
+  if (raw.trim() === '' || !Number.isInteger(value) || value < min) {
     throw new UsageError(`--${flag}: expected an integer >= ${min}, got "${raw}"`)
   }
   return value
@@ -162,6 +174,12 @@ export function parseArgs(argv: readonly string[]): Options {
       case 'x': options.config.scoreTarget = decimal('x', value); break
       case 'n': options.config.noProgressTurns = integer('n', value, 1); break
       case 'komi': options.config.komi = decimal('komi', value); break
+      // §7.3's two knobs. INTEGER, unlike 貼目, and 附錄 B requires it: 貼目 must be
+      // the only non-integer source of points, or §7.4's 「分數永不相等」 fails and a
+      // 分數 finish can tie. A sweep steps in whole points; if a 吃子 should be worth
+      // less than a 佔格, scale X rather than fractioning k.
+      case 'k': options.config.captureScoreK = integer('k', value, 0); break
+      case 'fizzle': options.config.fizzleBonus = integer('fizzle', value, 0); break
     }
   }
 

@@ -40,6 +40,7 @@ import { viewerColor } from '../redact.js'
 import type {
   Carrier,
   Color,
+  GameConfig,
   GameEvent,
   Rank,
   RankDistribution,
@@ -515,6 +516,86 @@ function scoringOccupancy(
   return out
 }
 
+/**
+ * 「司令 1 … 軍旗 10」, read off `RANK_ORDER` rather than retyped.
+ *
+ * §7.3 pays by the winner's 階級 NUMBER, and the direction of that number is the
+ * one thing a reader reliably gets backwards — larger is WEAKER. Both places that
+ * say so read it from the table, so the prose cannot drift away from the 階級
+ * listing this same module prints in the primer.
+ */
+const RANK_SPAN = ((): string => {
+  const ranks = (Object.keys(RANK_ORDER) as Exclude<Rank, 'bomb'>[])
+    .sort((a, b) => RANK_ORDER[a] - RANK_ORDER[b])
+  const strongest = ranks[0]
+  const weakest = ranks[ranks.length - 1]
+  return `${RANK_NAMES_ZH[strongest]} ${RANK_ORDER[strongest]}`
+    + ` … ${RANK_NAMES_ZH[weakest]} ${RANK_ORDER[weakest]}`
+})()
+
+/** True when a contact can move the score at all in this game (§7.3, 附錄 B). */
+function captureScoringLive(config: GameConfig): boolean {
+  return config.captureScoreK !== 0 || config.fizzleBonus !== 0
+}
+
+/**
+ * ① 吃子得分 (§7.3) for the POSITION view — the URL a model re-fetches every ply.
+ *
+ * The settings table that carries k and the 有煙無傷 amount lives on
+ * `/llm/:token/rules`, which a model fetches once at most. So the view a model
+ * actually loops on presented ② 佔領計分格 as the whole of §7.1: a model that
+ * joined mid-game, or whose context had rolled past the one-time primer, could
+ * not see that a contact pays and so under-valued every trade. Worse, the squares
+ * block states that settlement credits ONLY the mover — so a 決定性勝負 landing in
+ * the idle side's column read as a server fault, which a model may contest. Both
+ * halves are fixed here rather than by asking for another fetch.
+ *
+ * Printed ONLY when a capture can actually pay. At the shipped k = 0 / bonus = 0
+ * this source is identically zero for the whole game, the squares block IS the
+ * whole scoring rule, and the position view stays byte-for-byte what it has
+ * always been — no archived LLM transcript is invalidated by a paragraph about a
+ * rule that could not have fired in it. Its presence is itself the signal, the
+ * same way the ①/② columns are in the export (`record.ts`).
+ *
+ * Every word comes from `config` (附錄 B) and §7.3 itself. No 兵種 is read: the
+ * 決定性勝負 row names the WINNER's 階級, which §4.3 forces 翻明 in the very
+ * announcement that pays, and it names it as a formula rather than as a value.
+ */
+function captureScoringLines(config: GameConfig): string[] {
+  const decisive = config.captureScoreK === 0
+    ? [
+        '  · 決定性勝負 (a 階級 comparison with a winner) — k = 0 here, so winning a',
+        '    comparison pays nothing; only the 有煙無傷 below moves the score.',
+      ]
+    : [
+        "  · 決定性勝負 (a 階級 comparison with a winner) — the WINNER's side is paid",
+        `    k × the winner's 階級 number, k = ${config.captureScoreK} here. 階級 runs ${RANK_SPAN},`,
+        '    so a LARGER number is a WEAKER piece and a weak winner is paid MORE.',
+      ]
+  const fizzle = config.fizzleBonus === 0
+    ? [
+        '  · 有煙無傷 (§5.4 — a 爆裂物 hit a 工兵 or 軍旗) — 0 here, so surviving one',
+        '    pays nothing; only the 決定性勝負 above moves the score.',
+      ]
+    : [
+        `  · 有煙無傷 (§5.4 — a 爆裂物 hit a 工兵 or 軍旗) — a flat +${config.fizzleBonus} to the side`,
+        '    that survived, the same amount whichever of the two it was.',
+      ]
+
+  return [
+    '吃子得分 (§7.3) — §7.1 gives the score TWO sources and this is the other one:',
+    'capture itself pays, on top of anything the squares pay. It is ON in this game.',
+    ...decisive,
+    ...fizzle,
+    '  · 同歸於盡 — ZERO to both sides. Always, whatever the numbers above say.',
+    '① is paid in the ACTION phase, the instant the contact resolves, and it does NOT',
+    'follow the mover: whatever the rows above pay goes to the WINNER or to the SURVIVOR,',
+    'and that can be the side which did not move. A point appearing in the idle column is',
+    'THIS rule working, not a server fault. Being ①, it also survives 奪旗 (§7.6) — the ply',
+    'that takes a 軍旗 banks no ② 佔領分, but keeps what its capture just paid.',
+  ]
+}
+
 export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   const self = viewerColor(vs.viewer)
   const base = opts.baseUrl.replace(/\/+$/, '')
@@ -678,6 +759,12 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
   // The board shape is tunable (附錄 B), and a model told the wrong squares
   // would play a different game than the one it is sitting in.
   const scoring = vs.config.scoringSquares
+  // Whether ① 吃子得分 can pay at all in this game. It gates two things: the
+  // scoping of 「ONLY the player who just moved」 below — a statement about ② that
+  // was being read as a statement about the score column as a whole — and the
+  // §7.3 paragraph after this block. At the shipped 0/0 neither fires, and this
+  // whole region renders exactly as it always has.
+  const captureLive = captureScoringLive(vs.config)
   if (scoring.length === 0) {
     lines.push('No scoring squares are configured for this game — no piece scores by standing anywhere.')
     lines.push('')
@@ -691,7 +778,23 @@ export function renderForLLM(vs: ViewerState, opts: RenderOptions): string {
     lines.push(
       'you on your own plies, not on the opponent\'s, so each side banks once per turn.',
     )
+    if (captureLive) {
+      lines.push(
+        "「ONLY the player who just moved」 scopes to THIS source alone: it is ② of §7.1's",
+      )
+      lines.push(
+        'two, and ① 吃子得分 below is settled per event and can pay the side that did not move.',
+      )
+    }
     lines.push(...scoringOccupancy(vs, scoring, self))
+    lines.push('')
+  }
+
+  // Deliberately OUTSIDE the branch above. With no 結算格 configured ① is the only
+  // way to score at all, which is exactly when a model most needs to be told that
+  // it exists.
+  if (captureLive) {
+    lines.push(...captureScoringLines(vs.config))
     lines.push('')
   }
 
@@ -905,16 +1008,39 @@ If your 軍旗 leaves the board by any route, you LOSE immediately — captured,
 traded, or thrown at another piece. Promotion and castling do not count as
 leaving the board. Both flags leaving on the same ply is the only draw.
 
-## Scoring
-Settlement runs after EVERY ply, but it credits ONLY the player who just moved:
-+1 for each of that player's own pieces standing on a SCORING SQUARE. Your
-squares pay you on your plies, the opponent's on theirs, so each side banks
+## Scoring — TWO sources (§7.1)
+Points come from ② 佔領計分格 and from ① 吃子. Neither replaces the other, and one
+ply can collect both.
+
+② 佔領計分格 — settlement runs after EVERY ply, but it credits ONLY the player who
+just moved: +1 for each of that player's own pieces standing on a SCORING SQUARE.
+Your squares pay you on your plies, the opponent's on theirs, so each side banks
 exactly once per full turn — a piece parked on a scoring square earns you one
 point a turn, not two. A pass settles as well: the passer is the mover.
 Which squares those are is a setting of the game you are in (usually the four
 centre squares d4 e4 d5 e5, but a game may be set up wider), so read them off
 the "Scoring squares" line under the board in the state view rather than
-assuming. Black starts at komi, which exists only to make ties impossible.
+assuming.
+
+① 吃子 (§7.3) — capture itself pays, and it is settled in the ACTION phase the
+moment the contact resolves, not at settlement. It therefore does NOT follow the
+mover:
+- a 階級 comparison with a winner pays the WINNER's side k × the winner's 階級
+  number. 階級 runs ${RANK_SPAN}, so a LARGER number is a WEAKER piece and a weak
+  winner is paid MORE. A defender that holds its square is paid on the ATTACKER's
+  ply;
+- 有煙無傷 — a 爆裂物 that hit a 工兵 or 軍旗 — pays a FLAT amount to the side that
+  survived, the same number whichever of the two it was;
+- 同歸於盡 pays ZERO to both sides, always.
+「ONLY the player who just moved」 above is ②'s rule alone. A point landing in the
+column of the side that did not move is ① doing its job, not a fault. Being ①, it
+also survives 奪旗: the ply that takes a 軍旗 banks no ② but keeps what its capture
+just paid.
+Both amounts are settings of the game you are in and MAY BE ZERO, in which case
+capture pays nothing at all — read them off "This game's settings" on this same
+page rather than assuming either way.
+
+Black starts at komi, which exists only to make ties impossible.
 First to the score target wins. If nothing is captured and nobody scores for
 the stagnation limit in full turns, the higher score wins.
 

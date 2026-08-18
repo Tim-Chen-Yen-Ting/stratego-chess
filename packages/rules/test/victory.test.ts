@@ -17,7 +17,7 @@
  * asked, both sides have played the same number of moves. That is also what
  * turns 「同時越過 X」 from a defensive clause into the ordinary case.
  *
- * 奪旗 (§7.4①) is untouched. It is decided in the ACTION sub-step and ends the
+ * 奪旗 (§7.5①) is untouched. It is decided in the ACTION sub-step and ends the
  * game where it stands, mid-turn or not.
  */
 
@@ -39,7 +39,7 @@ function pliesPlayed(s: GameState, color: Color): number {
   return s.log.filter((e) => e.color === color).length
 }
 
-describe('§7② 計分 — X is tested at the close of a turn, not mid-turn', () => {
+describe('§7.5② 計分 — X is tested at the close of a turn, not mid-turn', () => {
   const before = position(
     [
       { at: 'd4', color: 'white', carrier: 'knight', rank: 'general', id: 'WN' },
@@ -120,7 +120,7 @@ describe('§7② 計分 — X is tested at the close of a turn, not mid-turn', (
   })
 })
 
-describe('§7② 同一次回合內雙方同時越過 X — 分數高者獲勝', () => {
+describe('§7.5② 同一次回合內雙方同時越過 X — 分數高者獲勝', () => {
   /** All four 中央格 held, two apiece: white banks its pair on white's ply and
    *  black banks its pair on the reply, so a turn can carry BOTH sides over X. */
   function contested(score: { white: number; black: number }): GameState {
@@ -209,7 +209,7 @@ describe('§7② 同一次回合內雙方同時越過 X — 分數高者獲勝',
   })
 })
 
-describe('§7.4① 奪旗 — still ends the game the instant it fires', () => {
+describe('§7.5① 奪旗 — still ends the game the instant it fires', () => {
   it('ends on white\'s ply, mid-turn, and black never replies', () => {
     const before = position(
       [
@@ -256,7 +256,7 @@ describe('§7.4① 奪旗 — still ends the game the instant it fires', () => {
   })
 })
 
-describe('§7② 貼目 — the score can never tie in a real game', () => {
+describe('§7.5② 貼目 — the score can never tie in a real game', () => {
   /** Deterministic pseudo-random walk from the §9 opening. */
   it('keeps white integral and black half-integral for a whole game', () => {
     let s = createGame('parity', { scoreTarget: 10_000, noProgressTurns: 10_000 })
@@ -280,7 +280,7 @@ describe('§7② 貼目 — the score can never tie in a real game', () => {
   })
 })
 
-describe('§7③ 停滯 — the no-progress counter', () => {
+describe('§7.5③ 停滯 — the no-progress counter', () => {
   /** Kings only, 中央格 empty: nothing can score and nothing can be captured. */
   function kingsOnly(n: number): GameState {
     return position(
@@ -398,7 +398,7 @@ describe('§7③ 停滯 — the no-progress counter', () => {
   })
 
   it('advances through 強制 pass turns as well', () => {
-    // §7③ defines the counter purely as "no 吃子 and no 得分"; a 強制 pass has
+    // §7.5③ defines the counter purely as "no 吃子 and no 得分"; a 強制 pass has
     // neither, so it advances. (§3③'s 不計次 is about not penalising the skipped
     // player — it does not exempt the turn from the stagnation guard.)
     let s = position(
@@ -420,7 +420,7 @@ describe('§7③ 停滯 — the no-progress counter', () => {
   })
 })
 
-describe('§7④ 超時 and ⑤ 認輸', () => {
+describe('§7.5④ 超時 and ⑤ 認輸', () => {
   const live = position([
     { at: 'b1', color: 'white', carrier: 'king', rank: 'commander', id: 'WK' },
     { at: 'b8', color: 'black', carrier: 'king', rank: 'general', id: 'BK' },
@@ -437,7 +437,7 @@ describe('§7④ 超時 and ⑤ 認輸', () => {
     })
   })
 
-  it('resignation is available during setup (§7⑤ 隨時可認輸)', () => {
+  it('resignation is available during setup (§7.5⑤ 隨時可認輸)', () => {
     const s = createGame('g')
     expect(s.status.kind).toBe('setup')
     expect(resign(s, 'black').status).toEqual({
@@ -459,8 +459,8 @@ describe('§7④ 超時 and ⑤ 認輸', () => {
     expect(flagFall(over, 'black')).toBe(over)
   })
 
-  it('a crossing not yet read is not a win — §7④⑤ are untouched by it', () => {
-    // The state §7.4② deliberately does NOT model: white is over X, but the turn
+  it('a crossing not yet read is not a win — §7.5④⑤ are untouched by it', () => {
+    // The state §7.5② deliberately does NOT model: white is over X, but the turn
     // has not closed, so the target has not been read. There is no 'pending win'
     // to honour — X is either met when the question is asked or it is not — and
     // the two terminations that do not come from a move must not be able to see

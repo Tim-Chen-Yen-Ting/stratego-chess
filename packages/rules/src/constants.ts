@@ -170,11 +170,25 @@ export const SCORING_CENTRE_4: readonly Square[] = squaresNamed('d4', 'e4', 'd5'
  * piece into four squares and leaves the flanks dead, so the wide board is here
  * to be tried, not because it is better. Set it via `createGame`'s config.
  *
- * **Suggested X: 40 — the same as 中央四格, NOT double it.** Doubling was right
- * when both sides settled every ply; under mover-only settlement (§7) a piece
- * holding a square banks 1 point per full turn on any board, so eight squares
- * raise the CEILING of a turn's income, not its rate. Anything that offers this
- * preset should offer `DEFAULT_CONFIG.scoreTarget` with it, unscaled.
+ * **X does NOT carry over from 中央四格.** 附錄 B lists X as 中央四格 40, 側翼八格
+ * 待定 — the two presets are different match lengths at the same number, and this
+ * one has no fixed value yet. Mover-only settlement (§7.1) does make each side
+ * bank once per full turn on either board, but a settlement pays what that side
+ * HOLDS, and a side holds roughly two squares on the centre board against
+ * roughly four here. X counts POINTS, not settlements, so the income per
+ * settlement is what sets the length — and it roughly doubles.
+ *
+ * Measured, `contest` vs `contest`, n=300, at the SAME X=40 (notebook §9.3):
+ * 中央四格 averages **35.5 手**, 側翼八格 **22.0 手**. §10.2, taken after the
+ * 「回合完整」 fix and therefore on the current ruleset, states the mechanism —
+ * 中央四格 每次結算 2 分、要打 20 次結算; 側翼八格 局短.
+ *
+ * The length-matched figure for this preset is therefore somewhere near 80, and
+ * every eight-square game on record (notebook §6.2–§6.5) was played at X=80 —
+ * but those are v03 games, when BOTH sides settled every ply, so they are not a
+ * measurement of the current rate and 附錄 B still says 待定. Anything offering
+ * this preset should let X be chosen, not hand over `DEFAULT_CONFIG.scoreTarget`
+ * as though it were calibrated for eight squares.
  */
 export const SCORING_WIDE_8: readonly Square[] = Object.freeze([
   ...SCORING_CENTRE_4,
@@ -192,16 +206,38 @@ export const SCORING_WIDE_8: readonly Square[] = Object.freeze([
 export const CENTER_SQUARES: readonly Square[] = SCORING_CENTRE_4
 
 /**
- * X = 40 for every 結算格 preset, 貼目 = 0.5.
+ * X = 40 — 附錄 B's value for the DEFAULT 中央四格 board and for no other; 貼目 =
+ * 0.5; 吃子得分 off.
  *
- * A settlement credits only the mover (§7), so the scoring rate is one bank per
- * side per full turn whatever the board shape — 40 is the same match length on
- * 中央四格 and on 側翼八格, and neither preset scales it. 貼目 is here solely to
- * make an exact tie impossible; it compensates for no first-move advantage,
- * because mover-only settlement leaves none to compensate for.
+ * A settlement credits only the mover (§7.1), so each side banks once per full
+ * turn whatever the board shape — but it banks the squares it HOLDS, about two
+ * on 中央四格 and about four on 側翼八格, so a settlement there pays roughly
+ * double. X is a count of POINTS, so the same 40 is a much shorter game on the
+ * wide board: n=300 `contest` vs `contest` at X=40 averages 35.5 手 on 中央四格
+ * and 22.0 手 on 側翼八格 (notebook §9.3; §10.2 gives the mechanism, measured on
+ * the current ruleset). 附錄 B accordingly lists 側翼八格 as 待定, and a game
+ * created with `SCORING_WIDE_8` should carry its own X — near 80 to match the
+ * centre board's length — rather than inherit this one. This constant stays 40
+ * because 40 is the default board's number; moving it is a balance decision and
+ * would orphan every run calibrated against it.
+ *
+ * 貼目 is here solely to make an exact tie impossible; it compensates for no
+ * first-move advantage, because mover-only settlement leaves none to compensate
+ * for.
+ *
+ * §7.3's two knobs ship at ZERO. 附錄 B lists both 吃子得分係數 k and 有煙無傷
+ * 獎勵 as 待定: the numbers are supposed to come from a measured sweep, and that
+ * sweep has not been run. Shipping 0 means the engine's default behaviour is
+ * byte-identical to what every existing notebook measurement was taken against,
+ * so the komi sweeps, the complete-the-turn verification and the doctrine
+ * ablation all stay comparable — and `contest`, the yardstick they are
+ * calibrated against, keeps measuring the game it was calibrated on. Any
+ * non-zero k is a different economy and its runs are a separate, labelled series
+ * (CLAUDE.md §1: never pool across a ruleset boundary).
  */
 export const DEFAULT_CONFIG: GameConfig = {
   scoreTarget: 40, noProgressTurns: 30, komi: 0.5,
+  captureScoreK: 0, fizzleBonus: 0,
   scoringSquares: SCORING_CENTRE_4,
   distribution: DISTRIBUTION_STANDARD,
   clockInitialMs: 900_000, clockIncrementMs: 10_000,

@@ -362,23 +362,23 @@ export function scenarioCorpus(): CorpusEntry[] {
   out.push({ label: 'contact/fizzle(bomb attacks engineer)', state: contactGame('c-fz2', 'bomb', 'engineer') })
   out.push({ label: 'contact/fizzle(bomb attacks flag)', state: contactGame('c-fz2', 'bomb', 'flag') })
 
-  // §7① 奪旗 and the only draw in the game.
+  // §7.5① 奪旗 and the only draw in the game.
   out.push({ label: 'result/flag', state: contactGame('r-flag', 'commander', 'flag') })
   out.push({ label: 'result/flag-both', state: contactGame('r-flag-both', 'flag', 'flag') })
 
-  // §7② 計分 — a low target so two plies settle it.
+  // §7.5② 計分 — a low target so two plies settle it.
   out.push({
     label: 'result/score',
     state: playAll(startedGame('r-score', { config: { scoreTarget: 2 } }), [mv('e2', 'e4'), mv('d7', 'd5')]),
   })
 
-  // §7③ 停滯 — two quiet plies with N = 1.
+  // §7.5③ 停滯 — two quiet plies with N = 1.
   out.push({
     label: 'result/no-progress',
     state: playAll(startedGame('r-stall', { config: { noProgressTurns: 1 } }), [mv('b1', 'c3'), mv('b8', 'c6')]),
   })
 
-  // §7④/§7⑤
+  // §7.5④/§7.5⑤
   out.push({ label: 'result/timeout', state: flagFall(startedGame('r-time'), 'white') })
   out.push({ label: 'result/resign', state: resign(startedGame('r-resign'), 'black') })
 
@@ -596,7 +596,7 @@ export function forbiddenRankStrings(s: GameState, v: Viewer): Rank[] {
  * `onBoardOnly` keeps the permutation inside the surviving pieces. That matters
  * only when the alternative world is going to be fed back into `applyMove`:
  * moving 軍旗 onto an already-captured piece describes a game that should have
- * ended at §7① several plies ago, so the engine — correctly — reports it as
+ * ended at §7.5① several plies ago, so the engine — correctly — reports it as
  * over, and the comparison would be against an impossible history rather than
  * against a leak. `stateForViewer` is a pure projection and needs no such
  * restriction, so the redaction suites use the unrestricted form.
@@ -892,7 +892,7 @@ describe('遮蔽層 property — E. 附錄 A: no rank-dependent observable behav
       const quiet = legalMoves(state, state.toMove).find((m) => m.kind === 'move' && !isCapture(state, m))
       if (!quiet) continue
       // onBoardOnly: see permuteHiddenRanks. Relocating 軍旗 onto a captured
-      // piece would describe a game §7① should already have ended, and the
+      // piece would describe a game §7.5① should already have ended, and the
       // engine says so — that is the rule, not a leak.
       const { state: alt, changed } = permuteHiddenRanks(
         state, { kind: 'replay-player', color: state.toMove }, { onBoardOnly: true },

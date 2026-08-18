@@ -14,7 +14,7 @@
  *   1. the presets map to the right squares, asserted BY NAME;
  *   2. settlement pays on a wide-8 flank square that is not a 中央格;
  *   3. a default game scores exactly what the pre-change engine scored;
- *   4. §7③ still keys off "no capture and no point", under either preset.
+ *   4. §7.5③ still keys off "no capture and no point", under either preset.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -26,7 +26,7 @@ import {
   SCORING_CENTRE_4,
   SCORING_WIDE_8,
 } from '../src/constants.js'
-import { applyMove, scoringPoints, scoringSquares } from '../src/game.js'
+import { applyMove, captureScore, scoringPoints, scoringSquares } from '../src/game.js'
 import { legalMoves } from '../src/moves.js'
 import { stateForViewer } from '../src/redact.js'
 import { renderForLLM } from '../src/render/text.js'
@@ -271,34 +271,100 @@ function oldCentrePoints(s: GameState, color: Color): number {
   ).length
 }
 
-describe('a default game is unchanged', () => {
-  it.each([1, 2, 3, 4, 5])(
-    'seed %i: every ply pays the mover exactly what the hard-coded centre four hold',
-    (seed) => {
-      const states = trace(seed, 120)
-      expect(states.length).toBeGreaterThan(20)
+/**
+ * The ① knobs, at the two whole numbers 附錄 B permits and `capturescore.test.ts`
+ * uses: 5 is not a multiple of 3, so no 有煙無傷 bonus can be mistaken for some
+ * k × 階級 and no 決定性勝負 payment for a fizzle.
+ *
+ * Every seed below is traced twice, once at each setting. What this block claims
+ * is a property of ②, and a property of ② that has only ever been checked while
+ * ① paid nothing is not yet a property of ②.
+ */
+const SCORED: Partial<GameConfig> = { captureScoreK: 3, fizzleBonus: 5 }
 
+const K_CASES: { label: string; config: Partial<GameConfig> | undefined }[] = [
+  { label: '① off (the shipped default)', config: undefined },
+  { label: '① paying k=3 / 有煙無傷=5', config: SCORED },
+]
+
+describe('a default game is unchanged', () => {
+  for (const { label, config } of K_CASES) {
+    it.each([1, 2, 3, 4, 5])(
+      `seed %i, ${label}: every ply pays the mover exactly what the hard-coded centre four hold`,
+      (seed) => {
+        const states = trace(seed, 120, config)
+        expect(states.length).toBeGreaterThan(20)
+
+        for (let i = 1; i < states.length; i++) {
+          const before = states[i - 1]!
+          const after = states[i]!
+          const mover = before.toMove
+          const idle: Color = mover === 'white' ? 'black' : 'white'
+          const e = lastEvent(after)
+          // §7.6: 奪旗 ends the game inside ① and 結算 never runs — but the ply
+          // still banks whatever ① paid for the contact that took the 軍旗.
+          const flagEnded = after.status.kind === 'over'
+            && (after.status.result.kind === 'flag' || after.status.result.kind === 'flag-both')
+
+          // INVERTED. The line that used to sit here was
+          //   expect(after.score[idle]).toBe(before.score[idle])
+          // under a comment reading "the settlement credits the MOVER alone …
+          // so its column must be byte-identical across this ply". The premise
+          // is still §7.1②; the conclusion never followed from it once §7.3
+          // existed, because ① is the OTHER source and it pays by outcome, not
+          // by who moved: a 守方勝 pays the defender and a 有煙無傷 pays 存活方,
+          // both of which can be the side that did not move.
+          //
+          // The replacement subtracts ① instead of assuming it away, which is
+          // the stricter statement in two directions at once. The mover's column
+          // must now equal ① + ② exactly rather than ② plus anything ① happened
+          // to add, and the idle column is pinned to ①'s payment rather than to
+          // zero — so settlement leaking to the non-mover still fails here, and
+          // so does a 吃子 paid to the wrong colour, which "unchanged" could not
+          // tell apart from a payment never made. It reduces to the old line
+          // whenever ① is off, and the second pass above runs it when it is not.
+          const pay = e.combat
+            ? captureScore(e.combat.outcome, mover, before.config)
+            : { white: 0, black: 0 }
+          const settled = flagEnded ? 0 : oldCentrePoints(after, mover)
+
+          expect(after.score[mover]).toBe(before.score[mover] + pay[mover] + settled)
+          expect(after.score[idle]).toBe(before.score[idle] + pay[idle])
+          expect(e.scoreAfter).toEqual(after.score)
+          expect(e.color).toBe(mover)
+        }
+      },
+    )
+  }
+
+  it('the ① pass is not vacuous — contacts happen and the idle column does move', () => {
+    // The five traces above are re-run rather than sampled, so this counts the
+    // very plies they audited. Without it, "seed n with ① paying" could quietly
+    // become a second copy of "seed n with ① off": a trace in which no piece
+    // ever meets another exercises the same arithmetic either way.
+    let contacts = 0
+    let idleCredits = 0
+    const kinds = new Set<string>()
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const states = trace(seed, 120, SCORED)
       for (let i = 1; i < states.length; i++) {
         const before = states[i - 1]!
         const after = states[i]!
-        const mover = before.toMove
-        const idle: Color = mover === 'white' ? 'black' : 'white'
-        // §7①: 奪旗 ends the game inside ① and settlement never runs.
-        const flagEnded = after.status.kind === 'over'
-          && (after.status.result.kind === 'flag' || after.status.result.kind === 'flag-both')
-        // §7: the settlement credits the MOVER alone. The idle side's holdings
-        // are not counted here — they were at its own last ply and will be at
-        // its next — so its column must be byte-identical across this ply, even
-        // when it is standing on all four 中央格.
-        const paid = flagEnded ? 0 : oldCentrePoints(after, mover)
-
-        expect(after.score[mover]).toBe(before.score[mover] + paid)
-        expect(after.score[idle]).toBe(before.score[idle])
-        expect(lastEvent(after).scoreAfter).toEqual(after.score)
-        expect(lastEvent(after).color).toBe(mover)
+        const idle: Color = before.toMove === 'white' ? 'black' : 'white'
+        if (after.score[idle] !== before.score[idle]) idleCredits++
+        const e = lastEvent(after)
+        if (!e.combat) continue
+        contacts++
+        kinds.add(e.combat.outcome.kind)
       }
-    },
-  )
+    }
+    // Measured: 22 contacts across the five seeds, 8 of them paying the side
+    // that did not move. The floors sit well under that so an unrelated change
+    // to move generation cannot empty the corpus without saying so.
+    expect(contacts).toBeGreaterThan(10)
+    expect(idleCredits).toBeGreaterThan(0)
+    expect(kinds.has('defender-wins')).toBe(true)
+  })
 
   it.each([1, 2, 3])(
     'seed %i: a game explicitly configured with the OLD literal indices is state-for-state identical',
@@ -320,7 +386,7 @@ describe('a default game is unchanged', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 4. §7③ 停滯 — still "no capture AND no point", under either preset
+// 4. §7.5③ 停滯 — still "no capture AND no point", under either preset
 // ---------------------------------------------------------------------------
 
 /** White king a1↔b1, black king a8↔b8: full turns that capture nothing. */
@@ -335,7 +401,7 @@ function shuffle(s0: GameState, turns: number): GameState {
   return s
 }
 
-describe('§7③ 停滯 keys off "no capture and no point", under either preset', () => {
+describe('§7.5③ 停滯 keys off "no capture and no point", under either preset', () => {
   it('an idle board advances the counter once per FULL turn, under both presets', () => {
     for (const config of [undefined, WIDE]) {
       const idle = position(

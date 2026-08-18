@@ -11,7 +11,7 @@
  * inspection:
  *
  *   1. what the log SAYS is believed exactly — a 翻明 rank is certainty, and a
- *      loser is confined to the set §1.2 derives, 軍旗 excluded because §7④①
+ *      loser is confined to the set §1.2 derives, 軍旗 excluded because §7.5①
  *      would have ended the game.
  *   2. 有煙無傷 is read as the two-sided fact it is (§5.4): the survivor is
  *      工兵-or-軍旗 and the piece that lost was the 爆裂物.
@@ -210,7 +210,7 @@ describe('a piece we beat is confined to (R, 工兵], 軍旗 excluded (§1.2)', 
     }
   })
 
-  it('gives zero to 軍旗 — taking it would have ended the game (§7④①)', () => {
+  it('gives zero to 軍旗 — taking it would have ended the game (§7.5①)', () => {
     expect(row.flag).toBe(0)
   })
 
@@ -227,7 +227,7 @@ describe('a piece we beat is confined to (R, 工兵], 軍旗 excluded (§1.2)', 
     // one rot unnoticed.
     const reasons = enemyFacts(viewOf(state, 'white'), 'white').get('b-d7')?.reasons ?? []
     expect(reasons.some((r) => r.includes('翻明 regiment'))).toBe(true)
-    expect(reasons.some((r) => r.includes('§7④①'))).toBe(true)
+    expect(reasons.some((r) => r.includes('§7.5①'))).toBe(true)
     expect(reasons.some((r) => r.startsWith('contradiction'))).toBe(false)
   })
 
@@ -350,7 +350,7 @@ describe('同歸於盡 carries no 兵種 (§4.3)', () => {
   it('moves no surviving piece\'s odds except through the shared pool', () => {
     // The ONLY thing that may change for a bystander is its share of the 軍旗:
     // a piece that left the board while the game continued cannot be the 軍旗
-    // (§7④①, notebook §1.3), so that mass concentrates on the survivors. Nothing
+    // (§7.5①, notebook §1.3), so that mass concentrates on the survivors. Nothing
     // else may move — conditioned on "not the 軍旗", the distribution is
     // identical before and after, which is what 「announces nothing」 means.
     for (const r of ALL_RANKS) {

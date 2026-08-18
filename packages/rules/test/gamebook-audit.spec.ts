@@ -260,10 +260,10 @@ describe('§4 翻明總表', () => {
 })
 
 // --------------------------------------------------------------------------
-// §7① 奪旗
+// §7.5① 奪旗
 // --------------------------------------------------------------------------
 
-describe('§7① 奪旗', () => {
+describe('§7.5① 奪旗', () => {
   it('軍旗被吃 → 該方立即判負', () => {
     const s = position([
       { at: 'a1', color: 'white', carrier: 'rook', rank: 'commander', id: 'A' },
@@ -385,7 +385,7 @@ describe('§7 結算', () => {
     expect(n.score.white).toBe(1) // white's attacker now occupies d4
   })
 
-  it('§7② 先達 X 分者獲勝', () => {
+  it('§7.5② 先達 X 分者獲勝', () => {
     const s = position(
       [
         { at: 'e4', color: 'white', carrier: 'rook', rank: 'commander', id: 'W' },
@@ -394,7 +394,7 @@ describe('§7 結算', () => {
       ],
       { score: { white: 39, black: 0.5 }, config: { scoreTarget: 40 } },
     )
-    // §7.4② is checked at the END OF THE TURN, never mid-turn. White crossing X
+    // §7.5② is checked at the END OF THE TURN, never mid-turn. White crossing X
     // on its own ply does NOT stop the game — Black still gets its reply, so both
     // sides always finish on an equal number of moves. Ending on White's ply gave
     // White a win with one more move than Black had, worth 55/45 and 68/32 on the
@@ -409,7 +409,7 @@ describe('§7 結算', () => {
     expect(afterBlack.status).toEqual({ kind: 'over', result: { kind: 'score', winner: 'white' } })
   })
 
-  it('§7② 黑方越線立刻結束 — 它是後手，回合已經完整', () => {
+  it('§7.5② 黑方越線立刻結束 — 它是後手，回合已經完整', () => {
     const s = position(
       [
         { at: 'e5', color: 'black', carrier: 'rook', rank: 'commander', id: 'B' },
@@ -425,10 +425,10 @@ describe('§7 結算', () => {
 })
 
 // --------------------------------------------------------------------------
-// §7③ 停滯
+// §7.5③ 停滯
 // --------------------------------------------------------------------------
 
-describe('§7③ 停滯', () => {
+describe('§7.5③ 停滯', () => {
   it('連續 N 個完整回合無吃子且無得分 → 結束，分數高者獲勝', () => {
     let s = position(
       [

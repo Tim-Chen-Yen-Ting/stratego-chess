@@ -9,6 +9,12 @@
  * second implementation here would drift from the one the notebook quotes, and
  * then two files would disagree about what happened in a game.
  *
+ * That includes the §7.1 split. `SideStats` already carries `earnedFromCaptures`
+ * and `earnedFromSettlement`, priced by the engine's own `captureScore` off the
+ * PUBLIC `CombatOutcome`; this file adds them up and never reprices anything.
+ * Re-deriving the §7.3 table here would put a second copy of a 附錄 B rule in a
+ * package that only measures.
+ *
  * **Pool, do not average ratios.** Notebook §6.6: two playtests were misread
  * because an 8-contact denominator was quoted as a rate. Every rate below is
  * therefore `total / total` across the whole run, never the mean of per-game
@@ -93,17 +99,51 @@ export interface SideAggregate {
   winRate: number
   /** wins broken down by the condition that ended the game */
   winsByCondition: Record<MatchOutcomeKind, number>
-  /** pooled score / pooled plies, 貼目 included */
+  /**
+   * Every figure below is derived from the SCORE, which §7.1 pays out of two
+   * sources: the ① 吃子 payment of §7.3, settled in the action phase, and the
+   * ② 佔領計分格 settlement of §7.2. The two are NOT interchangeable and this
+   * struct keeps them apart, because only ② is a count of squares:
+   *
+   *   · a 得分 row (`pointsPerPly`, `earnedPerPly`, `meanScore`) is ①+②, which
+   *     is what its label says — points.
+   *   · a 佔格 row (`meanSquaresHeld`, `meanPeakHeld`, `maxPeakHeld`) reads ②
+   *     ALONE. `record.ts` splits the columns for exactly this reason; the bot
+   *     must not re-fuse them by dividing `earned` by a settlement count.
+   *   · `captureIncome`/`capturePerPly` are the ① half on its own — the row a
+   *     k sweep is actually reading.
+   *
+   * ① does not follow the mover: 守方勝 pays the defender and 有煙無傷 pays the
+   * survivor, both on a ply that side never moved on, so ① has no per-own-結算
+   * denominator and is pooled over GAME LENGTH instead.
+   *
+   * At the shipped `captureScoreK`/`fizzleBonus` of 0 the ① half is identically
+   * zero, `earned === earnedFromSettlement` exactly, and the 得分 and 佔格 rows
+   * coincide — which is why every notebook figure taken at the default is still
+   * reproducible byte for byte.
+   */
+  /** pooled score / pooled plies, 貼目 included — ①+② */
   pointsPerPly: number | null
-  /** pooled earned / pooled plies, 貼目 removed — the cross-run comparable rate */
+  /** pooled earned / pooled plies, 貼目 removed — ①+②, the cross-run comparable rate */
   earnedPerPly: number | null
-  /** pooled earned / pooled own 結算 — the mean 結算格 held at a settlement */
+  /**
+   * ① 吃子得分 (§7.3) pooled over the whole run. 0 at the shipped default.
+   *
+   * Exact, not approximate: 附錄 B requires `captureScoreK` and `fizzleBonus` to
+   * be whole numbers and `RANK_ORDER` is an integer, so this is a sum of
+   * integers and prints without float dust. A fractional total in the report is
+   * itself the finding — some caller has put a non-integer into 附錄 B.
+   */
+  captureIncome: number
+  /** pooled ① / pooled plies — ① lands on either side's ply, so the denominator is length */
+  capturePerPly: number | null
+  /** pooled ② / pooled own 結算 — the mean 結算格 held at a settlement */
   meanSquaresHeld: number | null
-  /** mean over games of that game's peak simultaneous holding */
+  /** mean over games of that game's peak simultaneous ② holding */
   meanPeakHeld: number
-  /** the largest simultaneous holding in the whole run */
+  /** the largest simultaneous ② holding in the whole run */
   maxPeakHeld: number
-  /** mean final score, 貼目 included */
+  /** mean final score, 貼目 included — ①+② */
   meanScore: number
 }
 
@@ -113,7 +153,7 @@ export interface Aggregate {
   games: number
   /** games that ended with a winner */
   decided: number
-  /** 雙旗同時離場 — the only draw in the game (§7④①) */
+  /** 雙旗同時離場 — the only draw in the game (§7.5①) */
   drawn: number
   /** games that hit maxPlies without ending */
   unfinished: number
@@ -174,6 +214,11 @@ export function aggregate(matches: readonly Match[], meta: RunMeta): Aggregate {
   const wins: Record<Color, number> = { white: 0, black: 0 }
   const totalScore: Record<Color, number> = { white: 0, black: 0 }
   const totalEarned: Record<Color, number> = { white: 0, black: 0 }
+  // §7.1's two sources, pooled separately — see the note on `SideAggregate`.
+  // `totalEarned` stays the sum of both because the rows it feeds are per-ply
+  // 得分 rates; only the per-結算 row below needs the ② column on its own.
+  const totalCaptured: Record<Color, number> = { white: 0, black: 0 }
+  const totalHeld: Record<Color, number> = { white: 0, black: 0 }
   const totalSettlements: Record<Color, number> = { white: 0, black: 0 }
   const peakSum: Record<Color, number> = { white: 0, black: 0 }
   const peakMax: Record<Color, number> = { white: 0, black: 0 }
@@ -222,6 +267,10 @@ export function aggregate(matches: readonly Match[], meta: RunMeta): Aggregate {
       const side = stats.sides[color]
       totalScore[color] += side.score
       totalEarned[color] += side.earned
+      // `record.ts` guarantees earnedFromCaptures + earnedFromSettlement ===
+      // earned, so these two pools always add back up to `totalEarned`.
+      totalCaptured[color] += side.earnedFromCaptures
+      totalHeld[color] += side.earnedFromSettlement
       totalSettlements[color] += side.settlements
       const peak = side.peakSquaresHeld.count
       peakSum[color] += peak
@@ -240,7 +289,17 @@ export function aggregate(matches: readonly Match[], meta: RunMeta): Aggregate {
     winsByCondition: winsByCondition[color],
     pointsPerPly: ratio(totalScore[color], totalPlies),
     earnedPerPly: ratio(totalEarned[color], totalPlies),
-    meanSquaresHeld: ratio(totalEarned[color], totalSettlements[color]),
+    captureIncome: totalCaptured[color],
+    // ① is pooled over GAME LENGTH, not over own 結算: 守方勝 and 有煙無傷 credit
+    // the side that did not move, so a per-own-結算 denominator would be the
+    // wrong one for part of the numerator.
+    capturePerPly: ratio(totalCaptured[color], totalPlies),
+    // ② ALONE over own 結算. This used to be `totalEarned / totalSettlements`,
+    // which was a true square count only while ① was identically zero, and at
+    // any k > 0 reported capture points as squares held — a figure that could
+    // exceed the number of 結算格 on the board. §7.5② credits +1 per own piece
+    // standing on a 結算格, so the ② column IS the count of squares.
+    meanSquaresHeld: ratio(totalHeld[color], totalSettlements[color]),
     meanPeakHeld: peakSum[color] / games,
     maxPeakHeld: peakMax[color],
     meanScore: totalScore[color] / games,
@@ -409,10 +468,14 @@ export function formatReport(agg: Aggregate): string {
     `white ${sides.white.name} · black ${sides.black.name}`
     + ` · ${agg.games} games · seed ${agg.meta.seed} · maxPlies ${agg.meta.maxPlies}`,
   )
+  // Every 附錄 B knob the run was played under, read back off the ENGINE's config
+  // (`aggregate` takes it from `state.config`, not from the parsed flags), so a
+  // flag that was accepted but never threaded prints its default and is caught.
   out.push(
     `結算格 ${squaresName(config.scoringSquares)}`
     + ` · X ${num(config.scoreTarget, 0)} · N ${num(config.noProgressTurns, 0)}`
     + ` · 貼目 ${config.komi}`
+    + ` · 吃子 k ${config.captureScoreK} · 有煙無傷 ${config.fizzleBonus}`
     + ` · clock ${config.clockEnabled ? 'on' : 'off'}`,
   )
   const distribution = distributionName(config.distribution)
@@ -496,24 +559,64 @@ export function formatReport(agg: Aggregate): string {
   out.push('')
   const w = sides.white
   const b = sides.black
-  out.push(...table(
-    ['', `White ${w.name}`, `Black ${b.name}`],
-    [
-      ['wins', `${w.wins} (${pct(w.winRate)})`, `${b.wins} (${pct(b.winRate)})`],
-      ['每手得分 points/ply (貼目 in)', rate(w.pointsPerPly), rate(b.pointsPerPly)],
-      ['每手得分 earned/ply (貼目 out)', rate(w.earnedPerPly), rate(b.earnedPerPly)],
-      ['平均佔格 mean squares/結算', rate(w.meanSquaresHeld), rate(b.meanSquaresHeld)],
-      ['最高同時佔格 mean peak', num(w.meanPeakHeld, 2), num(b.meanPeakHeld, 2)],
-      ['最高同時佔格 max peak', String(w.maxPeakHeld), String(b.maxPeakHeld)],
-      ['平均終局分數 mean score', num(w.meanScore, 2), num(b.meanScore, 2)],
-    ],
-  ))
+  const capturesLive = config.captureScoreK !== 0 || config.fizzleBonus !== 0
+  const sideRows: string[][] = [
+    ['wins', `${w.wins} (${pct(w.winRate)})`, `${b.wins} (${pct(b.winRate)})`],
+    ['每手得分 points/ply (貼目 in)', rate(w.pointsPerPly), rate(b.pointsPerPly)],
+    ['每手得分 earned/ply (貼目 out)', rate(w.earnedPerPly), rate(b.earnedPerPly)],
+  ]
+  // The ① rows are gated on the CONFIG, not on whether any capture happened: a
+  // k-sweep run where nothing ever met should still show its zero income, while
+  // a default run must print the same bytes it always has. `capturesLive` is a
+  // pure function of 附錄 B, so the shape of the table is fixed before the first
+  // game is played.
+  if (capturesLive) {
+    // The label carries no ① mark on purpose. U+2460 is East Asian AMBIGUOUS
+    // width — one column in a Latin locale, two in a CJK one — and `isWide`
+    // resolves it to one, so a terminal that renders it wide would knock these
+    // two rows out of the numeric column. The prose below says which source is
+    // which; the table stays measurable.
+    sideRows.push(
+      ['吃子得分 capture income', String(w.captureIncome), String(b.captureIncome)],
+      ['吃子得分 capture/ply', rate(w.capturePerPly), rate(b.capturePerPly)],
+    )
+  }
+  sideRows.push(
+    // ② alone — see `meanSquaresHeld`. The label is a square count and stays one.
+    ['平均佔格 mean squares/結算', rate(w.meanSquaresHeld), rate(b.meanSquaresHeld)],
+    ['最高同時佔格 mean peak', num(w.meanPeakHeld, 2), num(b.meanPeakHeld, 2)],
+    ['最高同時佔格 max peak', String(w.maxPeakHeld), String(b.maxPeakHeld)],
+    ['平均終局分數 mean score', num(w.meanScore, 2), num(b.meanScore, 2)],
+  )
+  out.push(...table(['', `White ${w.name}`, `Black ${b.name}`], sideRows))
   out.push('')
   out.push(...wrap(
     'points/ply keeps GAME LENGTH as its denominator (what 分數線 X is checked'
     + ' against); mean squares/結算 is per own 結算 and runs at about twice it,'
-    + ' because §7 credits only the mover — a side settles on half the plies.',
+    + ' because §7.1 settlement credits only the mover — a side settles on half'
+    + ' the plies.',
   ))
+  // Only when a §7.3 knob is live. At the shipped defaults both are 0, the ①
+  // payment is identically zero, ①+② collapses to ②, and every row above says
+  // the same thing either way — so this paragraph does not appear and the report
+  // is byte-for-byte what every existing notebook measurement was read off.
+  if (capturesLive) {
+    out.push('')
+    out.push(...wrap(
+      `§7.3 吃子得分 IS LIVE (k ${config.captureScoreK}, 有煙無傷 ${config.fizzleBonus}), so the score has`
+      + ' TWO sources (§7.1) and the rows above are split accordingly. The 佔格 rows —'
+      + ' mean squares/結算, mean peak, max peak — read the ② 佔領計分格 column ALONE'
+      + ' (rules/render/record.ts `sideStats` takes them off `income[i].settlement[color]`,'
+      + ' not off the ply\'s whole score delta), so they are still counts of squares and'
+      + ' still bounded by the number of 結算格 on the board. The two capture income rows'
+      + ' are the ① half, and ① is NOT mover-only: 守方勝 pays the defender and 有煙無傷 pays the'
+      + ' survivor, both on a ply that side never moved on, which is why ① is pooled per'
+      + ' PLY and has no per-own-結算 form. Two consequences for reading the note above:'
+      + ' every 得分 row is ①+②, so mean squares/結算 no longer runs at about twice'
+      + ' earned/ply; and a k≠0 run is a different economy that pools with nothing'
+      + ' measured at the default.',
+    ))
+  }
   out.push('')
   out.push(`replay this run: --seed ${agg.meta.seed} --games ${agg.games} --max-plies ${agg.meta.maxPlies}`)
 
