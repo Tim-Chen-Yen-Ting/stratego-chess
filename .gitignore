@@ -17,3 +17,10 @@ Thumbs.db
 # full deployments, they are large, and they are the input to notebook §6/§9,
 # not a build artifact anyone else needs.
 games/
+
+#documents
+gamebook*.md
+fogofwar*.md
+strategy*.md
+techspec*.md
+plan*.md
