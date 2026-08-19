@@ -412,8 +412,28 @@ function finish(acc: Acc): Aggregate {
  * batches do not overlap and neighbouring games are not correlated. Nothing
  * here consults a clock or a counter outside the seed, so a summary is a pure
  * function of its options.
+ *
+ * ASYNC SINCE 2026-08-18, for a reason that has nothing to do with the result.
+ * Every game in the loop below runs fully synchronously (`playGame` never
+ * awaits), so a large batch used to block the event loop for the batch's whole
+ * duration in one stretch. Run from inside vitest, that starved the runner's
+ * own worker↔main IPC heartbeat long enough to throw
+ * `[vitest-worker]: Timeout calling "onTaskUpdate"` — an error vitest counts
+ * against the whole process exit code even when every assertion in every test
+ * passed. It was never about `testTimeout`: a batch that finished in 40s,
+ * comfortably inside a 60s per-test budget, could still trip this.
+ *
+ * The fix is to yield to the event loop between games (`setImmediate`, which
+ * defers to the macrotask queue and so actually lets a pending IPC message or
+ * timer run — a microtask-only yield like a bare `Promise.resolve()` does
+ * not). This changes NOTHING about determinism: `setImmediate` reschedules
+ * when the JS thread next runs, not what it draws when it does, so the exact
+ * same seeds produce the exact same games in the exact same order, only
+ * spread across more turns of the event loop. Every caller became `async` as
+ * a result; see the CLI entry point below and the bot test suite for the
+ * ripple.
  */
-export function runMatch(opts: MatchOptions): MatchSummary {
+export async function runMatch(opts: MatchOptions): Promise<MatchSummary> {
   const swap = opts.swapColors ?? false
   const byColor: Record<Color, Acc> = { white: newAcc(), black: newAcc() }
   const byPolicy = new Map<string, Acc>()
@@ -473,6 +493,13 @@ export function runMatch(opts: MatchOptions): MatchSummary {
 
       if (opts.keepGames) outcomes.push(outcome)
     })
+
+    // Yield every game, not every N: individual games can run into the
+    // hundreds of ms (wide8, two `belief`-family policies), so even a short
+    // run can build up a long synchronous stretch if this waits. The
+    // overhead of one `setImmediate` per game is negligible next to the cost
+    // of playing one.
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
 
   const n = played || 1
@@ -603,7 +630,7 @@ export function formatSummary(summary: MatchSummary, title: string): string {
   return lines.join('\n')
 }
 
-export function runCli(argv: readonly string[]): string {
+export async function runCli(argv: readonly string[]): Promise<string> {
   if (argv.includes('--help') || argv.includes('-h')) {
     return [
       'xiyang bot arena — self-play measurement over @xiyang/rules',
@@ -646,7 +673,7 @@ export function runCli(argv: readonly string[]): string {
   const captureScoreK = Math.round(numberFlag(argv, 'k', DEFAULT_CONFIG.captureScoreK))
   const fizzleBonus = Math.round(numberFlag(argv, 'fizzle', DEFAULT_CONFIG.fizzleBonus))
 
-  const summary = runMatch({
+  const summary = await runMatch({
     seed: numberFlag(argv, 'seed', 1),
     games: numberFlag(argv, 'games', 200),
     white,
@@ -675,5 +702,5 @@ export function runCli(argv: readonly string[]): string {
 
 const entry = process.argv[1]
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  console.log(runCli(process.argv.slice(2)))
+  console.log(await runCli(process.argv.slice(2)))
 }

@@ -822,6 +822,15 @@ function fmt(n: number): string {
   return String(Number(n.toFixed(3)))
 }
 
+/**
+ * `34%` — what fraction of `whole` is `part`. `null` whole (nothing earned yet,
+ * e.g. a game with no settlements and no contacts) prints `—`, never `0%`: a
+ * side with nothing to divide has an undefined proportion, not a zero one.
+ */
+function pctOf(part: number, whole: number): string {
+  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : '—'
+}
+
 function clockText(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
   const m = Math.floor(total / 60)
@@ -1150,8 +1159,36 @@ function viewerLine(vs: ViewerState): string {
   }
 }
 
-function provenanceLines(vs: ViewerState): string[] {
+/**
+ * Who the OTHER chair holds, for the record's header. Not derived from
+ * `ViewerState` — a policy id and its human label live in `@xiyang/bot`'s
+ * registry and the web client's copy of it (`botPolicyLabel`), and this
+ * package is the pure engine, so it takes the finished label as a string
+ * rather than importing a policy registry it has no business knowing about.
+ *
+ * SAFE TO PRINT, same as a colour: gamebook §10 redacts 兵種, never who is
+ * playing. `packages/web/src/socket.ts` says it outright — 「一個政策名稱完全不
+ * 透露任何關於佈署的事」 (a policy name says nothing whatever about a
+ * deployment) — so this is public metadata about the MATCH, not the GAME.
+ */
+export interface ExportOpponent {
+  /** which colour the bot plays, or null when the caller does not know */
+  readonly color: Color | null
+  /** already-formatted for display, e.g. 「推測（belief）」— this package does
+   *  not resolve an id to a label */
+  readonly label: string
+}
+
+function opponentLine(opponent: ExportOpponent | null | undefined): string | null {
+  if (opponent == null) return null
+  const seat = opponent.color === null ? '' : `（${colorLabel(opponent.color)}）`
+  return `Opponent: ${opponent.label}${seat} — a bot policy, not a human.`
+}
+
+function provenanceLines(vs: ViewerState, opponent?: ExportOpponent | null): string[] {
   const out = [viewerLine(vs)]
+  const opp = opponentLine(opponent)
+  if (opp !== null) out.push(opp)
   out.push(
     vs.status.kind === 'over'
       ? 'The game is finished, so every 兵種 is in this record (§10 終局公開全部兵種).'
@@ -1419,6 +1456,14 @@ function statsLines(vs: ViewerState, stats: GameStats): string[] {
     `| …from ② 佔領計分格 (§7.2) | ${fmt(w.earnedFromSettlement)} `
     + `| ${fmt(b.earnedFromSettlement)} |`,
   )
+  // 「打」還是「囤」的比例，直接算出來，不要求讀者自己除. Same guard as `pctOf`
+  // itself: at k=0 and fizzle=0 this is always 0% / 0% and true — ① really is
+  // empty, not merely unmeasured — so the row costs nothing at the shipped
+  // default and answers the question the moment a game turns the knobs on.
+  out.push(
+    `| ① share of Earned — 打／囤 split | ${pctOf(w.earnedFromCaptures, w.earned)} `
+    + `| ${pctOf(b.earnedFromCaptures, b.earned)} |`,
+  )
   // TWO rate rows, and they are two measurements now. They were one when both
   // sides settled on every ply: a piece on a scoring square scored a point per
   // ply, so "squares held" and "points per ply" differed only by 貼目/plies and
@@ -1448,14 +1493,16 @@ function statsLines(vs: ViewerState, stats: GameStats): string[] {
   out.push(`| 爆裂物 truly lost (終局 only) | ${bombsActual(w)} | ${bombsActual(b)} |`)
   out.push('')
   out.push(
-    '> §7.1 pays out of TWO sources and the three rows under the score keep them'
+    '> §7.1 pays out of TWO sources and the four rows under the score keep them'
     + ' apart: ① 吃子得分 (§7.3) is paid in the action phase for winning a contact,'
     + ' ② 佔領計分格 (§7.2) is paid in 結算 for standing on a 結算格. They sum to'
-    + ' 「Earned」 exactly. Only ② is a count of squares, and every row below it —'
-    + ' the mean, the peak, the zero runs — reads ② alone; fusing them would report'
-    + ' a kill as ground held. They also differ in WHO is paid: ② credits the side'
-    + ' that just moved and nobody else, while ① pays the winner of the contact, so'
-    + ' a defender that held its square banks ① on the opponent’s ply. Two games'
+    + ' 「Earned」 exactly, and 「① share」 is that sum split — 打（capturing） vs'
+    + ' 囤（hoarding squares）, read directly rather than divided by hand. Only ②'
+    + ' is a count of squares, and every row below it — the mean, the peak, the'
+    + ' zero runs — reads ② alone; fusing them would report a kill as ground'
+    + ' held. They also differ in WHO is paid: ② credits the side that just moved'
+    + ' and nobody else, while ① pays the winner of the contact, so a defender'
+    + ' that held its square banks ① on the opponent’s ply. Two games'
     + ' played with different ① settings are two scoring systems, not two results —'
     + ' the Configuration block above records which one this was.',
   )
@@ -1489,13 +1536,13 @@ function statsLines(vs: ViewerState, stats: GameStats): string[] {
  * the settings that produced it, then the log, then the deployments, then the
  * numbers.
  */
-export function exportMarkdown(vs: ViewerState): string {
+export function exportMarkdown(vs: ViewerState, opponent?: ExportOpponent | null): string {
   const stats = gameStats(vs)
   const lines: string[] = []
 
   lines.push(`# 行軍西洋棋 — game ${vs.id}`)
   lines.push('')
-  lines.push(...provenanceLines(vs))
+  lines.push(...provenanceLines(vs, opponent))
   lines.push('')
 
   lines.push('## Result')
@@ -1619,6 +1666,8 @@ export interface RecordJson {
   version: 1
   id: string
   viewer: { kind: string; color: Color | null }
+  /** who the OTHER chair holds, or null when the caller did not say (see `ExportOpponent`) */
+  opponent: { color: Color | null; label: string } | null
   ply: number
   to_move: Color
   status: string
@@ -1676,7 +1725,7 @@ export interface RecordJson {
  * Declared `unknown` because callers should not build a hard dependency on the
  * shape; `RecordJson` is exported for the ones that want to.
  */
-export function exportJson(vs: ViewerState): unknown {
+export function exportJson(vs: ViewerState, opponent?: ExportOpponent | null): unknown {
   const stats = gameStats(vs)
   const income = incomePerPly(vs)
 
@@ -1724,6 +1773,7 @@ export function exportJson(vs: ViewerState): unknown {
     version: 1,
     id: vs.id,
     viewer: { kind: vs.viewer.kind, color: viewerColor(vs.viewer) },
+    opponent: opponent == null ? null : { color: opponent.color, label: opponent.label },
     ply: vs.ply,
     to_move: vs.toMove,
     status: vs.status.kind,

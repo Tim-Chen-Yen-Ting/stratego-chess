@@ -810,6 +810,31 @@ describe('exportMarkdown — the thing you paste into a chat', () => {
     expect(setup).toContain('Not started — both sides are still assigning 兵種')
     expect(setup).toContain('(no moves yet)')
   })
+
+  it('says nothing about the opponent when the caller does not either', () => {
+    // The default before this feature existed, and it must stay the default:
+    // a caller that has not been updated to pass one gets byte-identical output.
+    expect(md).not.toContain('Opponent:')
+  })
+
+  it('prints who was in the other chair, once the caller says', () => {
+    const withBot = exportMarkdown(asBlackDone, { color: 'white', label: '推測（belief）' })
+    expect(withBot).toContain('Opponent: 推測（belief）（White） — a bot policy, not a human.')
+    // and nothing else about the record changed — the opponent line slots in
+    // right after the viewer line, before the §10 disclosure sentence
+    expect(withBot).toBe(md.replace(
+      "Exported from Black's own view (player).\n",
+      "Exported from Black's own view (player).\n"
+        + 'Opponent: 推測（belief）（White） — a bot policy, not a human.\n',
+    ))
+  })
+
+  it('omits the seat when the caller does not know which colour', () => {
+    const noColor = exportMarkdown(asBlackDone, { color: null, label: '機器人' })
+    expect(noColor).toContain('Opponent: 機器人 — a bot policy, not a human.')
+    expect(noColor).not.toContain('（White）')
+    expect(noColor).not.toContain('（Black）')
+  })
 })
 
 describe('the win condition is always named (§7 勝負條件)', () => {
@@ -1216,6 +1241,16 @@ describe('exportJson — arrays of records, for a script', () => {
     expect(round.stats).toEqual(json.stats)
     expect(round.moves).toHaveLength(14)
   })
+
+  it('carries opponent: null when the caller does not say — the pre-existing shape', () => {
+    expect(json.opponent).toBeNull()
+  })
+
+  it('carries whatever the caller says, verbatim, and nothing else moves', () => {
+    const withBot = exportJson(asBlackDone, { color: 'black', label: '推測（belief）' }) as RecordJson
+    expect(withBot.opponent).toEqual({ color: 'black', label: '推測（belief）' })
+    expect({ ...withBot, opponent: null }).toEqual(json)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1423,6 +1458,22 @@ describe('§7.3 — the record splits 吃子 from 佔領計分格', () => {
     expect(md).toContain('| …from ② 佔領計分格 (§7.2) | 4 | 3 |')
     // …and the squares rows still read ② alone: 4/7 and 3/7, not 7/7 and 8/7.
     expect(md).toContain('| Mean squares held per own 結算 | 0.571 | 0.429 |')
+  })
+
+  it('reads the 打／囤 split off the same two numbers, not off arithmetic the reader has to do', () => {
+    // White: 3 of 7 earned came from ①  → 42.857…% → 43. Black: 5 of 8 → 62.5% → 63
+    // (JS Math.round takes .5 up, matching the row's own rounding).
+    expect(md).toContain('| ① share of Earned — 打／囤 split | 43% | 63% |')
+  })
+
+  it('prints — rather than 0% when a side earned nothing at all to split', () => {
+    const fresh = exportMarkdown(
+      stateForViewer(createGame('nothing-earned-yet'), { kind: 'player', color: 'white' }),
+    )
+    // A game that has not started has no score of any kind — 0/0 is undefined,
+    // not zero, and the row must say so rather than claim a 0% split that never
+    // happened.
+    expect(fresh).toContain('| ① share of Earned — 打／囤 split | — | — |')
   })
 
   it('leaves the k = 0 MOVE LOG exactly as it was — five columns, same rows', () => {

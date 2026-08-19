@@ -66,8 +66,8 @@ function flagIdOf(outcome: GameOutcome, color: Color): PieceId {
 }
 
 /** 100 seeds played both ways round = exactly 200 games. */
-function twoHundredGames(black: Policy, seed: number): GameOutcome[] {
-  const summary = runMatch({
+async function twoHundredGames(black: Policy, seed: number): Promise<GameOutcome[]> {
+  const summary = await runMatch({
     seed,
     games: 100,
     white: greedyPolicy,
@@ -79,7 +79,7 @@ function twoHundredGames(black: Policy, seed: number): GameOutcome[] {
   return summary.outcomes ?? []
 }
 
-const VS_RANDOM = twoHundredGames(randomPolicy, 4242)
+const VS_RANDOM = await twoHundredGames(randomPolicy, 4242)
 
 // ---------------------------------------------------------------------------
 // 1. never initiates a capture
@@ -99,8 +99,8 @@ describe('greedy never initiates a capture', () => {
     expect(greedyPlies).toBeGreaterThan(1000)
   })
 
-  it('produces a contact-free game when both sides are greedy', () => {
-    const summary = runMatch({
+  it('produces a contact-free game when both sides are greedy', async () => {
+    const summary = await runMatch({
       seed: 7,
       games: 100,
       white: greedyPolicy,
@@ -212,9 +212,9 @@ describe('determinism', () => {
     expect(JSON.stringify(b.final)).toBe(JSON.stringify(a.final))
   })
 
-  it('two runs of one match summary are identical', () => {
+  it('two runs of one match summary are identical', async () => {
     const opts = { seed: 11, games: 12, white: greedyPolicy, black: randomPolicy, swapColors: true }
-    expect(JSON.stringify(runMatch(opts))).toBe(JSON.stringify(runMatch(opts)))
+    expect(JSON.stringify(await runMatch(opts))).toBe(JSON.stringify(await runMatch(opts)))
   })
 
   it('a different seed produces a different game — the seed is really threaded', () => {
@@ -554,8 +554,8 @@ describe('the harness', () => {
     expect(outcome.plies).toBe(6)
   })
 
-  it('aggregates by seat and by policy over the same games', () => {
-    const summary = runMatch({
+  it('aggregates by seat and by policy over the same games', async () => {
+    const summary = await runMatch({
       seed: 3, games: 20, white: greedyPolicy, black: randomPolicy, swapColors: true,
     })
     expect(summary.games).toBe(40)

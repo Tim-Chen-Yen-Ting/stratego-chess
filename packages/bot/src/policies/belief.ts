@@ -161,7 +161,7 @@
  * move (after `beliefFor`'s own draws), so a game replays byte for byte.
  */
 
-import { ALL_RANKS, carrierMoves, opposite, resolveCombat } from '@xiyang/rules'
+import { ALL_RANKS, carrierMoves, opposite, RANK_ORDER, resolveCombat } from '@xiyang/rules'
 import type {
   Carrier,
   Color,
@@ -841,7 +841,16 @@ export function branchOdds(
   return { win, flagWin, lose, mutual }
 }
 
-/** Everything the position contributes to a contact's value. All fields are POINTS. */
+/**
+ * Everything the position contributes to a contact's value. All fields are POINTS.
+ *
+ * `captureScoreK` and `fizzleBonus` are §7.3's settlement payment, additive to
+ * `valueOf` rather than blended into it: `valueOf(rank)` prices the strategic
+ * worth of removing a target (denial, danger), `captureScoreK`/`fizzleBonus`
+ * price what the win literally banks on the scoreboard. Both are read straight
+ * off config, not tuned — real points, not weights — so they are exactly 0 at
+ * the shipped default rather than merely small.
+ */
 export interface ContactTerms {
   /** change in own 結算格 held if we survive and take the square */
   squareGain: number
@@ -859,6 +868,12 @@ export interface ContactTerms {
   tradeAppetite: number
   /** points per enemy 兵種 */
   valueOf: (rank: Rank) => number
+  /** k in §7.3 — what a decisive win pays the WINNER, priced off the
+   *  winner's own 階級 number. Real points, read straight off config, not a
+   *  tuned weight — so it is exactly 0 at captureScoreK=0, not merely small. */
+  captureScoreK?: number
+  /** flat 有煙無傷 bonus (§7.3, §5.4) to the survivor. Same reasoning. */
+  fizzleBonus?: number
 }
 
 /**
@@ -893,18 +908,44 @@ export function contactEV(attacker: Rank, probs: RankProbs, terms: ContactTerms)
     const resolution = resolutionOf(attacker, rank)
     switch (resolution.kind) {
       case 'flag-win':
+        // No §7.3 term here either: taking the 軍旗 ends the game outright via
+        // `winValue`, which already dwarfs any marginal capture payment. Adding
+        // one would be complexity with no measurable effect.
         ev += p * terms.winValue
         break
       case 'win': {
         const reveal = resolution.reveals ? terms.revealCost : 0
-        ev += p * (terms.squareGain + terms.valueOf(rank) + terms.denial - reveal)
+        // §7.3: what THIS win banks. rank === 'bomb' here is exactly the fizzle
+        // case — the ONLY way 'win' is reached with a bomb defender at all, since
+        // a bomb attacked by anything else always resolves 'mutual', and a bomb
+        // can never survive AS an attacker (it only ties or, against an immune
+        // rank, loses — see the 'lose' case below). Everything else in 'win' is an
+        // ordinary decisive victory, paid off the WINNER's (attacker's) own rank
+        // per §7.3's table, not the target's.
+        const capture = rank === 'bomb'
+          ? (terms.fizzleBonus ?? 0)
+          : (terms.captureScoreK ?? 0) * RANK_ORDER[attacker as Exclude<Rank, 'bomb'>]
+        ev += p * (terms.squareGain + terms.valueOf(rank) + terms.denial - reveal + capture)
         break
       }
-      case 'lose':
-        ev -= p * (terms.attackerValue + terms.attackerSquares)
+      case 'lose': {
+        // Mirror of 'win'. attacker === 'bomb' here is exactly the fizzle-LOSS
+        // case — the only way our own bomb reaches 'lose' at all is against a
+        // bomb-immune rank (engineer/flag); anything else a bomb attacks resolves
+        // 'mutual'. Otherwise this is an ordinary decisive loss, priced off THEIR
+        // (rank's) own 階級 number, since they are the winner here.
+        const capture = attacker === 'bomb'
+          ? (terms.fizzleBonus ?? 0)
+          : (terms.captureScoreK ?? 0) * RANK_ORDER[rank as Exclude<Rank, 'bomb'>]
+        ev -= p * (terms.attackerValue + terms.attackerSquares + capture)
         break
+      }
       default: {
         // 雙亡: both removed, target square cleared, our square given up too.
+        // No §7.3 term here BY RULE, not by omission: 附錄 A(d) pays mutual
+        // destruction zero to both sides precisely so 爆裂物 stays uncountable
+        // from the score. A nonzero capture term on this branch would reopen
+        // that leak. Do not "complete the pattern" by adding one.
         const cleared = terms.denial - terms.attackerSquares
         ev += p * (cleared + terms.tradeAppetite * terms.valueOf(rank) - terms.attackerValue)
       }
@@ -1653,6 +1694,8 @@ function evaluate(ctx: Ctx, move: Move): number | null {
     winValue: ctx.winValue,
     tradeAppetite: ctx.posture.tradeAppetite,
     valueOf: ctx.valueOf,
+    captureScoreK: ctx.view.config.captureScoreK,
+    fizzleBonus: ctx.view.config.fizzleBonus,
   })
 
   // §4.1 again, and it is easy to get wrong here: a losing attacker 「從未進入目標格」,

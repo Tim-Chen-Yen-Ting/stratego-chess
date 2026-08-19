@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CombatOutcome, GameStats, ViewerState } from '@xiyang/rules'
+import type { CombatOutcome, ExportOpponent, GameStats, ViewerState } from '@xiyang/rules'
 import { exportJson, exportMarkdown, gameStats } from '@xiyang/rules'
 import { colorLabel, formatScore, resultText } from '../format.js'
+import { botPolicyLabel } from '../socket.js'
+import type { BotSeat } from '../socket.js'
 
 /**
  * 匯出對局紀錄 — the record, in one selectable blob.
@@ -123,12 +125,22 @@ export function ExportButton({ onClick, prominent = false }: ExportButtonProps) 
 export interface ExportPanelProps {
   /** the state this screen already has — already redacted (gamebook §10) */
   view: ViewerState
+  /**
+   * Who the other chair holds, if this screen already knows — the same value
+   * `Game.tsx` resolves for its own thinking-indicator UI (`readBotSeat(view)
+   * ?? confirmedBot`). Recording it was a manual step until now: five games in
+   * a row were filed by hand-typing the opponent from memory, and 007–010 were
+   * once misfiled entirely because that memory was wrong. `null` for a
+   * human-vs-human game or when this screen genuinely does not know — the
+   * export then reads exactly as it did before this prop existed.
+   */
+  bot: BotSeat | null
   onClose: () => void
 }
 
 type CopyKind = 'idle' | 'done' | 'manual'
 
-export function ExportPanel({ view, onClose }: ExportPanelProps) {
+export function ExportPanel({ view, bot, onClose }: ExportPanelProps) {
   const [format, setFormat] = useState<ExportFormat>('markdown')
   // `n` gives every click a fresh identity, so the 已複製 timer restarts on a
   // second copy instead of expiring on the first one's schedule.
@@ -139,6 +151,18 @@ export function ExportPanel({ view, onClose }: ExportPanelProps) {
   const result = view.status.kind === 'over' ? view.status.result : null
 
   /**
+   * `@xiyang/rules` does not know what a policy id means — that registry is
+   * this package's (`botPolicyLabel`) — so the label is resolved HERE and
+   * handed down as a plain string. `bot.policy` can be `''` when the source
+   * named a bot but not which one (`readBotSeat`'s contract); `botPolicyLabel`
+   * already renders that as 「機器人」 rather than an empty string.
+   */
+  const opponent = useMemo<ExportOpponent | null>(
+    () => (bot === null ? null : { color: bot.color, label: botPolicyLabel(bot.policy) }),
+    [bot],
+  )
+
+  /**
    * The record itself. Everything downstream of these two calls is display; if
    * one of them throws, the panel says so instead of taking the screen down —
    * the owner is mid-analysis and losing the board would be worse than a
@@ -147,12 +171,14 @@ export function ExportPanel({ view, onClose }: ExportPanelProps) {
   const rendered = useMemo<{ text: string; error: string | null }>(() => {
     try {
       const text =
-        format === 'markdown' ? exportMarkdown(view) : JSON.stringify(exportJson(view), null, 2)
+        format === 'markdown'
+          ? exportMarkdown(view, opponent)
+          : JSON.stringify(exportJson(view, opponent), null, 2)
       return { text, error: null }
     } catch (err) {
       return { text: '', error: err instanceof Error ? err.message : String(err) }
     }
-  }, [view, format])
+  }, [view, format, opponent])
 
   const stats = useMemo<{ value: GameStats | null; error: string | null }>(() => {
     try {

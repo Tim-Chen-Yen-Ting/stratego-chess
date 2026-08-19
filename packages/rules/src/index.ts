@@ -168,6 +168,7 @@ export type {
   BombsLost,
   Deployment,
   DeploymentPiece,
+  ExportOpponent,
   GameStats,
   MutualDestruction,
   ObjectiveMoves,

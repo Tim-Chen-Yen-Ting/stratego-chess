@@ -992,7 +992,7 @@ export function Game({ view }: GameProps) {
        * one (stateForViewer, 規則書 §10) — no fetch, no server call, nothing
        * re-derived, which is exactly what makes exporting it safe.
        */}
-      {exportOpen && <ExportPanel view={view} onClose={closeExport} />}
+      {exportOpen && <ExportPanel view={view} bot={bot} onClose={closeExport} />}
       {shareOpen && shareToken !== null && (
         <SharePanel token={shareToken} onClose={() => setShareOpen(false)} />
       )}
