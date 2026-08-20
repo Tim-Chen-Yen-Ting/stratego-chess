@@ -275,8 +275,14 @@ const DENIAL_SWING = 0.3
 /** How much more (behind) a lost piece hurts — the §4.2 snowball, from the losing end. */
 const RISK_SWING = 0.25
 
-/** Walking towards a 結算格 we want, per square of Chebyshev progress. A tiebreak. */
-const APPROACH_WEIGHT = 0.08
+/**
+ * Walking towards a 結算格 we want, per square of Chebyshev progress. A tiebreak.
+ *
+ * Exported so `MOBILITY_WEIGHT`'s test can pin the ratio between the two the
+ * same way `ARRIVAL_WEIGHT`'s test pins its relationship to
+ * `MIXING_BAND_SQUARES`.
+ */
+export const APPROACH_WEIGHT = 0.08
 
 /**
  * ARRIVAL — what a 結算格 is worth to a piece that is not standing on it yet.
@@ -317,8 +323,67 @@ const APPROACH_WEIGHT = 0.08
  */
 export const ARRIVAL_WEIGHT = 0.5
 
+/**
+ * `mobilityBonus` — the fallback for when `approachBonus` has nothing to say
+ * about THIS move (see `mobilityBonus`'s own doc comment for the two ways
+ * that happens — `ctx.wanted` empty is only one of them).
+ *
+ * Both are the COMMON case, not the exception — a side spends long stretches
+ * of a game either holding what it can reach, or unable to make any of its
+ * pieces' reachable squares reduce distance to what it still wants — so
+ * `mobilityBonus` fires far more often than `approachBonus` ever does.
+ * Precisely because of that, it must be quieter, not louder: notebook §11.4
+ * is what happens to a term sized like the signal it competes with while
+ * firing on nearly every ply — it does not nudge the decision, it BECOMES the
+ * decision, and the walk turns back into the coin flip `ARRIVAL_WEIGHT` was
+ * built to end.
+ *
+ * So `MOBILITY_WEIGHT` / `MOBILITY_ARRIVAL_WEIGHT` are fixed at exactly a
+ * quarter of `APPROACH_WEIGHT` / `ARRIVAL_WEIGHT` — not tuned separately, so
+ * the ratio is the whole size decision and a test can pin it the same way
+ * `MIXING_BAND_SQUARES`'s test pins its relationship to `ARRIVAL_WEIGHT`. A
+ * quarter is loud enough to break a tie between standing still and drifting
+ * towards the board's income, and quiet enough that any genuine
+ * `approachBonus`, `huntBonus`, or defence term — all sized at or above the
+ * full APPROACH/ARRIVAL scale — always outweighs it on a move where both
+ * could in principle apply. The two never actually sum on the same move
+ * either: the call site's `approach || mobilityBonus(ctx, shape)` reaches for
+ * this only when `approachBonus` is exactly 0, so it is a fallback chosen per
+ * move, never a second vote added on top of a real one.
+ */
+export const MOBILITY_WEIGHT = APPROACH_WEIGHT / 4
+/** See `MOBILITY_WEIGHT` — same ratio, applied to `ARRIVAL_WEIGHT`. */
+export const MOBILITY_ARRIVAL_WEIGHT = ARRIVAL_WEIGHT / 4
+
 /** Walking a 爆裂物 towards a 翻明 司令, per square of progress, times 送達性. 攻略 §5. */
 const HUNT_WEIGHT = 0.09
+/**
+ * Walking an ORDINARY (non-爆裂物) piece towards a REVEALED enemy piece it
+ * would actually beat, per square of progress, times 送達性. Generalises
+ * `HUNT_WEIGHT` past its commander-only, bomb-only original — see
+ * `ordinaryHuntBonus`.
+ *
+ * A separate constant from `HUNT_WEIGHT` on purpose: `HUNT_WEIGHT` is
+ * calibrated doctrine (攻略 §5, 「全場唯一真正值得用爆裂物換的目標，是已翻明的司
+ * 令」) for a 爆裂物 that only ever has ONE possible target and only ever
+ * TRADES for it (`resolutionOf` never returns `'win'` for a bomb attacker).
+ * This case is different in kind, not just in target: an ordinary piece can
+ * have several candidate targets of different worth, and unlike the bomb it
+ * genuinely WINS and keeps the square — reusing `HUNT_WEIGHT`'s number for a
+ * different mechanism, just because both are "walk towards a revealed piece",
+ * would be assuming a coincidence rather than measuring one.
+ *
+ * This is new, unmeasured territory (no sweep backs this number the way
+ * `ARRIVAL_WEIGHT`'s table does), so it is sized conservatively rather than
+ * tightly: at the strongest reachable target (RANK_ORDER lets an ordinary
+ * piece beat at best a 軍長, `RANK_WEIGHT` 0.82) with full 送達性, one square
+ * of progress pays `ORDINARY_HUNT_WEIGHT × 0.82 × PIECE_VALUE_IN_SQUARES ×
+ * econ.square ≈ 0.018 × econ.square` — under a quarter of what the SAME step
+ * pays a bomb walking at a revealed 司令 (`HUNT_WEIGHT × 0.9 ≈ 0.081 ×
+ * econ.square` at a knight's 送達性). See `beliefPolicy.test.ts` for the
+ * numeric pin.
+ */
+const ORDINARY_HUNT_WEIGHT = 0.04
 /** A 翻明 司令 of ours gets this for making contact — 「移動標靶」, notebook §2.3b. */
 const MOVING_TARGET_WEIGHT = 0.12
 /**
@@ -874,6 +939,67 @@ export interface ContactTerms {
   captureScoreK?: number
   /** flat 有煙無傷 bonus (§7.3, §5.4) to the survivor. Same reasoning. */
   fizzleBonus?: number
+  /**
+   * Information value of the forced reveal a LOSS still produces — §4.3, the
+   * WINNER of a decisive contact is always the one revealed, regardless of
+   * which side of the fight they were on. Computed ONCE per candidate move,
+   * off the belief BEFORE the contact — see `INFO_WEIGHT` and
+   * `maxProbability` — not per hypothesized rank inside `contactEV`, because
+   * it prices the uncertainty of the whole distribution, not any one outcome.
+   * Reduces the cost of losing; never present in the 'win' branch (see its
+   * comment for why there is nothing symmetric to price there).
+   */
+  revealValue?: number
+}
+
+/**
+ * `INFO_WEIGHT` — the price `contactEV`'s 'lose' branch puts on what a losing
+ * contact still teaches us: §4.3 reveals the WINNER unconditionally, so even a
+ * contact we expect to lose forces our attacker's conqueror into the open.
+ * `1 − maxProbability(probs)` is a simple, auditable proxy for how much that
+ * teaches — 0 when the belief was already certain (nothing left to learn), up
+ * to `(ALL_RANKS.length − 1) / ALL_RANKS.length` when it was flat — not full
+ * Shannon entropy, matching this file's existing preference for plain lookups
+ * and linear terms (`RANK_WEIGHT`, `PIECE_VALUE_IN_SQUARES`) over anything
+ * more sophisticated.
+ *
+ * THE SIZING HERE IS THE MOST IMPORTANT OF THE THREE ADDITIVE TERMS THIS
+ * POLICY GAINED ALONGSIDE THIS ONE, because it is the one that could turn a
+ * bad decision into an attractive one rather than merely a mis-ranked good
+ * one: `revealValue` must never be big enough to be competitive with
+ * `attackerValue` in the branch it discounts, or `belief` would start
+ * deliberately walking pieces into fights it expects to lose, purely to farm
+ * information. It only ever REDUCES the cost of a loss (see the 'lose' branch
+ * below) — it can never turn one into a net-positive contact on its own as
+ * long as it stays under `attackerValue`.
+ *
+ * The tightest real case is the weakest attacker that can ever reach 'lose'
+ * (排長, `RANK_WEIGHT` 0.24 — 軍旗 never attacks, and `RANK_WEIGHT.bomb` is 0
+ * but a losing 爆裂物 is priced by `BOMB_WEIGHT` 0.75 instead, which is larger,
+ * not smaller) at the least risk-averse posture (`riskAversion` floors at
+ * `1 − RISK_SWING` = 0.75), which floors `attackerValue` at
+ * `0.24 × PIECE_VALUE_IN_SQUARES × 0.75 × econ.square ≈ 0.099 × econ.square`.
+ * `revealValue`'s ceiling — belief spread as flat as it can be, across all
+ * `ALL_RANKS.length` (11) candidates — is `INFO_WEIGHT × (10/11) ×
+ * econ.square`. At `INFO_WEIGHT = 0.02` that ceiling is `≈0.018 ×
+ * econ.square`, a bit under a fifth of the floor above, with the same
+ * relationship holding at every `econ.square` because both sides scale by it
+ * identically. Deliberately speculative — this is new, unmeasured territory —
+ * and sized to stay well clear of the line rather than to hug it; see
+ * `beliefPolicy.test.ts` for the numeric check across a plausible
+ * `econ.square` range.
+ *
+ * Exported for the same reason `ARRIVAL_WEIGHT` is: the relationship between
+ * this and `attackerValue`'s floor is the thing that has to hold, and a test
+ * can only pin a relationship it can see both sides of.
+ */
+export const INFO_WEIGHT = 0.02
+
+/** The single highest probability in a belief distribution — see `INFO_WEIGHT`. */
+function maxProbability(probs: RankProbs): number {
+  let best = 0
+  for (const rank of ALL_RANKS) best = Math.max(best, probs[rank] ?? 0)
+  return best
 }
 
 /**
@@ -926,6 +1052,13 @@ export function contactEV(attacker: Rank, probs: RankProbs, terms: ContactTerms)
           ? (terms.fizzleBonus ?? 0)
           : (terms.captureScoreK ?? 0) * RANK_ORDER[attacker as Exclude<Rank, 'bomb'>]
         ev += p * (terms.squareGain + terms.valueOf(rank) + terms.denial - reveal + capture)
+        // No `revealValue` term here BY DESIGN, mirroring the 同歸於盡 comment
+        // below rather than completing a pattern: winning already force-reveals
+        // OUR piece (priced by `reveal` above) and teaches us nothing new about
+        // the OPPONENT's — it comes off the board without a name change, since
+        // §4.3 names only the WINNER (「敗方不公開」). `revealValue` prices the
+        // 'lose' branch's forced reveal of the winner — them, in that branch —
+        // and there is no symmetric fact to price on this side of the contact.
         break
       }
       case 'lose': {
@@ -937,7 +1070,10 @@ export function contactEV(attacker: Rank, probs: RankProbs, terms: ContactTerms)
         const capture = attacker === 'bomb'
           ? (terms.fizzleBonus ?? 0)
           : (terms.captureScoreK ?? 0) * RANK_ORDER[rank as Exclude<Rank, 'bomb'>]
-        ev -= p * (terms.attackerValue + terms.attackerSquares + capture)
+        // `revealValue` (§4.3, see `INFO_WEIGHT`): even losing forces THEIR
+        // reveal, which is real information — it only ever reduces this cost,
+        // never flips the sign, as long as it stays under `attackerValue`.
+        ev -= p * (terms.attackerValue + terms.attackerSquares + capture - (terms.revealValue ?? 0))
         break
       }
       default: {
@@ -1088,8 +1224,8 @@ interface Ctx {
   flagIds: ReadonlySet<PieceId>
   /** P(the opponent still has a 爆裂物 it could actually deliver) */
   bombThreat: number
-  /** square of a 翻明 enemy 司令, if there is one to hunt (攻略 §5) */
-  huntSquare: Square | null
+  /** every 翻明 enemy piece still on the board, worth thinking about hunting (攻略 §5, §7) */
+  huntTargets: readonly HuntTarget[]
   /** 結算格 we do not hold, filtered by posture (§4 second battlefield / §4-2 denial) */
   wanted: readonly Square[]
   winValue: number
@@ -1147,13 +1283,28 @@ function bombThreatOf(view: ViewerState, color: Color, belief: BeliefLookup): nu
   return 1 - miss
 }
 
-/** The 翻明 enemy 司令 to hunt, if any. 攻略 §5 「忍住」 until this exists. */
-function huntSquareOf(view: ViewerState, color: Color): Square | null {
+/** One 翻明 enemy piece a hunter might go after — see `huntTargetsOf`, `huntBonus`. */
+interface HuntTarget {
+  square: Square
+  rank: Rank
+}
+
+/**
+ * Every 翻明 enemy piece still on the board. 攻略 §5 「忍住」 until at least one
+ * exists — originally commander-only (a 爆裂物 has exactly one worthwhile
+ * target, per `huntBonus`'s bomb case, unchanged below), generalised here so
+ * an ORDINARY piece can also be credited for approaching something it would
+ * actually beat — see `ordinaryHuntBonus`. Not filtered by rank at this level:
+ * `huntBonus` decides what each kind of hunter may target, this just reports
+ * what is visible.
+ */
+function huntTargetsOf(view: ViewerState, color: Color): HuntTarget[] {
+  const targets: HuntTarget[] = []
   for (const piece of view.pieces) {
     if (piece.color === color || piece.square === null) continue
-    if (piece.revealed && piece.rank === 'commander') return piece.square
+    if (piece.revealed && piece.rank !== null) targets.push({ square: piece.square, rank: piece.rank })
   }
-  return null
+  return targets
 }
 
 /**
@@ -1246,7 +1397,7 @@ function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolic
     byId: new Map(view.pieces.map((p) => [p.id, p])),
     flagIds: new Set(mine.filter((p) => p.rank === 'flag').map((p) => p.id)),
     bombThreat: bombThreatOf(view, color, belief),
-    huntSquare: huntSquareOf(view, color),
+    huntTargets: huntTargetsOf(view, color),
     wanted: wantedSquares(view, color, posture),
     winValue,
     valueOf: value,
@@ -1348,22 +1499,142 @@ function approachBonus(ctx: Ctx, shape: MoveShape): number {
 }
 
 /**
- * 攻略 §5 — once an enemy 司令 is 翻明, walk the 爆裂物 at it.
+ * Fallback for `approachBonus`, for when it has no opinion on THIS SPECIFIC
+ * MOVE — not (only) when `ctx.wanted` is empty. `approachBonus` returns
+ * exactly 0 in two cases: `ctx.wanted` is empty (the front settled, both
+ * sides already holding what they can reach), or `ctx.wanted` is non-empty
+ * but this particular piece's move does not change its distance to the
+ * nearest of it at all — a back-rank piece whose move is orthogonal to the
+ * front, or the front is contested and none of this piece's reachable
+ * squares happen to reduce distance to an unheld square. That second case is
+ * the common one: "the opponent holds some squares I cannot usefully
+ * approach right now" is not the same fact as "there is nothing left to
+ * approach", and this file used to have no opinion about developing at all
+ * on either kind of ply. This is that opinion, computed exactly like
+ * `approachBonus` but against EVERY 結算格 (`ctx.scoring`, not `ctx.wanted`)
+ * rather than only the unheld ones, so a piece drifts towards where the
+ * board's income lives even with nothing specific it can approach right now
+ * — positioned to react rather than idle.
  *
- * Weighted by 送達性 (notebook §2.3): the finding was that the answer existed,
- * the position was known, and the carrier could not get there — seven moves in
- * one game, a knight three moves away in another while the 司令 collected five
- * points a turn. A rook bomb therefore gets a ninth of a knight bomb's
- * enthusiasm, which is usually not enough to leave a 結算格 for.
+ * Does NOT check `ctx.wanted` itself — the call site's `approach ||
+ * mobilityBonus(ctx, shape)` is what makes this a pure fallback, only ever
+ * reached when `approachBonus` already returned exactly 0 for this move. The
+ * `relocations.size !== 1` guard stays here regardless: `approachBonus`
+ * returns 0 for multi-relocation moves too (a castle is not a march), and
+ * `0 || 0` would otherwise let this retry a move type it must also refuse.
+ * See `MOBILITY_WEIGHT` for why this is sized far below `approachBonus`
+ * despite the shared shape.
  */
-function huntBonus(ctx: Ctx, shape: MoveShape): number {
-  const target = ctx.huntSquare
-  if (target === null || shape.relocations.size !== 1) return 0
+function mobilityBonus(ctx: Ctx, shape: MoveShape): number {
+  if (shape.relocations.size !== 1) return 0
   const [[id, to]] = [...shape.relocations]
   const piece = ctx.byId.get(id)
-  if (!piece || piece.square === null || piece.rank !== 'bomb') return 0
-  const progress = Math.max(-1, Math.min(1, chebyshev(piece.square, target) - chebyshev(to, target)))
-  return HUNT_WEIGHT * ctx.econ.square * DELIVERABILITY[piece.carrier] * progress
+  if (!piece || piece.square === null) return 0
+  const targets = [...ctx.scoring]
+  const before = nearest(piece.square, targets)
+  const after = nearest(to, targets)
+  if (!Number.isFinite(before) || !Number.isFinite(after)) return 0
+  const progress = Math.max(-1, Math.min(1, before - after))
+  const arrival = 1 / (1 + after) - 1 / (1 + before)
+  return ctx.econ.square * (MOBILITY_WEIGHT * progress + MOBILITY_ARRIVAL_WEIGHT * arrival)
+}
+
+/**
+ * 攻略 §5 / §7 — once an enemy piece is 翻明, walk something at it that has a
+ * reason to go.
+ *
+ * Two cases sharing one shape (progress towards a known square, discounted by
+ * 送達性), kept in one function because they share the "which target, if any"
+ * question, but priced by entirely different constants because they are not
+ * the same doctrine:
+ *
+ *  · a 爆裂物 has exactly one worthwhile target — a 翻明 司令 — and only ever
+ *    TRADES for it (`resolutionOf` never returns 'win' for a bomb attacker).
+ *    Unchanged from before this file gained the second case: still hardcoded
+ *    to 司令, still `HUNT_WEIGHT`, still calibrated and tested.
+ *  · an ordinary piece has no immunity and no guaranteed trade, so it may only
+ *    approach a target it would ACTUALLY WIN against — see `ordinaryHuntBonus`
+ *    for the correctness property that makes this safe.
+ */
+function huntBonus(ctx: Ctx, shape: MoveShape): number {
+  if (shape.relocations.size !== 1) return 0
+  const [[id, to]] = [...shape.relocations]
+  const piece = ctx.byId.get(id)
+  if (!piece || piece.square === null) return 0
+
+  if (piece.rank === 'bomb') {
+    const commander = ctx.huntTargets.find((t) => t.rank === 'commander')
+    if (!commander) return 0
+    const progress = Math.max(
+      -1,
+      Math.min(1, chebyshev(piece.square, commander.square) - chebyshev(to, commander.square)),
+    )
+    return HUNT_WEIGHT * ctx.econ.square * DELIVERABILITY[piece.carrier] * progress
+  }
+
+  return ordinaryHuntBonus(ctx, piece, to)
+}
+
+/**
+ * The non-bomb half of `huntBonus`: walk an ordinary piece towards a 翻明
+ * enemy piece it would actually beat, among all of `ctx.huntTargets`.
+ *
+ * `RANK_ORDER[piece.rank] < RANK_ORDER[target.rank]` — 「lower number beats
+ * higher」 read directly off the public record, since both ranks are known
+ * (ours always, the target's because it is 翻明). THIS IS THE CORRECTNESS
+ * PROPERTY THE WHOLE CASE EXISTS FOR: an ordinary piece gets nothing for
+ * approaching something it would LOSE to. Without the check this would
+ * actively lure `belief` into bad fights instead of merely failing to help —
+ * `contactEV` already prices the real fight; this only ever adds enthusiasm
+ * for a fight worth having.
+ *
+ * `RANK_ORDER` has no entry for `'bomb'`, so a revealed enemy 爆裂物 is
+ * excluded from the candidate set up front rather than compared — an ordinary
+ * piece meeting a live bomb trades (`classifyContact` returns 'mutual' for
+ * everything except 工兵/軍旗), which is not the "walk up and win" shape this
+ * function prices, and `contactEV`'s mutual branch already has its own
+ * doctrine for that (`tradeAppetite`). No explicit exclusion is needed for
+ * 軍旗 as the MOVER: `RANK_ORDER.flag` is 10, the maximum, so
+ * `RANK_ORDER[piece.rank] < RANK_ORDER[target.rank]` can never hold for it —
+ * the comparison alone reproduces 攻略 §9's absolute without restating it.
+ *
+ * Among the targets it could beat, picks the most valuable one to approach —
+ * denial value (`ctx.valueOf`) plus the §7.3 payoff a genuine win there would
+ * bank (`captureScoreK × RANK_ORDER[piece.rank]`, off the WINNER's — our —
+ * own rank, same as `contactEV`'s 'win' branch). That capture term is the same
+ * for every candidate (it depends on OUR rank, not theirs), so it never
+ * changes which target wins the comparison, only how enthusiastic the result
+ * is once one has been picked.
+ *
+ * `DELIVERABILITY[piece.carrier]` reused rather than a parallel table: 「打得
+ * 贏不等於打得到」 is exactly as true for an ordinary piece stuck behind its own
+ * pawns as it is for a 爆裂物.
+ */
+function ordinaryHuntBonus(ctx: Ctx, piece: ViewerPiece, to: Square): number {
+  const rank = piece.rank
+  if (piece.square === null || rank === null || rank === 'bomb') return 0
+  const order = RANK_ORDER[rank]
+  const k = ctx.view.config.captureScoreK ?? 0
+
+  let best: HuntTarget | null = null
+  let bestValue = Number.NEGATIVE_INFINITY
+  for (const target of ctx.huntTargets) {
+    const targetRank = target.rank
+    if (targetRank === 'bomb') continue
+    if (!(order < RANK_ORDER[targetRank])) continue
+    const value = ctx.valueOf(targetRank) + k * order
+    if (value > bestValue) {
+      bestValue = value
+      best = target
+    }
+  }
+  if (!best) return 0
+
+  const progress = Math.max(
+    -1,
+    Math.min(1, chebyshev(piece.square, best.square) - chebyshev(to, best.square)),
+  )
+  return ORDINARY_HUNT_WEIGHT * bestValue * DELIVERABILITY[piece.carrier] * progress
 }
 
 /**
@@ -1654,8 +1925,21 @@ function evaluate(ctx: Ctx, move: Move): number | null {
   // Positional terms only. `gain` is added below — unconditionally for a quiet
   // move, and inside the win branch for a contact, because a failed attack never
   // enters the target square at all (§4.1 「攻方從未進入目標格」).
-  const positional =
-    approachBonus(ctx, shape) + huntBonus(ctx, shape) - RESTLESSNESS_COST * ctx.econ.square
+  //
+  // `approachBonus` computed once and reused: it is the authority whenever it
+  // has an opinion, and `0` is the only falsy number JavaScript has, so
+  // `approach || mobilityBonus(ctx, shape)` calls the fallback ONLY on the
+  // exact ply `approachBonus` returns 0 — `ctx.wanted` empty, or non-empty but
+  // this piece's move makes no progress towards any of it (progress and
+  // arrival both 0, see `approachBonus`) — and never touches a nonzero
+  // `approachBonus`, positive OR negative: a retreat penalty must reach
+  // `positional` as-is, not get silently replaced by a mobility credit. This
+  // is also why it is `||` and not a truthiness check on the whole expression
+  // below — `RESTLESSNESS_COST` and other terms elsewhere in this file can be
+  // small negatives, and only a literal `0` may take this branch.
+  const approach = approachBonus(ctx, shape)
+  const positional = (approach || mobilityBonus(ctx, shape)) + huntBonus(ctx, shape)
+    - RESTLESSNESS_COST * ctx.econ.square
 
   if (flagMove) {
     return flagMoveValue(ctx, shape, move, risk, gainSquares, gain, positional, defence)
@@ -1679,7 +1963,12 @@ function evaluate(ctx: Ctx, move: Move): number | null {
 
   const attackerValue = ctx.valueOf(attackerRank) * ctx.posture.riskAversion
 
-  const ev = contactEV(attackerRank, ctx.belief(contact.id), {
+  // One belief lookup, reused below — `revealValue` prices the same
+  // pre-contact distribution `contactEV` is about to weigh branch by branch,
+  // so it has to be the SAME snapshot, not a second draw.
+  const targetBelief = ctx.belief(contact.id)
+
+  const ev = contactEV(attackerRank, targetBelief, {
     squareGain: gain,
     denial: denialSquares * ctx.econ.square * ctx.posture.denialWeight,
     attackerValue,
@@ -1696,6 +1985,10 @@ function evaluate(ctx: Ctx, move: Move): number | null {
     valueOf: ctx.valueOf,
     captureScoreK: ctx.view.config.captureScoreK,
     fizzleBonus: ctx.view.config.fizzleBonus,
+    // §4.3: even a contact we expect to LOSE still force-reveals the winner,
+    // which is real information about the board — see `INFO_WEIGHT`. Computed
+    // once, off the belief BEFORE this contact, not per hypothesized rank.
+    revealValue: INFO_WEIGHT * ctx.econ.square * (1 - maxProbability(targetBelief)),
   })
 
   // §4.1 again, and it is easy to get wrong here: a losing attacker 「從未進入目標格」,
@@ -1704,7 +1997,7 @@ function evaluate(ctx: Ctx, move: Move): number | null {
   // else — 同歸於盡 leaves the square empty too. Without this the file would
   // penalise a contact twice for the same failure, once inside `contactEV`'s lose
   // branch and once here.
-  const enters = branchOdds(attackerRank, ctx.belief(contact.id)).win
+  const enters = branchOdds(attackerRank, targetBelief).win
 
   return ev + positional + movingTargetBonus(ctx, shape, mover)
     + defenceCredit(ctx, defence, attackerRank, contact) - replyCost * enters

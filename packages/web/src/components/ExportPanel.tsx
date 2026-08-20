@@ -447,6 +447,19 @@ function StatsTable({ stats }: { stats: GameStats }) {
           <td>{num(w.earned)}</td>
           <td>{num(b.earned)}</td>
         </tr>
+        {/* 打（吃子，①）／囤（佔格，②）的比例，直接算出來。分母是上一列的
+            「結算得分」（＝①＋②），跟匯出區塊 markdown 的「① share」是同一個數，
+            只是這裡不展開①②兩個原始數字——面板本來就只留標題數字，細節在下面
+            的匯出文字裡。分母為 0（尚未得分）時 fractionText 印出 —，不是 0%。 */}
+        <tr>
+          <th scope="row">① 吃子得分佔比</th>
+          <td>
+            {fractionText(w.earnedFromCaptures, w.earned, w.earned > 0 ? w.earnedFromCaptures / w.earned : null)}
+          </td>
+          <td>
+            {fractionText(b.earnedFromCaptures, b.earned, b.earned > 0 ? b.earnedFromCaptures / b.earned : null)}
+          </td>
+        </tr>
         {/* 每手得分 keeps GAME LENGTH as its denominator — it is the rate 分數線
             X is checked against. Under mover-only 結算 a side is credited on
             half the plies, so it runs at about half the mean below; the two are

@@ -60,13 +60,17 @@ import type { RankBelief } from '../src/belief.js'
 import { contestPolicy } from '../src/policies/contest.js'
 import { randomPolicy } from '../src/policies/random.js'
 import {
+  APPROACH_WEIGHT,
   ARRIVAL_WEIGHT,
   FLAG_FLIGHT_SHARE,
   FLAG_LOSS_WEIGHT,
   FLAG_PARK_HORIZON,
   FLAG_STEP_COST,
   FLAG_THREAT_HORIZON,
+  INFO_WEIGHT,
   MIXING_BAND_SQUARES,
+  MOBILITY_ARRIVAL_WEIGHT,
+  MOBILITY_WEIGHT,
   REPLY_WEIGHT,
   RESTLESSNESS_COST,
   beliefNoFlagDefencePolicy,
@@ -1359,6 +1363,257 @@ describe('the 軍旗 is an income candidate, at a price (§7.1, notebook §15.1)
     expect(withRent!.meanEarnedPerSettlement)
       .toBeGreaterThan(0.9 * without!.meanEarnedPerSettlement)
   }, 60_000) // budget UNCHANGED — same reasoning as the sibling test above
+})
+
+// ---------------------------------------------------------------------------
+// mobilityBonus — develop toward the action once the front is settled
+// ---------------------------------------------------------------------------
+
+describe('it still develops once every 結算格 it wants is already held (mobilityBonus)', () => {
+  /** White holds all four 結算格, so `ctx.wanted` is empty and `approachBonus` is 0 everywhere. */
+  const HOLDERS: Placement[] = [
+    { id: 'w-a1', square: sq('d4') },
+    { id: 'w-b1', square: sq('e4') },
+    { id: 'w-c1', square: sq('d5') },
+    { id: 'w-d1', square: sq('e5') },
+  ]
+
+  it('still walks a spare piece towards the scoring cluster rather than settling for pass', () => {
+    // The measured failure this term exists to close: a side that already
+    // holds everything it wants had NO term telling it to do anything but
+    // pass. a3 is genuinely empty (ranks 3–6 start empty) and — like every
+    // corner of an 8×8 board relative to a 2×2 centre block — three Chebyshev
+    // steps from the nearest of the four 結算格; c3 is one step short of them,
+    // as close as a single non-scoring destination can land.
+    const view = scene({
+      color: 'white',
+      place: [...HOLDERS, { id: 'w-h1', square: sq('a3'), rank: 'brigade' }],
+      moves: [move('a3', 'c3'), PASS],
+    })
+    expect(playsOver(view, 'white', 40)).toEqual(new Set(['a3c3']))
+  })
+
+  it('keeps MOBILITY_WEIGHT / MOBILITY_ARRIVAL_WEIGHT at a quarter or less of the terms they fall back for', () => {
+    // The structural statement, so a future retune of either pair on its own
+    // cannot silently violate the ratio the whole design argument rests on —
+    // same reasoning as the ARRIVAL_WEIGHT / MIXING_BAND_SQUARES test above.
+    expect(MOBILITY_WEIGHT).toBeLessThanOrEqual(APPROACH_WEIGHT / 4)
+    expect(MOBILITY_ARRIVAL_WEIGHT).toBeLessThanOrEqual(ARRIVAL_WEIGHT / 4)
+    expect(MOBILITY_WEIGHT).toBeGreaterThan(0)
+    expect(MOBILITY_ARRIVAL_WEIGHT).toBeGreaterThan(0)
+  })
+
+  /**
+   * White holds three of the four 結算格 (e4, d5, e5), so `ctx.wanted = [d4]` —
+   * NON-empty. Before the fix diagnosed this session, `mobilityBonus` returned
+   * 0 on every ply like this one (its guard checked `ctx.wanted.length > 0`
+   * directly), which is what made it fire on only 0.32% of calls across 250
+   * self-play games on 中央四格: this exact shape — the front settled except
+   * for ONE contested square neither a spare piece nor its neighbours can
+   * usefully walk towards — is the overwhelmingly common one on a 4-square
+   * board, not the rare one the old guard assumed. Used below for the
+   * no-double-counting test, where `RESTLESSNESS_COST` eating most of a single
+   * Chebyshev step's `mobilityBonus` does not matter — `approachBonus`'s own
+   * value dwarfs both.
+   */
+  const ONE_UNHELD: Placement[] = [
+    { id: 'w-b1', square: sq('e4') },
+    { id: 'w-c1', square: sq('d5') },
+    { id: 'w-d1', square: sq('e5') },
+  ]
+
+  /**
+   * White holds e4 and d5; Black holds e5; d4 is empty. `ourRate` (2) beats
+   * `theirRate` (1) so `postureOf` reads `ahead` — 攻略 §4-2, "他有幾格" — and
+   * `wantedSquares`'s `posture.ahead && enemy.length > 0` branch fires,
+   * returning ONLY the enemy-held square: `ctx.wanted = [e5]`, d4 excluded
+   * even though it is genuinely unheld. `mobilityBonus` targets `ctx.scoring`
+   * regardless of posture, so d4 is still on ITS board.
+   *
+   * This is the shape the fix's per-move condition is really for, not a
+   * boundary case: 「there is an unheld square」 (d4) and 「it is not what we
+   * should be walking towards right now」 (§4-2 says deny the enemy's e5
+   * instead) are simultaneously true, and only a per-move `approachBonus`
+   * of exactly 0 — not a per-position `ctx.wanted.length` check — can tell
+   * "ignore d4, it's not the priority" apart from "there is nothing left to
+   * develop towards at all".
+   */
+  const AHEAD_ONE_ENEMY: Placement[] = [
+    { id: 'w-b1', square: sq('e4') },
+    { id: 'w-c1', square: sq('d5') },
+    { id: 'b-d7', square: sq('e5') },
+  ]
+
+  it('fires on a move that makes no progress towards the square still wanted, even though a DIFFERENT unheld square is available to walk onto (the case the old ctx.wanted-only guard missed)', () => {
+    // w-h1, relocated to f5: Chebyshev distance 1 from e5 (the one square
+    // `ctx.wanted` names) both before AND after f5→d4 (max(1,0)=1 either way,
+    // since d4 and f5 are each one step from e5 on this board) — progress and
+    // arrival both exactly 0, so `approachBonus` is 0 for this move, case (b)
+    // from the fix, not a rounding artefact. Landing square d4 is empty (no
+    // piece placed there), so the move is a genuine quiet walk, and against
+    // the FULL scoring set `mobilityBonus` uses, f5→d4 walks all the way ONTO
+    // an unheld 結算格 (distance 1 → 0) — the single largest positive
+    // `mobilityBonus` a one-move-away piece can ever earn, comfortably clear
+    // of both `RESTLESSNESS_COST` and `MIXING_BAND_SQUARES` (see the sizing
+    // note on `MOBILITY_ARRIVAL_WEIGHT`'s test above), which a bare tie-break
+    // step is not guaranteed to be.
+    const view = scene({
+      color: 'white',
+      place: [...AHEAD_ONE_ENEMY, { id: 'w-h1', square: sq('f5') }],
+      moves: [move('f5', 'd4'), PASS],
+    })
+    expect(playsOver(view, 'white', 40)).toEqual(new Set(['f5d4']))
+  })
+
+  it('still lets a genuine approachBonus win outright, sized at its own APPROACH_WEIGHT scale — not summed with mobilityBonus on top', () => {
+    // Same position as above, `ctx.wanted` still just `[d4]`, but now a SECOND
+    // piece is in play: w-c2, also on its home square, with a real approach to
+    // the one square still wanted (c2→c3 closes distance 2→1, a genuine
+    // Chebyshev step towards d4, not a tie). If the call site ever summed
+    // `approachBonus(ctx, shape) + mobilityBonus(ctx, shape)` instead of
+    // choosing between them with `||`, c2→c3's own value would only grow, so
+    // this cannot by itself catch that regression — what it does confirm is
+    // the other direction: `approachBonus`'s own, larger (quarter-scale-times-
+    // four) number is what governs a real approach, and it is not somehow
+    // capped or replaced by `mobilityBonus`'s smaller fallback value the way a
+    // truthiness check (rather than `||`'s exact-zero test) might have done
+    // for some other small-but-nonzero term in this file. f2→f3 — a real, if
+    // small, `mobilityBonus`-only credit for the same reason f5→d4 gets one in
+    // the test above (progress and arrival both 0 against `ctx.wanted = [d4]`
+    // here, same tie shape) — stays on the table as the losing alternative.
+    const view = scene({
+      color: 'white',
+      place: ONE_UNHELD,
+      moves: [move('c2', 'c3'), move('f2', 'f3'), PASS],
+    })
+    expect(playsOver(view, 'white', 40)).toEqual(new Set(['c2c3']))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// huntBonus, generalised past commander-only / bomb-only
+// ---------------------------------------------------------------------------
+
+describe('an ordinary piece is credited for approaching a 翻明 piece it would actually beat', () => {
+  /**
+   * Two knights mirrored about the centre file, each one Chebyshev step from
+   * the nearest of the four 結算格 (none held, so `approachBonus` — not
+   * `mobilityBonus` — supplies the shared baseline both moves below stand on).
+   * `approachBonus` is IDENTICAL for the two mirrored steps by construction
+   * (same distance, same arrival math), which is what isolates whatever
+   * `ordinaryHuntBonus` adds on top: a real 翻明 target sits only on one
+   * knight's side, at e2, so only `b4c4` also makes progress towards it.
+   * `captureScoreK: 15` is a real, positive §7.3 payoff (not the shipped
+   * default of 0) so the ordinary-hunt signal comfortably clears
+   * `MIXING_BAND_SQUARES` on top of the tied `approachBonus` — otherwise the
+   * two moves would still be within a coin flip of each other and this test
+   * would prove nothing about direction.
+   */
+  const MIRROR: Placement[] = [
+    { id: 'w-b1', square: sq('b4'), rank: 'commander' },
+    { id: 'w-g1', square: sq('g4'), rank: 'commander' },
+  ]
+
+  it('prefers the mirrored step that also approaches a weaker 翻明 piece', () => {
+    // 司令 (RANK_ORDER 1) beats a 軍長 (2) — the strongest target an ordinary
+    // piece can ever be credited for approaching, since nothing beats 司令
+    // itself (RANK_ORDER 1 is the minimum).
+    const view = scene({
+      color: 'white',
+      place: [...MIRROR, { id: 'b-h8', square: sq('e2'), rank: 'general', reveal: true }],
+      moves: [move('b4', 'c4'), move('g4', 'f4'), PASS],
+      config: { captureScoreK: 15 },
+    })
+    expect(playsOver(view, 'white', 40)).toEqual(new Set(['b4c4']))
+  })
+
+  it('gets NOTHING for approaching a 翻明 piece it would LOSE to — the correctness property', () => {
+    // 排長 (RANK_ORDER 8) does not beat a 旅長 (4): 8 < 4 is false. If the
+    // guard in `ordinaryHuntBonus` were missing, `belief` would be lured into
+    // walking a weak piece at a strong one purely for a phantom bonus; with
+    // it, the target is filtered out of the candidate set for BOTH knights
+    // (their rank, not their position, decides eligibility), so the two
+    // mirrored moves stay exactly as tied as they would with no target on the
+    // board at all — a real tie, so both have to appear over enough seeds,
+    // exactly like the genuine ties in "it mixes inside the epsilon band"
+    // above. A one-sided result here would mean the sign check is not doing
+    // its job.
+    const view = scene({
+      color: 'white',
+      place: [
+        { id: 'w-b1', square: sq('b4'), rank: 'platoon' },
+        { id: 'w-g1', square: sq('g4'), rank: 'platoon' },
+        { id: 'b-h8', square: sq('e2'), rank: 'brigade', reveal: true },
+      ],
+      moves: [move('b4', 'c4'), move('g4', 'f4')],
+    })
+    const played = playsOver(view, 'white', 60)
+    expect(played).toEqual(new Set(['b4c4', 'g4f4']))
+  })
+
+  it('never outbids an actual 結算格 — sized like the tie-break it is, not like approachBonus', () => {
+    // d4 is a real, unheld 結算格 one diagonal step from c3. A 翻明 division
+    // sits far in the other direction at a6 (empty at the start, unlike a1 —
+    // white's own rook), the single best possible ordinary-hunt target
+    // reachable from c3 in one step. Taking the actual square wins regardless.
+    const view = scene({
+      color: 'white',
+      place: [
+        { id: 'w-g1', square: sq('c3'), rank: 'commander' },
+        { id: 'b-h8', square: sq('a6'), rank: 'general', reveal: true },
+      ],
+      moves: [move('c3', 'd4'), move('c3', 'b2'), PASS],
+    })
+    expect(playsOver(view, 'white', 40)).toEqual(new Set(['c3d4']))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// revealValue — the information a forced reveal buys, even on a loss (§4.3)
+// ---------------------------------------------------------------------------
+
+describe('the information value of a forced reveal, even on a loss (§4.3)', () => {
+  it('reduces the cost of a loss by exactly revealValue, and never flips its sign', () => {
+    // brigade (4) loses to a certain commander (1): attackerValue(5) +
+    // attackerSquares(0) + capture(0, k unset) − revealValue.
+    expect(contactEV('brigade', { commander: 1 }, TERMS)).toBe(-(5 + 0 + 0))
+    expect(contactEV('brigade', { commander: 1 }, { ...TERMS, revealValue: 2 })).toBe(-(5 + 0 + 0 - 2))
+    // A real revealValue (see the sizing test below) never gets close enough
+    // to attackerValue to turn this positive on its own.
+    expect(contactEV('brigade', { commander: 1 }, { ...TERMS, revealValue: 2 })).toBeLessThan(0)
+  })
+
+  it('never appears in the win, flag-win, or mutual branches — nothing symmetric to price there', () => {
+    // Deliberately huge, so a leak into the wrong branch would be obvious
+    // rather than lost in noise.
+    const withInfo: ContactTerms = { ...TERMS, revealValue: 50 }
+    expect(contactEV('brigade', { platoon: 1 }, withInfo)).toBe(contactEV('brigade', { platoon: 1 }, TERMS))
+    expect(contactEV('brigade', { flag: 1 }, withInfo)).toBe(contactEV('brigade', { flag: 1 }, TERMS))
+    expect(contactEV('brigade', { brigade: 1 }, withInfo)).toBe(contactEV('brigade', { brigade: 1 }, TERMS))
+  })
+
+  it('keeps INFO_WEIGHT small enough that revealValue can never be competitive with attackerValue', () => {
+    // The exact bound `INFO_WEIGHT`'s own doc comment argues from, checked as
+    // a number rather than merely asserted by design intent, across a range
+    // of `econ.square`: the weakest attacker that can ever reach 'lose' (排長,
+    // RANK_WEIGHT 0.24 — 軍旗 never attacks, and a losing 爆裂物 is priced by
+    // BOMB_WEIGHT 0.75, which is larger, not smaller) at the least
+    // risk-averse posture (riskAversion floors at 1 − RISK_SWING = 0.75)
+    // against the flattest belief a distribution over all `ALL_RANKS.length`
+    // (11) ranks can produce (uniform, so the highest single probability is
+    // 1/11 and `1 − maxProbability` peaks at 10/11).
+    const PLATOON_RANK_WEIGHT = 0.24
+    const PIECE_VALUE_IN_SQUARES = 0.55
+    const RISK_AVERSION_FLOOR = 0.75
+    const flattestOneMinusMax = (ALL_RANKS.length - 1) / ALL_RANKS.length
+
+    for (const econSquare of [0.01, 0.1, 1, 5, 20, 100]) {
+      const attackerValueFloor =
+        PLATOON_RANK_WEIGHT * PIECE_VALUE_IN_SQUARES * RISK_AVERSION_FLOOR * econSquare
+      const revealValueCeiling = INFO_WEIGHT * econSquare * flattestOneMinusMax
+      expect(revealValueCeiling).toBeLessThan(attackerValueFloor)
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
