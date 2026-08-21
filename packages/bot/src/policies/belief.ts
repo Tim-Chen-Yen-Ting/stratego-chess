@@ -189,6 +189,7 @@ import {
 import {
   lookaheadFor,
   makeLookaheadCache,
+  SAFETY_HORIZON,
   squareSafety,
   viewAfter,
 } from '../lookahead.js'
@@ -1253,6 +1254,8 @@ interface Ctx {
   flagStep: number
   /** enemy moves the 軍旗 looks ahead before parking on a 結算格 */
   flagParkHorizon: number
+  /** may an unforced 軍旗 move be refused for failing `flagSurvivesEscalation` */
+  flagEscalationCheck: boolean
 }
 
 function chebyshev(a: Square, b: Square): number {
@@ -1410,6 +1413,7 @@ function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolic
     flagIncome: defending && opts.flagIncome !== false,
     flagStep: opts.flagStepCost ?? FLAG_STEP_COST,
     flagParkHorizon: opts.flagParkHorizon ?? FLAG_PARK_HORIZON,
+    flagEscalationCheck: defending && opts.flagEscalationCheck !== false,
   }
 }
 
@@ -1806,6 +1810,55 @@ function flagHasExit(ctx: Ctx, post: ViewerState, from: Square): boolean {
 }
 
 /**
+ * Does every way the opponent could bring a NEW piece within one move of
+ * `flagSquare` still leave us a legal, deterministic answer?
+ *
+ * This is not notebook §14.2's rejected term reborn. §14.2 priced 「something
+ * is two moves away」 as a continuous weight on every candidate move, every
+ * ply — true of roughly half the board in an opening position, so it fired
+ * constantly and outcompeted the positional signal it stood next to (same
+ * failure as §11.4). This asks an existence question instead, and only when a
+ * flag move is already on the table past the 1-ply `exposed` gate: read
+ * `squareSafety`'s own `lining` at `SAFETY_HORIZON` — the same horizon §15.1
+ * already spends on the parking question, not a new one — which lists every
+ * enemy move that would put a piece one move from taking the square, and for
+ * each one checks whether we have a quiet reply, once it happens, that leaves
+ * the square `unreachable` at one ply again (a flight, or a block by some
+ * other piece). Nothing to check means nothing lining up, and that is the
+ * common case: it returns true immediately rather than searching.
+ *
+ * Deliberately does not credit a capture of the lining piece as a save — its
+ * survival depends on a hidden 兵種, and `unreachable` is a boolean fact this
+ * file gates decisions on precisely because a continuous, odds-weighted stand-
+ * in for it is the mistake this section exists to avoid repeating.
+ */
+function flagSurvivesEscalation(ctx: Ctx, post: ViewerState, flagSquare: Square): boolean {
+  const safety = squareSafety(post, ctx.color, ctx.belief, flagSquare, SAFETY_HORIZON)
+  if (!safety.liningSearched || safety.lining.length === 0) return true
+
+  const enemy = opposite(ctx.color)
+  return safety.lining.every((threat) => {
+    const afterSetup = viewAfter(post, enemy, threat.setup)
+    if (afterSetup === null) return false
+
+    for (const reply of carrierMoves(afterSetup, ctx.color)) {
+      if (reply.kind !== 'move') continue
+      const shape = shapeOfMove(afterSetup, ctx.color, reply)
+      // A save is a quiet move — flight or a block. A capture's survival is
+      // exactly the hidden-兵種 question this function does not price; see
+      // the doc above.
+      if (!shape || shape.contact !== undefined) continue
+      const afterReply = viewAfter(afterSetup, ctx.color, reply)
+      if (afterReply === null) continue
+      const flag = ownFlag(afterReply, ctx.color)
+      if (flag === null || flag.square === null) continue
+      if (squareSafety(afterReply, ctx.color, ctx.belief, flag.square, 1).unreachable) return true
+    }
+    return false
+  })
+}
+
+/**
  * The 軍旗 branch. Returns null when the move is refused outright.
  *
  * Four outcomes, in the order the rules impose them:
@@ -1855,12 +1908,20 @@ function flagMoveValue(
   if (defence > 0) return gain + positional + defence - step
   if (!ctx.flagIncome || gainSquares < 0) return null
 
+  // Past this point the move is unforced — nothing threatens the 軍旗 now, so
+  // wherever it walks to has to clear `flagSurvivesEscalation` as well as the
+  // 1-ply `exposed` gate above. A move already fleeing a live threat (the
+  // `defence > 0` branch above) is not held to this: refusing it there could
+  // leave no legal answer to a threat that already exists, where here the
+  // 軍旗 is choosing to walk into danger with nothing forcing it to move.
+  const to = flagDestination(ctx, shape)
+  const post = to === null ? null : viewAfter(ctx.view, ctx.color, move)
+  if (to === null || post === null) return null
+  if (ctx.flagEscalationCheck && !flagSurvivesEscalation(ctx, post, to)) return null
+
   if (gainSquares > 0) {
     // §15.1's actual question — 「黑方沒有棋子構得到 d5」 — plus the one it does not
     // ask, which is whether the 軍旗 can leave again.
-    const to = flagDestination(ctx, shape)
-    const post = to === null ? null : viewAfter(ctx.view, ctx.color, move)
-    if (to === null || post === null) return null
     // At `FLAG_PARK_HORIZON` 1 this is already answered: `unreachable` at one ply
     // is exactly 「nothing attacks it」, which `exposed` above read off the same
     // position. The generation is only paid when the horizon is set deeper, which
@@ -2254,6 +2315,16 @@ export interface BeliefPolicyOptions {
   readonly flagStepCost?: number
   readonly flagParkHorizon?: number
   /**
+   * Refuse an unforced 軍旗 relocation when some opponent move would put a NEW
+   * piece one move from taking it and none of our replies would leave the
+   * square `unreachable` again (`flagSurvivesEscalation`). Default on.
+   *
+   * Not §14.2's rejected term — see that function's doc — but new enough to
+   * want its own off switch for the same reason every other flag knob here
+   * has one: a claim about what it buys is a story until an A/B says so.
+   */
+  readonly flagEscalationCheck?: boolean
+  /**
    * How much of the move list `lookahead.ts` analyses. For the sweep.
    *
    * NOT a free performance knob, which is why it is documented rather than
@@ -2275,4 +2346,9 @@ export const beliefPolicy: Policy = makeBeliefPolicy()
 /** The pre-§13.3 policy, kept nameable so the fix can be measured against it. */
 export const beliefNoFlagDefencePolicy: Policy = makeBeliefPolicy('belief-nodef', {
   flagDefence: false,
+})
+
+/** `belief` with `flagSurvivesEscalation` off, kept nameable for its own A/B. */
+export const beliefNoEscalationCheckPolicy: Policy = makeBeliefPolicy('belief-noescalation', {
+  flagEscalationCheck: false,
 })

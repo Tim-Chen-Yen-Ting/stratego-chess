@@ -73,6 +73,7 @@ import {
   MOBILITY_WEIGHT,
   REPLY_WEIGHT,
   RESTLESSNESS_COST,
+  beliefNoEscalationCheckPolicy,
   beliefNoFlagDefencePolicy,
   beliefPolicy,
   branchOdds,
@@ -1297,10 +1298,25 @@ describe('the 軍旗 is an income candidate, at a price (§7.1, notebook §15.1)
     // so there is a way back out. Now it goes. Both black pawns that capture onto
     // d6 are moved away and a rook takes e7, because vacating e7 would otherwise
     // open the f8 bishop onto d6 and put the cell straight back.
+    // 1-ply safe, but not 2-ply safe — moving c7 and e7 to clear the bishop's
+    // diagonal into d6 (the threat this scene was built to defeat) also opens
+    // two lines this scene never accounted for: c7 leaving clears the a5–d8
+    // diagonal for the queen, and e7 leaving clears the whole e-file for the
+    // rook now on e7 — `e7e5` then `e5d5`. A third line needs no clearing at
+    // all: `g8f6` then `f6d5` is a knight hop available on the untouched board.
+    // White is exactly as undeveloped as Black here, so nothing can block or
+    // take any of the three. `flagSurvivesEscalation` (§16.x) refuses the park
+    // for precisely this reason — verified directly against `squareSafety`'s
+    // own `lining` at horizon 2, which lists all three — and the policy falls
+    // back to ordinary development instead.
     const free: [PieceId, string][] = [['b-c7', 'c4'], ['b-e7', 'a6'], ['b-a8', 'e7']]
     const open = pawnRent(free)
     expect(flagThreat(pawnRent([...free, ['w-d2', 'd5']]), 'white').threats).toEqual([])
-    expect(playsOver(open, 'white', 40)).toEqual(new Set(['d4d5']))
+    const landed = pawnRent([...free, ['w-d2', 'd5']])
+    expect(
+      squareSafety(landed, 'white', () => RANK_CERTAIN_COMMANDER, sq('d5'), 2).lining.map((t) => t.id).sort(),
+    ).toEqual(['b-a8', 'b-d8', 'b-g8'])
+    expect(playsOver(open, 'white', 40)).toEqual(new Set(['e2e3']))
   })
 
   it('switching the rent off leaves the defence on', () => {
@@ -1363,6 +1379,28 @@ describe('the 軍旗 is an income candidate, at a price (§7.1, notebook §15.1)
     expect(withRent!.meanEarnedPerSettlement)
       .toBeGreaterThan(0.9 * without!.meanEarnedPerSettlement)
   }, 60_000) // budget UNCHANGED — same reasoning as the sibling test above
+
+  it('TEMP MEASUREMENT — flagSurvivesEscalation A/B', async () => {
+    const summary = await runMatch({
+      seed: 20260821,
+      games: 900,
+      white: beliefPolicy,
+      black: beliefNoEscalationCheckPolicy,
+      swapColors: true,
+      config: { scoringSquares: SCORING_WIDE_8 },
+    })
+    const on = summary.byPolicy.belief
+    const off = summary.byPolicy['belief-noescalation']
+    console.log('wide8 games:', summary.games, 'truncated:', summary.truncated)
+    console.log('with check   :', JSON.stringify({
+      winRate: on?.winRate, flagLosses: on?.flagLosses,
+      meanEarnedPerSettlement: on?.meanEarnedPerSettlement,
+    }))
+    console.log('without check:', JSON.stringify({
+      winRate: off?.winRate, flagLosses: off?.flagLosses,
+      meanEarnedPerSettlement: off?.meanEarnedPerSettlement,
+    }))
+  }, 600_000)
 })
 
 // ---------------------------------------------------------------------------
