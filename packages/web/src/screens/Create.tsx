@@ -15,6 +15,7 @@ import {
   PIECES_PER_SIDE,
   RANK_LABEL,
   SCORING_AREAS,
+  SCORING_AREA_DEFAULT_X,
   SCORING_AREA_IDS,
   checkDistribution,
   distributionDiff,
@@ -217,6 +218,15 @@ function readNonNegative(raw: string, fallback: number): number {
  */
 const BOT_ENTER_DELAY_MS = 1600
 
+/**
+ * §7.3's two knobs, as THIS SCREEN pre-fills them — distinct from
+ * `DEFAULT_CONFIG.captureScoreK` / `.fizzleBonus`, which ship at 0 and must
+ * stay there (rules/constants.ts: the engine's own measurement baseline).
+ * These are the values real games have actually used; 0 is still one edit away.
+ */
+const FORM_DEFAULT_CAPTURE_K = 1
+const FORM_DEFAULT_FIZZLE_BONUS = 5
+
 /** What the screen holds after a successful POST. */
 interface CreatedState {
   game: CreatedGame
@@ -254,40 +264,37 @@ export function Create() {
     setupMinutes ?? String(clockEnabled ? SETUP_MINUTES_TIMED : SETUP_MINUTES_UNTIMED)
 
   /*
-   * This field starts at DEFAULT_CONFIG.scoreTarget whichever 計分區 is picked,
-   * and the creator moves it. That is a choice about the form — X is theirs to
-   * set, not something a preset multiplies behind their back — and NOT a claim
-   * that 40 fits both areas. It does not, and the hint under the field says so.
+   * This field starts at SCORING_AREA_DEFAULT_X[scoringAreaId] and follows the
+   * 計分區 picker until the creator types an X of their own — same touched-flag
+   * pattern as 佈署時限 below: `scoreTarget` stays null (so the per-board default
+   * keeps applying and switching 計分區 keeps updating the shown value) until an
+   * onChange fires, and nothing overwrites what they typed after that.
    *
-   * The wide area used to double X automatically. The doubling was dropped when
-   * settlement changed to credit only the side that just moved, on the grounds
-   * that a game now banks half as often as the number 80 was built for — but
-   * that halving hit BOTH areas identically, so it cancels out of the comparison
-   * between them and never justified handing the wide area the centre area's
-   * number. What does not cancel is the income per settlement: a side holds
-   * about two squares on 中央四格 and about four on 側翼八格, so a settlement
-   * there pays roughly double and the score line arrives roughly twice as soon.
-   * Same X=40, n=300 bot games: 35.5 手 on 中央四格, 22.0 手 on 側翼八格
-   * (《對局筆記》§9.3; §10.2 gives the mechanism on the current ruleset).
-   *
-   * 附錄 B therefore lists X as 中央四格 40, 側翼八格 待定. The length-matched wide
-   * figure is near 80 — every eight-square game on record used X=80 (§6.2–§6.5),
-   * though those were played under the v03 ruleset and do not transfer.
-   *
-   * Same touched-flag pattern as 佈署時限: null until the player types, so the
-   * defaults keep applying without ever discarding something they chose.
+   * DEFAULT_CONFIG.scoreTarget (40, from @xiyang/rules) is NOT this field's
+   * default, and never was for the wide area — see SCORING_AREA_DEFAULT_X's own
+   * doc in constants.ts for why the two are kept separate. The reason they need
+   * different numbers at all: a side holds about two squares on 中央四格 and
+   * about four on 側翼八格, so a settlement there pays roughly double and the
+   * score line arrives roughly twice as soon at the same X. Same X=40, n=300
+   * bot games: 35.5 手 on 中央四格, 22.0 手 on 側翼八格 (《對局筆記》§9.3; §10.2
+   * gives the mechanism on the current ruleset) — the 60/120 pair below is that
+   * same ~2:1 ratio applied to the length real games have actually used.
    */
   const [scoreTarget, setScoreTarget] = useState<string | null>(null)
   /*
-   * 吃子得分 (§7.3). Plain string state seeded from DEFAULT_CONFIG rather than the
-   * null-until-touched pattern above, because nothing else on this screen moves
-   * these two: they do not follow the 計分區 preset or the clock preset, so there
-   * is no default to keep re-applying. DEFAULT_CONFIG has both at 0 (附錄 B: 待定)
-   * and that is what a creator who never opens 進階設定 sends.
+   * 吃子得分 (§7.3). Plain string state — NOT the touched-null pattern above,
+   * because these two do not follow the 計分區 or clock preset, so there is
+   * nothing for a null to keep re-deriving.
+   *
+   * Seeded from FORM_DEFAULT_CAPTURE_K / FORM_DEFAULT_FIZZLE_BONUS below, NOT
+   * from DEFAULT_CONFIG (which ships both at 0 — 附錄 B: 待定, and the engine's
+   * own measurement baseline, so it must stay 0 regardless of what this screen
+   * pre-fills). These two are the values real games have actually used; a
+   * creator who wants the bare §7.2-only economy still has 0 one edit away.
    */
-  const [captureScoreK, setCaptureScoreK] = useState(String(DEFAULT_CONFIG.captureScoreK))
-  const [fizzleBonus, setFizzleBonus] = useState(String(DEFAULT_CONFIG.fizzleBonus))
-  const scoreTargetDefault = DEFAULT_CONFIG.scoreTarget
+  const [captureScoreK, setCaptureScoreK] = useState(String(FORM_DEFAULT_CAPTURE_K))
+  const [fizzleBonus, setFizzleBonus] = useState(String(FORM_DEFAULT_FIZZLE_BONUS))
+  const scoreTargetDefault = SCORING_AREA_DEFAULT_X[scoringAreaId]
   const scoreTargetShown = scoreTarget ?? String(scoreTargetDefault)
   /** wider than the centre preset — read off the squares, not off a preset id */
   const wideArea = scoringArea.squares.length > SCORING_AREAS.center.squares.length
@@ -312,8 +319,8 @@ export function Create() {
     const options: CreateOptions = {
       clockEnabled,
       scoreTarget: readPositiveInt(scoreTargetShown, scoreTargetDefault),
-      captureScoreK: readNonNegative(captureScoreK, DEFAULT_CONFIG.captureScoreK),
-      fizzleBonus: readNonNegative(fizzleBonus, DEFAULT_CONFIG.fizzleBonus),
+      captureScoreK: readNonNegative(captureScoreK, FORM_DEFAULT_CAPTURE_K),
+      fizzleBonus: readNonNegative(fizzleBonus, FORM_DEFAULT_FIZZLE_BONUS),
       noProgressTurns: readPositiveInt(noProgressTurns, DEFAULT_CONFIG.noProgressTurns),
       setupTimeoutMs:
         readPositiveInt(setupMinutesShown, clockEnabled ? SETUP_MINUTES_TIMED : SETUP_MINUTES_UNTIMED) *
@@ -624,11 +631,13 @@ export function Create() {
                 <p className="muted small c-hint">
                   先達到 X 分者獲勝。每一手只有<strong>剛行動的一方</strong>結算，因此每方每個完整
                   回合恰好結算一次；但一次結算拿的是<strong>當下持有的格數</strong>，
-                  所以 <strong>X 要隨計分區調整</strong>。附錄 B 只定了四格版的{' '}
-                  {scoreTargetDefault} 分，八格版<strong>待定</strong>——這個欄位兩種都先填{' '}
-                  {scoreTargetDefault}。
+                  所以 <strong>X 隨計分區自動帶入</strong>——{SCORING_AREAS.center.label}{' '}
+                  {SCORING_AREA_DEFAULT_X.center} 分、{SCORING_AREAS.wide.label}{' '}
+                  {SCORING_AREA_DEFAULT_X.wide} 分，換計分區會跟著換，自己填過就不再自動換。
+                  這兩個數字是實際對局採用的，不是附錄 B 的定案（附錄 B 只定了四格版{' '}
+                  {DEFAULT_CONFIG.scoreTarget} 分，八格版<strong>待定</strong>）。
                   {wideArea
-                    ? '八格版一次結算約 4 分、四格版約 2 分：同樣 X=40，n=300 的機器對局平均 22.0 手，四格版是 35.5 手（《對局筆記》§9.3）。想要跟四格版差不多長，X 大約要 80。'
+                    ? '八格版一次結算約 4 分、四格版約 2 分：同樣 X 下八格版短得多（《對局筆記》§9.3），所以八格版的預設 X 大約是四格版的兩倍。'
                     : '試玩短局時調低。'}
                 </p>
 
@@ -657,10 +666,11 @@ export function Create() {
                   永遠不看敗方的。
                 </p>
                 <p className="muted small c-hint">
-                  <strong>0 表示關閉吃子得分</strong>：分數只來自佔領計分格，與這裡至今每一局都相同。
-                  附錄 B 尚未定案，故預設 {DEFAULT_CONFIG.captureScoreK}。此分於行動階段①即時入帳，
-                  因此奪旗結束的那一手照樣付（§7.6）。<strong>必須為整數</strong>——貼目須是唯一的
-                  非整數分數來源，否則 §7.4 的「分數永不相等」不再成立。
+                  <strong>0 表示關閉吃子得分</strong>：分數只來自佔領計分格。附錄 B 本身尚未定案，
+                  仍是 {DEFAULT_CONFIG.captureScoreK}；這個表單另外預填{' '}
+                  {FORM_DEFAULT_CAPTURE_K}，是實際對局採用的數字，改回 0 隨時可以。此分於行動階段
+                  ①即時入帳，因此奪旗結束的那一手照樣付（§7.6）。<strong>必須為整數</strong>——
+                  貼目須是唯一的非整數分數來源，否則 §7.4 的「分數永不相等」不再成立。
                 </p>
 
                 <label className="c-num-row">
@@ -679,7 +689,8 @@ export function Create() {
                   工兵或軍旗碰上爆裂物時（有煙無傷 §5.4），<strong>存活方</strong>得這筆固定額。
                   固定額，且與存活者是誰無關：工兵與軍旗若給的分不同，這一分本身就把兵種報了出來。
                   同歸於盡則雙方皆零分，沒有這個旋鈕——那正是爆裂物無法從分數欄被數出來的原因。
-                  <strong>0 表示拆彈不另外給分</strong>（預設 {DEFAULT_CONFIG.fizzleBonus}）。
+                  <strong>0 表示拆彈不另外給分</strong>。附錄 B 本身仍是{' '}
+                  {DEFAULT_CONFIG.fizzleBonus}；這個表單另外預填 {FORM_DEFAULT_FIZZLE_BONUS}。
                 </p>
 
                 <label className="c-num-row">

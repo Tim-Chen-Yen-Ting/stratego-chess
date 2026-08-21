@@ -103,6 +103,25 @@ export const SCORING_AREAS: Record<ScoringAreaId, ScoringAreaPreset> = {
   },
 }
 
+/**
+ * X the Create screen PRE-FILLS per 計分區 — a starting point for the creator,
+ * not a rule, and not the same thing as `DEFAULT_CONFIG.scoreTarget`.
+ *
+ * `DEFAULT_CONFIG.scoreTarget` (40, from `@xiyang/rules`) is the engine's
+ * measurement baseline: every notebook komi sweep and doctrine ablation was run
+ * against exactly that number, so it stays fixed regardless of what this screen
+ * shows a new creator. These two are a separate pair — the values real games
+ * have actually used, length-matched per the ~2:1 income-per-settlement ratio
+ * `SCORING_WIDE_8`'s own doc describes (roughly twice the squares held per
+ * settlement on the wide area, so roughly twice the X for the same game
+ * length). Still just a default: `Create.tsx` only applies it while the
+ * creator has not typed an X of their own.
+ */
+export const SCORING_AREA_DEFAULT_X: Record<ScoringAreaId, number> = {
+  center: 60,
+  wide: 120,
+}
+
 /** Tray / display order: rank 1 down to 10, then the rankless bomb. */
 export const RANKS_IN_ORDER: readonly Rank[] = [
   'commander',
