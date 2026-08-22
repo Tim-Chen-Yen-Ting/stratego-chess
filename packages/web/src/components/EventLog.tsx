@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { GameEvent } from '@xiyang/rules'
 import { COLOR_LABEL } from '../constants.js'
 import { eventLine } from '../format.js'
+import { fill, useLang, type Strings } from '../i18n.js'
 
 /**
  * The public event record (gamebook §10 — 紀錄給，解算不給). Every line here is
@@ -34,6 +35,28 @@ import { eventLine } from '../format.js'
  * and the dimming is where the difference is drawn.
  */
 
+const STR = {
+  zh: {
+    title: '公開紀錄',
+    hint: ' · 點一列跳到那一手',
+    empty: '尚無紀錄。',
+    ariaJump: '跳到第 {{ply}} 手',
+    openingWord: '開局',
+    plyWord: '第 {{ply}} 手',
+    footer: '棋盤停在{{position}}；淡色的是之後才發生的手。紀錄本身全程對所有人公開（規則書 §10.3），棋盤顯示的兵種才依視角而定。',
+  },
+  en: {
+    title: 'Public record',
+    hint: ' · click a row to jump to that move',
+    empty: 'No moves yet.',
+    ariaJump: 'Jump to move {{ply}}',
+    openingWord: 'the opening',
+    plyWord: 'move {{ply}}',
+    footer:
+      'The board is showing {{position}}; dimmed rows are moves that haven’t happened yet. The record itself is public to both players at all times (gamebook §10.3) — it’s the board that shows ranks according to viewpoint.',
+  },
+} satisfies Strings<'title' | 'hint' | 'empty' | 'ariaJump' | 'openingWord' | 'plyWord' | 'footer'>
+
 export interface EventLogProps {
   log: readonly GameEvent[]
   /**
@@ -51,6 +74,8 @@ export interface EventLogProps {
 }
 
 export function EventLog({ log, currentPly, onSelectPly }: EventLogProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
   const currentRef = useRef<HTMLLIElement | null>(null)
@@ -85,14 +110,14 @@ export function EventLog({ log, currentPly, onSelectPly }: EventLogProps) {
     <section className="log panel">
       <style>{STYLE}</style>
       <h2>
-        公開紀錄
-        {replaying && <span className="muted xy-log-hint"> · 點一列跳到那一手</span>}
+        {s.title}
+        {replaying && <span className="muted xy-log-hint">{s.hint}</span>}
       </h2>
       <div className="log-scroll" ref={scrollRef}>
-        {log.length === 0 && <p className="muted small">尚無紀錄。</p>}
+        {log.length === 0 && <p className="muted small">{s.empty}</p>}
         <ol className="log-list">
           {log.map((ev) => {
-            const line = eventLine(ev)
+            const line = eventLine(ev, lang)
             const current = replaying && ev.ply === currentPly
             const future = replaying && ev.ply > atPly
             // The full sentence stays reachable on hover. The compact line
@@ -114,7 +139,7 @@ export function EventLog({ log, currentPly, onSelectPly }: EventLogProps) {
               <>
                 <span className="log-ply">{line.ply}</span>
                 <span className={`log-color log-color-${ev.color}`}>
-                  {COLOR_LABEL[ev.color]}
+                  {COLOR_LABEL[lang][ev.color]}
                   {line.tags.mover && <b className="log-tag">（{line.tags.mover}）</b>}
                 </span>
                 <span className="log-move">
@@ -139,7 +164,7 @@ export function EventLog({ log, currentPly, onSelectPly }: EventLogProps) {
                     type="button"
                     className={`${rowClass} xy-log-btn`}
                     title={title}
-                    aria-label={`跳到第 ${ev.ply} 手`}
+                    aria-label={fill(s.ariaJump, { ply: ev.ply })}
                     onClick={() => onSelectPly(ev.ply)}
                   >
                     {body}
@@ -157,8 +182,9 @@ export function EventLog({ log, currentPly, onSelectPly }: EventLogProps) {
       </div>
       {replaying && (
         <p className="muted small xy-log-foot">
-          棋盤停在{currentPly === null ? '開局' : `第 ${currentPly} 手`}
-          ；淡色的是之後才發生的手。紀錄本身全程對所有人公開（規則書 §10.3），棋盤顯示的兵種才依視角而定。
+          {fill(s.footer, {
+            position: currentPly == null ? s.openingWord : fill(s.plyWord, { ply: currentPly }),
+          })}
         </p>
       )}
     </section>

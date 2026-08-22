@@ -4,6 +4,8 @@ import { exportJson, exportMarkdown, gameStats } from '@xiyang/rules'
 import { colorLabel, formatScore, resultText } from '../format.js'
 import { botPolicyLabel } from '../socket.js'
 import type { BotSeat } from '../socket.js'
+import { useLang, fill, type Strings } from '../i18n.js'
+import type { Lang } from '../i18n.js'
 
 /**
  * 匯出對局紀錄 — the record, in one selectable blob.
@@ -42,22 +44,173 @@ import type { BotSeat } from '../socket.js'
 
 export type ExportFormat = 'markdown' | 'json'
 
+const STR = {
+  zh: {
+    exportButtonTitle: '匯出這局的公開紀錄（Markdown / JSON），可直接貼到別處分析',
+    exportButtonLabel: '匯出紀錄',
+    panelTitle: '匯出對局紀錄',
+    plyLabel: '第 {{ply}} 手',
+    inProgress: '進行中',
+    close: '關閉',
+    statsSummary: '統計摘要',
+    komiApplied: '{{color}}貼目 +{{score}} 已計入比分',
+    statsError: '統計無法產生：{{message}}',
+    noStats: '尚無統計。',
+    statsNote:
+      '以上為公開紀錄的統計（發生過幾次接觸、幾次同歸於盡…），不是推論輔助。同歸於盡不分辨同階與爆裂物，兩者公告完全相同。',
+    exportFormatLabel: '匯出格式',
+    copy: '複製',
+    selectAll: '全選',
+    download: '下載 {{filename}}',
+    copied: '已複製',
+    manualCopy: '已全選 — 請按 Ctrl/Cmd + C',
+    recordError: '紀錄無法產生：{{message}}',
+    recordAriaLabel: '對局紀錄',
+    footerCounts: '{{lines}} 行 · {{chars}} 字元 · {{filename}}',
+    footerScopeBase: '內容僅來自此視角已可見的資訊（規則書 §10）',
+    footerScopeOver: '。對局已結束，全部兵種公開，故此為完整棋譜。',
+    footerScopeOngoing: '：未翻明的敵方兵種不在其中，系統亦不附任何推測。對局結束後匯出即為完整棋譜。',
+    colWhite: '白方',
+    colBlack: '黑方',
+    rowPlies: '手數',
+    rowContacts: '接觸次數',
+    rowContactResults: '接觸結果',
+    rowMutualPerContact: '同歸於盡／接觸',
+    rowScore: '比分（含貼目）',
+    rowEarned: '結算得分',
+    rowCaptureShare: '① 吃子得分佔比',
+    rowPointsPerPly: '每手得分',
+    rowEarnedPerSettlement: '每次結算平均佔格',
+    rowPeakSquares: '最高同時佔格',
+    rowZeroSettlements: '零分結算',
+    rowLongestZeroRun: '最長零分連續（自身結算）',
+    rowObjectiveMoves: '落點在計分格的手數',
+    rowDistinctPieces: '動過的棋子數',
+    rowLongestSingleRun: '單子連續移動最長',
+    rowBombsKnown: '爆裂物已知損失（僅有煙無傷）',
+    rowBombsActual: '爆裂物實際損失（終局才可得）',
+    bombsActualPending: '終局後才可得',
+    plyListPrefix: '第 {{plies}} 手',
+  },
+  en: {
+    exportButtonTitle: 'Export this game’s public record (Markdown / JSON) — paste it elsewhere for analysis',
+    exportButtonLabel: 'Export record',
+    panelTitle: 'Export Game Record',
+    plyLabel: 'Ply {{ply}}',
+    inProgress: 'In progress',
+    close: 'Close',
+    statsSummary: 'Summary stats',
+    komiApplied: '{{color}} komi +{{score}} already included in the score',
+    statsError: 'Could not generate stats: {{message}}',
+    noStats: 'No stats yet.',
+    statsNote:
+      'These are statistics over the public record (how many contacts occurred, how many were mutual destruction…), not an inference aid. Mutual destruction does not distinguish an equal-rank tie from a bomb — both are announced identically.',
+    exportFormatLabel: 'Export format',
+    copy: 'Copy',
+    selectAll: 'Select all',
+    download: 'Download {{filename}}',
+    copied: 'Copied',
+    manualCopy: 'Selected — press Ctrl/Cmd + C',
+    recordError: 'Could not generate record: {{message}}',
+    recordAriaLabel: 'Game record',
+    footerCounts: '{{lines}} lines · {{chars}} characters · {{filename}}',
+    footerScopeBase: 'Content is limited to what this viewpoint can already see (gamebook §10)',
+    footerScopeOver: '. The game is over, every rank is disclosed, so this is the complete game record.',
+    footerScopeOngoing:
+      ': the enemy’s undisclosed ranks are not included, and the system attaches no guesses. Exporting after the game ends produces the complete record.',
+    colWhite: 'White',
+    colBlack: 'Black',
+    rowPlies: 'Plies',
+    rowContacts: 'Contacts',
+    rowContactResults: 'Contact outcomes',
+    rowMutualPerContact: 'Mutual destruction / contacts',
+    rowScore: 'Score (incl. komi)',
+    rowEarned: 'Points earned',
+    rowCaptureShare: '① Share earned from captures',
+    rowPointsPerPly: 'Points per ply',
+    rowEarnedPerSettlement: 'Avg. squares held per settlement',
+    rowPeakSquares: 'Peak squares held at once',
+    rowZeroSettlements: 'Zero-point settlements',
+    rowLongestZeroRun: 'Longest zero-point streak (own settlements)',
+    rowObjectiveMoves: 'Plies landing on a scoring square',
+    rowDistinctPieces: 'Distinct pieces moved',
+    rowLongestSingleRun: 'Longest single-piece move streak',
+    rowBombsKnown: 'Known bomb losses (fizzle only)',
+    rowBombsActual: 'Actual bomb losses (available only after the game ends)',
+    bombsActualPending: 'Available after the game ends',
+    plyListPrefix: 'ply {{plies}}',
+  },
+} satisfies Strings<
+  | 'exportButtonTitle'
+  | 'exportButtonLabel'
+  | 'panelTitle'
+  | 'plyLabel'
+  | 'inProgress'
+  | 'close'
+  | 'statsSummary'
+  | 'komiApplied'
+  | 'statsError'
+  | 'noStats'
+  | 'statsNote'
+  | 'exportFormatLabel'
+  | 'copy'
+  | 'selectAll'
+  | 'download'
+  | 'copied'
+  | 'manualCopy'
+  | 'recordError'
+  | 'recordAriaLabel'
+  | 'footerCounts'
+  | 'footerScopeBase'
+  | 'footerScopeOver'
+  | 'footerScopeOngoing'
+  | 'colWhite'
+  | 'colBlack'
+  | 'rowPlies'
+  | 'rowContacts'
+  | 'rowContactResults'
+  | 'rowMutualPerContact'
+  | 'rowScore'
+  | 'rowEarned'
+  | 'rowCaptureShare'
+  | 'rowPointsPerPly'
+  | 'rowEarnedPerSettlement'
+  | 'rowPeakSquares'
+  | 'rowZeroSettlements'
+  | 'rowLongestZeroRun'
+  | 'rowObjectiveMoves'
+  | 'rowDistinctPieces'
+  | 'rowLongestSingleRun'
+  | 'rowBombsKnown'
+  | 'rowBombsActual'
+  | 'bombsActualPending'
+  | 'plyListPrefix'
+>
+
 /**
  * Every announced contact kind, spelled short. Typed as a total Record over the
  * union, so a new CombatOutcome variant fails to compile here rather than
  * silently vanishing from the summary — the same discipline record.ts uses.
  */
-const OUTCOME_SHORT: Record<CombatOutcome['kind'], string> = {
-  'attacker-wins': '攻方勝',
-  'defender-wins': '守方勝',
-  // ONE label for all three both-die contacts — 同階雙亡, 爆裂物引爆 and
-  // 爆裂物對爆 share a single contentless announcement (規則書 §4.3), and the
-  // record must not name a distinction the event does not carry.
-  'mutual-destruction': '同歸於盡',
-  fizzle: '有煙無傷',
+// ONE label for all three both-die contacts — 同階雙亡, 爆裂物引爆 and
+// 爆裂物對爆 share a single contentless announcement (規則書 §4.3), and the
+// record must not name a distinction the event does not carry.
+const OUTCOME_SHORT: Strings<CombatOutcome['kind']> = {
+  zh: {
+    'attacker-wins': '攻方勝',
+    'defender-wins': '守方勝',
+    'mutual-destruction': '同歸於盡',
+    fizzle: '有煙無傷',
+  },
+  en: {
+    'attacker-wins': 'attacker wins',
+    'defender-wins': 'defender wins',
+    'mutual-destruction': 'mutual destruction',
+    fizzle: 'fizzle',
+  },
 }
 
-const OUTCOME_KINDS = Object.keys(OUTCOME_SHORT) as CombatOutcome['kind'][]
+const OUTCOME_KINDS = Object.keys(OUTCOME_SHORT.zh) as CombatOutcome['kind'][]
 
 /** Counts print plain; rates keep three decimals, trailing zeros trimmed. */
 function num(value: number): string {
@@ -77,16 +230,28 @@ function fractionText(top: number, bottom: number, ratio: number | null): string
   return `${top} / ${bottom}（${pct}）`
 }
 
+const PLY_UNIT: Record<Lang, string> = { zh: '手', en: 'ply' }
+
 /** `5 手（第 12 手起）` — a streak is worth little without where it started. */
-function runText(run: { length: number; startPly: number | null }): string {
+function runText(run: { length: number; startPly: number | null }, lang: Lang): string {
   if (run.length === 0) return '—'
-  return run.startPly === null ? `${run.length} 手` : `${run.length} 手（第 ${run.startPly} 手起）`
+  if (lang === 'zh') {
+    return run.startPly === null ? `${run.length} 手` : `${run.length} 手（第 ${run.startPly} 手起）`
+  }
+  return run.startPly === null
+    ? `${run.length} ${PLY_UNIT.en}`
+    : `${run.length} ${PLY_UNIT.en} (starting ply ${run.startPly})`
 }
 
 /** `6 格（第 19 手）` — the high-water mark, and the ply it was reached on. */
-function peakText(peak: { count: number; ply: number | null }): string {
+function peakText(peak: { count: number; ply: number | null }, lang: Lang): string {
   if (peak.count === 0) return '—'
-  return peak.ply === null ? `${peak.count} 格` : `${peak.count} 格（第 ${peak.ply} 手）`
+  if (lang === 'zh') {
+    return peak.ply === null ? `${peak.count} 格` : `${peak.count} 格（第 ${peak.ply} 手）`
+  }
+  return peak.ply === null
+    ? `${peak.count} squares`
+    : `${peak.count} squares (ply ${peak.ply})`
 }
 
 // ---------------------------------------------------------------------------
@@ -109,15 +274,17 @@ export interface ExportButtonProps {
  * open to look right.
  */
 export function ExportButton({ onClick, prominent = false }: ExportButtonProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   return (
     <button
       type="button"
       className={prominent ? 'primary big xy-ex-open' : 'xy-ex-open'}
       style={{ whiteSpace: 'nowrap' }}
       onClick={onClick}
-      title="匯出這局的公開紀錄（Markdown / JSON），可直接貼到別處分析"
+      title={s.exportButtonTitle}
     >
-      匯出紀錄
+      {s.exportButtonLabel}
     </button>
   )
 }
@@ -141,6 +308,8 @@ export interface ExportPanelProps {
 type CopyKind = 'idle' | 'done' | 'manual'
 
 export function ExportPanel({ view, bot, onClose }: ExportPanelProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   const [format, setFormat] = useState<ExportFormat>('markdown')
   // `n` gives every click a fresh identity, so the 已複製 timer restarts on a
   // second copy instead of expiring on the first one's schedule.
@@ -158,8 +327,8 @@ export function ExportPanel({ view, bot, onClose }: ExportPanelProps) {
    * already renders that as 「機器人」 rather than an empty string.
    */
   const opponent = useMemo<ExportOpponent | null>(
-    () => (bot === null ? null : { color: bot.color, label: botPolicyLabel(bot.policy) }),
-    [bot],
+    () => (bot === null ? null : { color: bot.color, label: botPolicyLabel(bot.policy, lang) }),
+    [bot, lang],
   )
 
   /**
@@ -279,13 +448,13 @@ export function ExportPanel({ view, bot, onClose }: ExportPanelProps) {
       <div className="xy-ex-card" role="dialog" aria-modal="true" aria-labelledby="xy-ex-title">
         <header className="xy-ex-head">
           <h2 id="xy-ex-title" className="xy-ex-title">
-            匯出對局紀錄
+            {s.panelTitle}
           </h2>
           <div className="muted small xy-ex-sub">
-            <code>{view.id}</code> · 第 {view.ply} 手 ·{' '}
-            {result === null ? '進行中' : resultText(result)}
+            <code>{view.id}</code> · {fill(s.plyLabel, { ply: view.ply })} ·{' '}
+            {result === null ? s.inProgress : resultText(result, lang)}
           </div>
-          <button type="button" className="xy-ex-close" onClick={onClose} aria-label="關閉">
+          <button type="button" className="xy-ex-close" onClick={onClose} aria-label={s.close}>
             ✕
           </button>
         </header>
@@ -294,28 +463,28 @@ export function ExportPanel({ view, bot, onClose }: ExportPanelProps) {
           {/* ---- headline numbers, readable without parsing the blob ---- */}
           <section className="xy-ex-stats-wrap">
             <div className="xy-ex-stats-head">
-              <span>統計摘要</span>
+              <span>{s.statsSummary}</span>
               {/* the score row below already carries 貼目 — say so once, here */}
               <span className="muted small">
-                {colorLabel('black')}貼目 +{formatScore(view.config.komi)} 已計入比分
+                {fill(s.komiApplied, {
+                  color: colorLabel('black', lang),
+                  score: formatScore(view.config.komi),
+                })}
               </span>
             </div>
             {stats.error !== null ? (
-              <p className="error small">統計無法產生：{stats.error}</p>
+              <p className="error small">{fill(s.statsError, { message: stats.error })}</p>
             ) : stats.value === null ? (
-              <p className="muted small">尚無統計。</p>
+              <p className="muted small">{s.noStats}</p>
             ) : (
-              <StatsTable stats={stats.value} />
+              <StatsTable stats={stats.value} lang={lang} />
             )}
-            <p className="muted small xy-ex-note">
-              以上為公開紀錄的統計（發生過幾次接觸、幾次同歸於盡…），不是推論輔助。
-              同歸於盡不分辨同階與爆裂物，兩者公告完全相同。
-            </p>
+            <p className="muted small xy-ex-note">{s.statsNote}</p>
           </section>
 
           {/* ---- format toggle + actions ---- */}
           <div className="xy-ex-bar">
-            <div className="xy-ex-toggle" role="group" aria-label="匯出格式">
+            <div className="xy-ex-toggle" role="group" aria-label={s.exportFormatLabel}>
               <button
                 type="button"
                 className={format === 'markdown' ? 'xy-ex-tab xy-ex-tab-on' : 'xy-ex-tab'}
@@ -336,26 +505,24 @@ export function ExportPanel({ view, bot, onClose }: ExportPanelProps) {
 
             <div className="xy-ex-actions">
               <button type="button" className="primary" onClick={onCopy} disabled={text === ''}>
-                複製
+                {s.copy}
               </button>
               <button type="button" onClick={selectAll} disabled={text === ''}>
-                全選
+                {s.selectAll}
               </button>
               <button type="button" onClick={onDownload} disabled={text === ''}>
-                下載 {filename}
+                {fill(s.download, { filename })}
               </button>
               <span className="xy-ex-copied" role="status" aria-live="polite">
-                {copy.kind === 'done' && <span className="xy-ex-ok">已複製</span>}
-                {copy.kind === 'manual' && (
-                  <span className="xy-ex-manual">已全選 — 請按 Ctrl/Cmd + C</span>
-                )}
+                {copy.kind === 'done' && <span className="xy-ex-ok">{s.copied}</span>}
+                {copy.kind === 'manual' && <span className="xy-ex-manual">{s.manualCopy}</span>}
               </span>
             </div>
           </div>
 
           {/* ---- the blob ---- */}
           {rendered.error !== null && (
-            <p className="error small">紀錄無法產生：{rendered.error}</p>
+            <p className="error small">{fill(s.recordError, { message: rendered.error })}</p>
           )}
           <textarea
             ref={areaRef}
@@ -364,16 +531,14 @@ export function ExportPanel({ view, bot, onClose }: ExportPanelProps) {
             spellCheck={false}
             wrap="off"
             value={text}
-            aria-label="對局紀錄"
+            aria-label={s.recordAriaLabel}
           />
 
           <p className="muted small xy-ex-foot">
-            {lineCount} 行 · {text.length} 字元 · {filename}
+            {fill(s.footerCounts, { lines: lineCount, chars: text.length, filename })}
             <br />
-            內容僅來自此視角已可見的資訊（規則書 §10）
-            {result !== null
-              ? '。對局已結束，全部兵種公開，故此為完整棋譜。'
-              : '：未翻明的敵方兵種不在其中，系統亦不附任何推測。對局結束後匯出即為完整棋譜。'}
+            {s.footerScopeBase}
+            {result !== null ? s.footerScopeOver : s.footerScopeOngoing}
           </p>
         </div>
       </div>
@@ -390,7 +555,8 @@ export function ExportPanel({ view, bot, onClose }: ExportPanelProps) {
  * detail behind these totals is in the exported record itself, which is the
  * point of the blob.
  */
-function StatsTable({ stats }: { stats: GameStats }) {
+function StatsTable({ stats, lang }: { stats: GameStats; lang: Lang }) {
+  const s = STR[lang]
   const w = stats.sides.white
   const b = stats.sides.black
   const outcomes = OUTCOME_KINDS.filter((kind) => stats.contactsByOutcome[kind] > 0)
@@ -400,26 +566,26 @@ function StatsTable({ stats }: { stats: GameStats }) {
       <thead>
         <tr>
           <th scope="col" />
-          <th scope="col">白方</th>
-          <th scope="col">黑方</th>
+          <th scope="col">{s.colWhite}</th>
+          <th scope="col">{s.colBlack}</th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <th scope="row">手數</th>
+          <th scope="row">{s.rowPlies}</th>
           <td colSpan={2}>{stats.pliesPlayed}</td>
         </tr>
         <tr>
-          <th scope="row">接觸次數</th>
+          <th scope="row">{s.rowContacts}</th>
           <td colSpan={2}>{stats.contacts}</td>
         </tr>
         <tr>
-          <th scope="row">接觸結果</th>
+          <th scope="row">{s.rowContactResults}</th>
           <td colSpan={2}>
             {outcomes.length === 0
               ? '—'
               : outcomes
-                  .map((kind) => `${OUTCOME_SHORT[kind]} ${stats.contactsByOutcome[kind]}`)
+                  .map((kind) => `${OUTCOME_SHORT[lang][kind]} ${stats.contactsByOutcome[kind]}`)
                   .join(' · ')}
           </td>
         </tr>
@@ -428,7 +594,7 @@ function StatsTable({ stats }: { stats: GameStats }) {
             can no longer exclude them, so this figure runs higher and must not
             be read against the old ~18% expectation. */}
         <tr>
-          <th scope="row">同歸於盡／接觸</th>
+          <th scope="row">{s.rowMutualPerContact}</th>
           <td colSpan={2}>
             {fractionText(
               stats.mutualDestruction.mutual,
@@ -438,12 +604,12 @@ function StatsTable({ stats }: { stats: GameStats }) {
           </td>
         </tr>
         <tr>
-          <th scope="row">比分（含貼目）</th>
+          <th scope="row">{s.rowScore}</th>
           <td>{num(w.score)}</td>
           <td>{num(b.score)}</td>
         </tr>
         <tr>
-          <th scope="row">結算得分</th>
+          <th scope="row">{s.rowEarned}</th>
           <td>{num(w.earned)}</td>
           <td>{num(b.earned)}</td>
         </tr>
@@ -452,7 +618,7 @@ function StatsTable({ stats }: { stats: GameStats }) {
             只是這裡不展開①②兩個原始數字——面板本來就只留標題數字，細節在下面
             的匯出文字裡。分母為 0（尚未得分）時 fractionText 印出 —，不是 0%。 */}
         <tr>
-          <th scope="row">① 吃子得分佔比</th>
+          <th scope="row">{s.rowCaptureShare}</th>
           <td>
             {fractionText(w.earnedFromCaptures, w.earned, w.earned > 0 ? w.earnedFromCaptures / w.earned : null)}
           </td>
@@ -465,35 +631,35 @@ function StatsTable({ stats }: { stats: GameStats }) {
             half the plies, so it runs at about half the mean below; the two are
             different measurements, not the same one twice. */}
         <tr>
-          <th scope="row">每手得分</th>
+          <th scope="row">{s.rowPointsPerPly}</th>
           <td>{num(w.pointsPerPly)}</td>
           <td>{num(b.pointsPerPly)}</td>
         </tr>
         <tr>
-          <th scope="row">每次結算平均佔格</th>
+          <th scope="row">{s.rowEarnedPerSettlement}</th>
           <td>{num(w.earnedPerSettlement)}</td>
           <td>{num(b.earnedPerSettlement)}</td>
         </tr>
         <tr>
-          <th scope="row">最高同時佔格</th>
-          <td>{peakText(w.peakSquaresHeld)}</td>
-          <td>{peakText(b.peakSquaresHeld)}</td>
+          <th scope="row">{s.rowPeakSquares}</th>
+          <td>{peakText(w.peakSquaresHeld, lang)}</td>
+          <td>{peakText(b.peakSquaresHeld, lang)}</td>
         </tr>
         {/* Own 結算, not plies: §7 settles after every ply but credits only the
             mover, so every opponent ply is a structural zero for this side and
             counting them would bury a real drought under an artefact. */}
         <tr>
-          <th scope="row">零分結算</th>
+          <th scope="row">{s.rowZeroSettlements}</th>
           <td>{fractionText(w.zeroSettlements, w.settlements, zeroRate(w))}</td>
           <td>{fractionText(b.zeroSettlements, b.settlements, zeroRate(b))}</td>
         </tr>
         <tr>
-          <th scope="row">最長零分連續（自身結算）</th>
-          <td>{runText(w.longestZeroRun)}</td>
-          <td>{runText(b.longestZeroRun)}</td>
+          <th scope="row">{s.rowLongestZeroRun}</th>
+          <td>{runText(w.longestZeroRun, lang)}</td>
+          <td>{runText(b.longestZeroRun, lang)}</td>
         </tr>
         <tr>
-          <th scope="row">落點在計分格的手數</th>
+          <th scope="row">{s.rowObjectiveMoves}</th>
           <td>
             {fractionText(w.objectiveMoves.count, w.objectiveMoves.total, w.objectiveMoves.ratio)}
           </td>
@@ -502,28 +668,28 @@ function StatsTable({ stats }: { stats: GameStats }) {
           </td>
         </tr>
         <tr>
-          <th scope="row">動過的棋子數</th>
+          <th scope="row">{s.rowDistinctPieces}</th>
           <td>{w.distinctPiecesMoved}</td>
           <td>{b.distinctPiecesMoved}</td>
         </tr>
         <tr>
-          <th scope="row">單子連續移動最長</th>
-          <td>{runText(w.longestSinglePieceRun)}</td>
-          <td>{runText(b.longestSinglePieceRun)}</td>
+          <th scope="row">{s.rowLongestSingleRun}</th>
+          <td>{runText(w.longestSinglePieceRun, lang)}</td>
+          <td>{runText(b.longestSinglePieceRun, lang)}</td>
         </tr>
         {/* TWO bomb rows, and the top one is a FLOOR. 同歸於盡 announces nothing,
             so a 爆裂物 that worked never appears in the log at all; only 有煙無傷
             still names one. The true count exists only at 終局, where §10.5 has
             already opened every 兵種 to every viewer. */}
         <tr>
-          <th scope="row">爆裂物已知損失（僅有煙無傷）</th>
-          <td title={plyListText(w.bombsLost.knownPlies)}>{w.bombsLost.known}</td>
-          <td title={plyListText(b.bombsLost.knownPlies)}>{b.bombsLost.known}</td>
+          <th scope="row">{s.rowBombsKnown}</th>
+          <td title={plyListText(w.bombsLost.knownPlies, lang)}>{w.bombsLost.known}</td>
+          <td title={plyListText(b.bombsLost.knownPlies, lang)}>{b.bombsLost.known}</td>
         </tr>
         <tr>
-          <th scope="row">爆裂物實際損失（終局才可得）</th>
-          <td>{bombsActualText(w.bombsLost.actual)}</td>
-          <td>{bombsActualText(b.bombsLost.actual)}</td>
+          <th scope="row">{s.rowBombsActual}</th>
+          <td>{bombsActualText(w.bombsLost.actual, lang)}</td>
+          <td>{bombsActualText(b.bombsLost.actual, lang)}</td>
         </tr>
       </tbody>
     </table>
@@ -531,8 +697,9 @@ function StatsTable({ stats }: { stats: GameStats }) {
 }
 
 /** Tooltip for a bomb count: which plies announced one. All 有煙無傷. */
-function plyListText(plies: readonly number[]): string | undefined {
-  return plies.length === 0 ? undefined : `第 ${plies.join('、')} 手`
+function plyListText(plies: readonly number[], lang: Lang): string | undefined {
+  if (plies.length === 0) return undefined
+  return fill(STR[lang].plyListPrefix, { plies: plies.join(lang === 'zh' ? '、' : ', ') })
 }
 
 /**
@@ -540,8 +707,8 @@ function plyListText(plies: readonly number[]): string | undefined {
  * a count of zero are different claims, and printing the second for the first
  * would say the side still holds every bomb it started with.
  */
-function bombsActualText(actual: number | null): string {
-  return actual === null ? '終局後才可得' : String(actual)
+function bombsActualText(actual: number | null, lang: Lang): string {
+  return actual === null ? STR[lang].bombsActualPending : String(actual)
 }
 
 /** Share of a side's OWN 結算 that credited nothing; null when it never settled. */

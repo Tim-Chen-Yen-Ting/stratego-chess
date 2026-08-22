@@ -11,6 +11,7 @@ import {
   distributionTotal,
 } from '@xiyang/rules'
 import type { Carrier, Color, GameConfig, Rank, RankDistribution, Square } from '@xiyang/rules'
+import type { Lang, Strings } from './i18n.js'
 
 /**
  * Display data for the client — labels and glyphs, nothing else.
@@ -22,6 +23,11 @@ import type { Carrier, Color, GameConfig, Rank, RankDistribution, Square } from 
  * anyone tuned it, and the setup screen would then offer a pool that
  * `validateAssignment` rejects. Re-exporting a constant is not "implementing
  * rules" (techspec §7) — no legality, combat or scoring decision happens here.
+ *
+ * Every DISPLAY table below is `Strings<K>` (packages/web/src/i18n.ts) — data
+ * and its two-language label are kept as separate concerns: `SCORING_AREAS`
+ * carries what actually scores, `SCORING_AREA_LABEL` carries what to call it,
+ * and nothing here should ever pick a language for the caller.
  */
 
 export { CENTER_SQUARES, DISTRIBUTION, PIECES_PER_SIDE, checkDistribution, distributionTotal }
@@ -78,12 +84,11 @@ export type ScoringAreaId = 'center' | 'wide'
  * mechanism in §10.2). 附錄 B lists X as 中央四格 40, 側翼八格 待定, so
  * `DEFAULT_CONFIG.scoreTarget` is the CENTRE area's number and the wide area has
  * none yet; near 80 would match the length. Create.tsx says this in words under
- * the 目標分數 X field — if that ever moves back into data, it is a per-area
+ * the score-target field — if that ever moves back into data, it is a per-area
  * DEFAULT for the creator to override, never a silent multiplier.
  */
 export interface ScoringAreaPreset {
   id: ScoringAreaId
-  label: string
   squares: readonly Square[]
 }
 
@@ -93,14 +98,17 @@ export const SCORING_AREA_IDS: readonly ScoringAreaId[] = ['center', 'wide']
 export const SCORING_AREAS: Record<ScoringAreaId, ScoringAreaPreset> = {
   center: {
     id: 'center',
-    label: '中央四格',
     squares: scoringSquaresOf(DEFAULT_CONFIG),
   },
   wide: {
     id: 'wide',
-    label: '中央＋側翼八格',
     squares: SCORING_WIDE_8,
   },
+}
+
+export const SCORING_AREA_LABEL: Strings<ScoringAreaId> = {
+  zh: { center: '中央四格', wide: '中央＋側翼八格' },
+  en: { center: 'Centre 4', wide: 'Centre + flanks (8)' },
 }
 
 /**
@@ -137,21 +145,36 @@ export const RANKS_IN_ORDER: readonly Rank[] = [
   'bomb',
 ]
 
-export const RANK_LABEL: Record<Rank, string> = {
-  commander: '司令',
-  general: '軍長',
-  division: '師長',
-  brigade: '旅長',
-  regiment: '團長',
-  battalion: '營長',
-  company: '連長',
-  platoon: '排長',
-  engineer: '工兵',
-  flag: '軍旗',
-  bomb: '爆裂物',
+export const RANK_LABEL: Strings<Rank> = {
+  zh: {
+    commander: '司令',
+    general: '軍長',
+    division: '師長',
+    brigade: '旅長',
+    regiment: '團長',
+    battalion: '營長',
+    company: '連長',
+    platoon: '排長',
+    engineer: '工兵',
+    flag: '軍旗',
+    bomb: '爆裂物',
+  },
+  en: {
+    commander: 'Commander',
+    general: 'General',
+    division: 'Division',
+    brigade: 'Brigade',
+    regiment: 'Regiment',
+    battalion: 'Battalion',
+    company: 'Company',
+    platoon: 'Platoon',
+    engineer: 'Engineer',
+    flag: 'Flag',
+    bomb: 'Bomb',
+  },
 }
 
-/** Shown next to the label so the pecking order is readable at a glance. */
+/** Shown next to the label so the pecking order is readable at a glance. Not translated — it's numerals and a symbol. */
 export const RANK_NUMBER_LABEL: Record<Rank, string> = {
   commander: '1',
   general: '2',
@@ -211,13 +234,6 @@ export type DistributionId = 'standard' | 'scouts' | 'top-heavy'
 
 export interface DistributionPreset {
   id: DistributionId
-  label: string
-  /** WHAT it is — the one-phrase difference from the §2 table. */
-  what: string
-  /** WHAT IT IS FOR — the reason a playtester would pick it. */
-  why: string
-  /** The honest small print: what picking it costs, and that it is untested. */
-  note: string
   counts: RankDistribution
 }
 
@@ -225,9 +241,9 @@ export interface DistributionPreset {
 export const DISTRIBUTION_IDS: readonly DistributionId[] = ['standard', 'scouts', 'top-heavy']
 
 /**
- * The numbers are the rules package's; only the prose is local. Both variants
- * are 【猜測】 in the notebook, not findings, and the copy says so — a player who
- * picks one is running an experiment and should know it.
+ * The counts are the rules package's; only the text below is local. Both
+ * variants are 【猜測】 in the notebook, not findings, and the copy says so — a
+ * player who picks one is running an experiment and should know it.
  *
  * 合計 16 is not assumed here. The rules package proves each preset sums to 16
  * before this module finishes loading (a bad table throws on import), and the
@@ -236,29 +252,61 @@ export const DISTRIBUTION_IDS: readonly DistributionId[] = ['standard', 'scouts'
  * playable, and a preset can be retuned in a package this one only imports.
  */
 export const DISTRIBUTIONS: Record<DistributionId, DistributionPreset> = {
-  standard: {
-    id: 'standard',
-    label: '標準',
-    what: '規則書 §2 的原表',
-    why: '對照組。四局實測都在這張表上打完，變體的每個數字只有跟它比才有意義。',
-    note: '沒有要測什麼就用這個。',
-    counts: DISTRIBUTION_STANDARD,
+  standard: { id: 'standard', counts: DISTRIBUTION_STANDARD },
+  scouts: { id: 'scouts', counts: DISTRIBUTION_SCOUTS },
+  'top-heavy': { id: 'top-heavy', counts: DISTRIBUTION_TOP_HEAVY },
+}
+
+export interface DistributionText {
+  label: string
+  /** WHAT it is — the one-phrase difference from the §2 table. */
+  what: string
+  /** WHAT IT IS FOR — the reason a playtester would pick it. */
+  why: string
+  /** The honest small print: what picking it costs, and that it is untested. */
+  note: string
+}
+
+export const DISTRIBUTION_TEXT: Record<Lang, Record<DistributionId, DistributionText>> = {
+  zh: {
+    standard: {
+      label: '標準',
+      what: '規則書 §2 的原表',
+      why: '對照組。四局實測都在這張表上打完，變體的每個數字只有跟它比才有意義。',
+      note: '沒有要測什麼就用這個。',
+    },
+    scouts: {
+      label: '偵察兵',
+      what: '工兵4，挪用一團長一營長',
+      why: '為了讓「有煙無傷」真的發生——四局零次。工兵只有在多於對手的爆裂物時才值得花掉：工兵的數量就是你能安全試探的次數。',
+      note: '筆記 §4.5，未實測。代價：工兵4＋軍旗1＝五顆基本上打不了的棋，且有煙無傷的候選從 3 個變 5 個，軍旗更難獵殺。',
+    },
+    'top-heavy': {
+      label: '高階雙份',
+      what: '雙份移到多半留守的高階',
+      why: '為了讓真正互撞的中階變成單份，減少昂貴的等價交換——同階雙亡有利於分數領先方，而被迫製造它的是落後方。',
+      note: '筆記 §4.4，未實測。高階不再唯一，同階雙亡因此可能發生在更貴的棋上。',
+    },
   },
-  scouts: {
-    id: 'scouts',
-    label: '偵察兵',
-    what: '工兵4，挪用一團長一營長',
-    why: '為了讓「有煙無傷」真的發生——四局零次。工兵只有在多於對手的爆裂物時才值得花掉：工兵的數量就是你能安全試探的次數。',
-    note: '筆記 §4.5，未實測。代價：工兵4＋軍旗1＝五顆基本上打不了的棋，且有煙無傷的候選從 3 個變 5 個，軍旗更難獵殺。',
-    counts: DISTRIBUTION_SCOUTS,
-  },
-  'top-heavy': {
-    id: 'top-heavy',
-    label: '高階雙份',
-    what: '雙份移到多半留守的高階',
-    why: '為了讓真正互撞的中階變成單份，減少昂貴的等價交換——同階雙亡有利於分數領先方，而被迫製造它的是落後方。',
-    note: '筆記 §4.4，未實測。高階不再唯一，同階雙亡因此可能發生在更貴的棋上。',
-    counts: DISTRIBUTION_TOP_HEAVY,
+  en: {
+    standard: {
+      label: 'Standard',
+      what: 'The gamebook §2 table, unmodified',
+      why: 'The control group. All four measured games were played on this table — every variant number only means something compared against it.',
+      note: 'Use this unless you specifically want to test something.',
+    },
+    scouts: {
+      label: 'Scouts',
+      what: '4 engineers, taken from one regiment and one battalion',
+      why: 'Meant to actually make 有煙無傷 (fizzle) happen — zero occurrences across four recorded games. An engineer is only worth spending when you have more of them than the opponent has bombs: your engineer count is literally how many safe probes you get.',
+      note: 'Notebook §4.5, untested. Cost: 4 engineers + 1 flag is five pieces that basically can’t fight, and the fizzle survivor pool grows from 3 candidates to 5 — the flag gets harder to hunt, but also harder to defend by elimination.',
+    },
+    'top-heavy': {
+      label: 'Top-heavy',
+      what: 'The doubled ranks moved up to ranks that mostly stay home',
+      why: 'Meant to turn the ranks that actually collide into singles, cutting down on expensive equal-rank trades — a trade favours whoever’s already ahead on points, and it’s the trailing side that gets forced into making one.',
+      note: 'Notebook §4.4, untested. High ranks are no longer unique, so an equal-rank trade can now happen on a more expensive piece.',
+    },
   },
 }
 
@@ -279,9 +327,9 @@ export function matchDistribution(distribution: RankDistribution): DistributionI
 }
 
 /** Name for a table in running text. A game may be configured off-preset. */
-export function distributionName(distribution: RankDistribution): string {
+export function distributionName(distribution: RankDistribution, lang: Lang): string {
   const id = matchDistribution(distribution)
-  return id === null ? '自訂' : DISTRIBUTIONS[id].label
+  return id === null ? (lang === 'zh' ? '自訂' : 'Custom') : DISTRIBUTION_TEXT[lang][id].label
 }
 
 /** The ranks whose count differs from the §2 table, in display order. */
@@ -295,16 +343,12 @@ export function distributionDiff(
   })
 }
 
-export const CARRIER_LABEL: Record<Carrier, string> = {
-  pawn: '兵 pawn',
-  knight: '馬 knight',
-  bishop: '象 bishop',
-  rook: '車 rook',
-  queen: '后 queen',
-  king: '王 king',
+export const CARRIER_LABEL: Strings<Carrier> = {
+  zh: { pawn: '兵 pawn', knight: '馬 knight', bishop: '象 bishop', rook: '車 rook', queen: '后 queen', king: '王 king' },
+  en: { pawn: 'pawn', knight: 'knight', bishop: 'bishop', rook: 'rook', queen: 'queen', king: 'king' },
 }
 
-/** Solid Unicode chess glyphs for both colours; colour comes from CSS. */
+/** Solid Unicode chess glyphs for both colours; colour comes from CSS. Not translated — glyphs. */
 export const CARRIER_GLYPH: Record<Carrier, string> = {
   king: '♚',
   queen: '♛',
@@ -314,9 +358,9 @@ export const CARRIER_GLYPH: Record<Carrier, string> = {
   pawn: '♟',
 }
 
-export const COLOR_LABEL: Record<Color, string> = {
-  white: '白',
-  black: '黑',
+export const COLOR_LABEL: Strings<Color> = {
+  zh: { white: '白', black: '黑' },
+  en: { white: 'White', black: 'Black' },
 }
 
 export const PROMOTION_CHOICES: readonly Exclude<Carrier, 'pawn' | 'king'>[] = [

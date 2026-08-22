@@ -1,6 +1,7 @@
 import { io, type Socket } from 'socket.io-client'
 import type { Color, Move, PieceId, Rank, ViewerState } from '@xiyang/rules'
 import { other } from './format.js'
+import { getCurrentLang, type Lang } from './i18n.js'
 
 /**
  * Client transport (techspec §5). The socket carries exactly four outbound
@@ -52,9 +53,13 @@ export function connectGame(token: string, handlers: GameSocketHandlers): GameSo
     handlers.onOpen()
   })
   socket.on('disconnect', () => handlers.onClose())
-  socket.on('connect_error', (err: Error) => handlers.onError(err.message || '連線失敗'))
+  socket.on('connect_error', (err: Error) =>
+    handlers.onError(err.message || (getCurrentLang() === 'zh' ? '連線失敗' : 'Connection failed')),
+  )
   socket.on('state', (s) => handlers.onState(s))
-  socket.on('error', (e) => handlers.onError(e?.message ?? '未知錯誤'))
+  socket.on('error', (e) =>
+    handlers.onError(e?.message ?? (getCurrentLang() === 'zh' ? '未知錯誤' : 'Unknown error')),
+  )
 
   return socket
 }
@@ -84,10 +89,10 @@ export function connectGame(token: string, handlers: GameSocketHandlers): GameSo
 export interface BotPolicyInfo {
   /** the policy key the server understands */
   id: string
-  /** 中文 name shown in the picker */
-  label: string
-  /** one line: what this opponent actually does */
-  line: string
+  /** name shown in the picker, both languages */
+  label: Record<Lang, string>
+  /** one line: what this opponent actually does, both languages */
+  line: Record<Lang, string>
 }
 
 /**
@@ -104,23 +109,35 @@ export interface BotPolicyInfo {
 export const BOT_POLICIES: readonly BotPolicyInfo[] = [
   {
     id: 'belief',
-    label: '推測',
-    line: '真正的對手：它從公開資訊（翻明、接觸結果、事件紀錄——跟你手上的線索同一份）推測你每顆棋子可能是什麼兵種，再把每次吃子換算成分數，划算才打；自我對局中對「爭奪」勝率約七成。弱點是只看眼前這一手：看不到你的回手，也不會注意誰正沿著空線衝向它的軍旗。',
+    label: { zh: '推測', en: 'Belief' },
+    line: {
+      zh: '真正的對手：它從公開資訊（翻明、接觸結果、事件紀錄——跟你手上的線索同一份）推測你每顆棋子可能是什麼兵種，再把每次吃子換算成分數，划算才打；自我對局中對「爭奪」勝率約七成。弱點是只看眼前這一手：看不到你的回手，也不會注意誰正沿著空線衝向它的軍旗。',
+      en: 'The real opponent: it infers what each of your pieces might be from public information alone (reveals, contact results, the event log — the same clues you have), converts every potential capture into an expected point value, and only fights when it pays off; wins roughly 70% against `contest` in self-play. Its weakness is looking only one move ahead — it doesn’t see your reply, and it won’t notice something closing in on its flag down an open line.',
+    },
   },
   {
     id: 'contest',
-    label: '爭奪',
-    line: '先佔沒人站的計分格；沒有空格可佔時，就直接撞上對手正踩著的那一格。中央四格很快就沒有空位，所以它真的會跟你打——但它不知道自己在撞什麼，不估勝算也不估損失。這是用來量「棋盤有多逼人動手」的儀器，不是對手。',
+    label: { zh: '爭奪', en: 'Contest' },
+    line: {
+      zh: '先佔沒人站的計分格；沒有空格可佔時，就直接撞上對手正踩著的那一格。中央四格很快就沒有空位，所以它真的會跟你打——但它不知道自己在撞什麼，不估勝算也不估損失。這是用來量「棋盤有多逼人動手」的儀器，不是對手。',
+      en: 'Takes any unclaimed scoring square first; once there are none left, walks straight into whichever one the opponent is already standing on. The centre 4 board fills up fast, so it genuinely does fight you — but it has no idea what it’s hitting, and never estimates the odds or the cost. A measuring instrument for how much a board forces contact, not an opponent.',
+    },
   },
   {
     id: 'greedy',
-    label: '佔點',
-    line: '只走能多佔一格計分格的著法：從不主動吃子，也絕不移動軍旗。你去撞它，它不會還手。這是純收租速率的對照組——量測儀器，不是對手。',
+    label: { zh: '佔點', en: 'Greedy' },
+    line: {
+      zh: '只走能多佔一格計分格的著法：從不主動吃子，也絕不移動軍旗。你去撞它，它不會還手。這是純收租速率的對照組——量測儀器，不是對手。',
+      en: 'Only ever plays moves that gain another scoring square: never attacks, never moves its own flag. Walk into it and it won’t fight back. A pure control group for income rate — a measuring instrument, not an opponent.',
+    },
   },
   {
     id: 'random',
-    label: '亂走',
-    line: '在合法著法裡均勻亂選。基準線：用來知道「什麼都不會」能拿幾分，好讀懂其他數字。拿來練棋沒有意義。',
+    label: { zh: '亂走', en: 'Random' },
+    line: {
+      zh: '在合法著法裡均勻亂選。基準線：用來知道「什麼都不會」能拿幾分，好讀懂其他數字。拿來練棋沒有意義。',
+      en: 'Picks uniformly among legal moves. The baseline — what "knowing nothing at all" scores, so the other numbers have something to be read against. Not useful for practice.',
+    },
   },
 ]
 
@@ -130,11 +147,11 @@ export function botPolicyInfo(id: string): BotPolicyInfo | undefined {
   return BOT_POLICIES.find((p) => p.id === id)
 }
 
-/** 「推測（belief）」, or the bare id when this build does not know the name. */
-export function botPolicyLabel(id: string): string {
-  if (id === '') return '機器人'
+/** "推測（belief）" / "Belief (belief)", or the bare id when this build does not know the name. */
+export function botPolicyLabel(id: string, lang: Lang): string {
+  if (id === '') return lang === 'zh' ? '機器人' : 'Bot'
   const info = botPolicyInfo(id)
-  return info === undefined ? id : `${info.label}（${info.id}）`
+  return info === undefined ? id : `${info.label[lang]}（${info.id}）`
 }
 
 /**

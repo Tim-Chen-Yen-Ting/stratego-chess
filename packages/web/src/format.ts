@@ -1,5 +1,6 @@
 import type { Carrier, CombatOutcome, Color, GameEvent, Move, Result, Square } from '@xiyang/rules'
 import { CARRIER_LABEL, COLOR_LABEL, RANK_LABEL } from './constants.js'
+import type { Lang } from './i18n.js'
 
 /**
  * Pure presentation helpers. Coordinate arithmetic only — nothing here decides
@@ -7,6 +8,12 @@ import { CARRIER_LABEL, COLOR_LABEL, RANK_LABEL } from './constants.js'
  * the public announcement the server already put in the event (gamebook §4
  * 翻明總表); no inference is performed and no candidate set is ever computed
  * (gamebook §10 — 紀錄給，解算不給).
+ *
+ * Every function below takes `lang` explicitly rather than reading it from
+ * context — these are pure functions called from render code and from
+ * `EventLine`/log-building code that isn't itself a component, so there's no
+ * hook to reach for; the caller already has `lang` from `useLang()` and passes
+ * it down like any other rendering input.
  */
 
 const FILES = 'abcdefgh'
@@ -33,8 +40,15 @@ export function other(color: Color): Color {
   return color === 'white' ? 'black' : 'white'
 }
 
-export function colorLabel(color: Color): string {
-  return `${COLOR_LABEL[color]}方`
+const SIDE_SUFFIX: Record<Lang, string> = { zh: '方', en: '' }
+
+export function colorLabel(color: Color, lang: Lang): string {
+  return `${COLOR_LABEL[lang][color]}${SIDE_SUFFIX[lang]}`
+}
+
+const CASTLE_TEXT: Record<Lang, { pass: string; kingside: string; queenside: string }> = {
+  zh: { pass: 'pass（跳過）', kingside: 'O-O（王翼易位）', queenside: 'O-O-O（后翼易位）' },
+  en: { pass: 'pass', kingside: 'O-O (kingside castle)', queenside: 'O-O-O (queenside castle)' },
 }
 
 /**
@@ -45,34 +59,54 @@ export function colorLabel(color: Color): string {
  *   promotion the engine correctly denied. Seen live: a 司令 pawn tying against
  *   the enemy 司令 on d1 logged as `e2×d1＝后` with both pieces gone.
  */
-export function moveText(move: Move, madeContact: boolean, promoted?: Carrier): string {
+export function moveText(move: Move, madeContact: boolean, lang: Lang, promoted?: Carrier): string {
   switch (move.kind) {
     case 'pass':
-      return 'pass（跳過）'
+      return CASTLE_TEXT[lang].pass
     case 'castle':
-      return move.side === 'king' ? 'O-O（王翼易位）' : 'O-O-O（后翼易位）'
+      return move.side === 'king' ? CASTLE_TEXT[lang].kingside : CASTLE_TEXT[lang].queenside
     case 'move': {
       const sep = madeContact ? '×' : '–'
-      const promo = promoted ? `＝${CARRIER_LABEL[promoted].split(' ')[0]}` : ''
+      const promo = promoted ? `＝${CARRIER_LABEL[lang][promoted].split(' ')[0]}` : ''
       return `${squareName(move.from)}${sep}${squareName(move.to)}${promo}`
     }
   }
 }
 
+const COMBAT_TEXT = {
+  zh: {
+    attackerWins: (attacker: string, rank: string) =>
+      `攻方（${attacker}）獲勝，永久翻明為 ${rank}；守方移除，兵種不公開`,
+    defenderWins: (defender: string, rank: string) =>
+      `守方（${defender}）獲勝，永久翻明為 ${rank}；攻方由原格移除，兵種不公開`,
+    // The sentence has to spell the ambiguity out. A player who reads this as
+    // the old 同階雙亡 concludes the other piece shared their own 階級 — the
+    // exact false inference the single announcement exists to prevent.
+    mutual: '雙方同時移除 — 可能是同階雙亡，也可能是爆裂物；兩者的公告完全相同，無從分辨。雙方兵種皆不公開',
+    fizzle: (survivor: string) => `有煙無傷 — ${survivor}該子為 工兵 或 軍旗；爆裂物移除`,
+  },
+  en: {
+    attackerWins: (attacker: string, rank: string) =>
+      `Attacker (${attacker}) wins, permanently revealed as ${rank}; defender removed, its rank stays secret`,
+    defenderWins: (defender: string, rank: string) =>
+      `Defender (${defender}) wins, permanently revealed as ${rank}; attacker removed from its own square, its rank stays secret`,
+    mutual: 'Both pieces removed simultaneously — could be an equal-rank tie or a bomb; the two announcements are identical and can’t be told apart. Neither rank is disclosed.',
+    fizzle: (survivor: string) => `Fizzle (no harm, no foul) — ${survivor}’s piece was an Engineer or the Flag; the bomb is gone`,
+  },
+} as const
+
 /** Restates the public announcement carried in the event. No inference. */
-export function combatText(outcome: CombatOutcome, attacker: Color): string {
+export function combatText(outcome: CombatOutcome, attacker: Color, lang: Lang): string {
+  const T = COMBAT_TEXT[lang]
   switch (outcome.kind) {
     case 'attacker-wins':
-      return `攻方（${colorLabel(attacker)}）獲勝，永久翻明為 ${RANK_LABEL[outcome.winnerRank]}；守方移除，兵種不公開`
+      return T.attackerWins(colorLabel(attacker, lang), RANK_LABEL[lang][outcome.winnerRank])
     case 'defender-wins':
-      return `守方（${colorLabel(other(attacker))}）獲勝，永久翻明為 ${RANK_LABEL[outcome.winnerRank]}；攻方由原格移除，兵種不公開`
+      return T.defenderWins(colorLabel(other(attacker), lang), RANK_LABEL[lang][outcome.winnerRank])
     case 'mutual-destruction':
-      // The sentence has to spell the ambiguity out. A player who reads this as
-      // the old 同階雙亡 concludes the other piece shared their own 階級 — the
-      // exact false inference the single announcement exists to prevent.
-      return '雙方同時移除 — 可能是同階雙亡，也可能是爆裂物；兩者的公告完全相同，無從分辨。雙方兵種皆不公開'
+      return T.mutual
     case 'fizzle':
-      return `有煙無傷 — ${colorLabel(outcome.survivorColor)}該子為 工兵 或 軍旗；爆裂物移除`
+      return T.fizzle(colorLabel(outcome.survivorColor, lang))
   }
 }
 
@@ -103,15 +137,14 @@ export interface CombatTags {
   target: string | null
 }
 
-const EITHER = '工兵/軍旗'
-const BOMB = RANK_LABEL.bomb
-
-export function combatTags(outcome: CombatOutcome, mover: Color): CombatTags {
+export function combatTags(outcome: CombatOutcome, mover: Color, lang: Lang): CombatTags {
+  const either = lang === 'zh' ? '工兵/軍旗' : 'Engineer/Flag'
+  const bomb = RANK_LABEL[lang].bomb
   switch (outcome.kind) {
     case 'attacker-wins':
-      return { mover: RANK_LABEL[outcome.winnerRank], target: null }
+      return { mover: RANK_LABEL[lang][outcome.winnerRank], target: null }
     case 'defender-wins':
-      return { mover: null, target: RANK_LABEL[outcome.winnerRank] }
+      return { mover: null, target: RANK_LABEL[lang][outcome.winnerRank] }
     case 'mutual-destruction':
       // 同階雙亡 and 爆裂物 now share one announcement that names neither side.
       // Tagging is positional, so any tag here would name one of the two pieces
@@ -121,8 +154,8 @@ export function combatTags(outcome: CombatOutcome, mover: Color): CombatTags {
       // the dead piece was necessarily a bomb; the survivor is narrowed to two,
       // and deliberately no further — that ambiguity is the point (附錄 A(a))
       return outcome.survivorColor === mover
-        ? { mover: EITHER, target: BOMB }
-        : { mover: BOMB, target: EITHER }
+        ? { mover: either, target: bomb }
+        : { mover: bomb, target: either }
   }
 }
 
@@ -141,36 +174,48 @@ export interface EventLine {
   score: string
 }
 
-export function eventLine(ev: GameEvent): EventLine {
+const PROMOTED_TEXT: Record<Lang, (carrier: string) => string> = {
+  zh: (carrier) => `升變為 ${carrier}`,
+  en: (carrier) => `promoted to ${carrier}`,
+}
+
+export function eventLine(ev: GameEvent, lang: Lang): EventLine {
   const contact = ev.combat != null
   return {
     ply: ev.ply,
     color: ev.color,
-    move: moveText(ev.move, contact, ev.promoted),
-    combat: ev.combat ? combatText(ev.combat.outcome, ev.color) : null,
-    tags: ev.combat ? combatTags(ev.combat.outcome, ev.color) : { mover: null, target: null },
+    move: moveText(ev.move, contact, lang, ev.promoted),
+    combat: ev.combat ? combatText(ev.combat.outcome, ev.color, lang) : null,
+    tags: ev.combat ? combatTags(ev.combat.outcome, ev.color, lang) : { mover: null, target: null },
     enPassant:
       ev.combat != null && ev.move.kind === 'move' && ev.combat.defenderSquare !== ev.move.to,
-    promoted: ev.promoted ? `升變為 ${CARRIER_LABEL[ev.promoted].split(' ')[0]}` : null,
+    promoted: ev.promoted ? PROMOTED_TEXT[lang](CARRIER_LABEL[lang][ev.promoted].split(' ')[0]!) : null,
     score: `${ev.scoreAfter.white} – ${ev.scoreAfter.black}`,
   }
 }
 
-export function resultText(result: Result): string {
-  switch (result.kind) {
-    case 'flag':
-      return `奪旗 — ${colorLabel(result.winner)}獲勝（對方軍旗離場）`
-    case 'flag-both':
-      return '雙方軍旗同時離場 — 和局'
-    case 'score':
-      return `達到分數線 — ${colorLabel(result.winner)}獲勝`
-    case 'no-progress':
-      return `停滯回合用盡 — 分數高者 ${colorLabel(result.winner)}獲勝`
-    case 'timeout':
-      return `超時 — ${colorLabel(result.winner)}獲勝`
-    case 'resign':
-      return `認輸 — ${colorLabel(result.winner)}獲勝`
-  }
+const RESULT_TEXT: Record<Lang, Record<Result['kind'], (winner: string) => string>> = {
+  zh: {
+    flag: (w) => `奪旗 — ${w}獲勝（對方軍旗離場）`,
+    'flag-both': () => '雙方軍旗同時離場 — 和局',
+    score: (w) => `達到分數線 — ${w}獲勝`,
+    'no-progress': (w) => `停滯回合用盡 — 分數高者 ${w}獲勝`,
+    timeout: (w) => `超時 — ${w}獲勝`,
+    resign: (w) => `認輸 — ${w}獲勝`,
+  },
+  en: {
+    flag: (w) => `Flag captured — ${w} wins (the other side's flag left the board)`,
+    'flag-both': () => 'Both flags left the board simultaneously — draw',
+    score: (w) => `Score target reached — ${w} wins`,
+    'no-progress': (w) => `No-progress limit reached — ${w} wins on points`,
+    timeout: (w) => `Timeout — ${w} wins`,
+    resign: (w) => `Resignation — ${w} wins`,
+  },
+}
+
+export function resultText(result: Result, lang: Lang): string {
+  const T = RESULT_TEXT[lang][result.kind]
+  return result.kind === 'flag-both' ? T('') : T(colorLabel(result.winner, lang))
 }
 
 export function formatClock(ms: number): string {

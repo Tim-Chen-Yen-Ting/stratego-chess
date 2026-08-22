@@ -1,4 +1,71 @@
 import { useEffect, useState } from 'react'
+import { fill, useLang, type Strings } from '../i18n.js'
+
+const STR = {
+  zh: {
+    toneSafe: '對局中可安全轉發',
+    toneDanger: '雙方全部兵種 — 只給你自己',
+    tonePrivate: '含該方全部兵種',
+    copied: '已複製',
+    copy: '複製',
+    dialogLabel: '分享連結',
+    title: '分享這局',
+    close: '關閉',
+    fetchError: '取不到連結：{{error}}',
+    loading: '載入中…',
+    publicLabel: '公開觀戰連結',
+    publicHint: '棋盤、公開紀錄、已翻明的兵種與比分。任何一方的隱藏兵種都不會送出，不只是不顯示。給誰都可以。',
+    publicLlmLabel: '公開觀戰連結（LLM 純文字版）',
+    publicLlmHint: '同一個視角，改成純文字。可以貼給聊天機器人當旁觀者或講評。',
+    omniscientLabel: '全知者視角（只有你拿得到）',
+    omniscientHint:
+      '雙方的全部兵種，即時。你身為建立者本來就同時持有兩個座位的連結，所以這條沒有給你任何新東西——但它對任何其他人來說就是整局的答案。給對手等於直接結束遊戲。',
+    spectatorLabel: '綁定觀戰連結（你的視角）',
+    spectatorHint: '與你看到的完全相同——包含你的全部兵種。只給你願意攤牌的人；對局進行中不要給第三者。',
+  },
+  en: {
+    toneSafe: 'Safe to forward mid-game',
+    toneDanger: "Both sides' full ranks — for you only",
+    tonePrivate: "Includes that side's full ranks",
+    copied: 'Copied',
+    copy: 'Copy',
+    dialogLabel: 'Share links',
+    title: 'Share this game',
+    close: 'Close',
+    fetchError: "Couldn't fetch links: {{error}}",
+    loading: 'Loading…',
+    publicLabel: 'Public spectator link',
+    publicHint:
+      "The board, the public record, ranks already revealed, and the score. Neither side's hidden ranks are ever sent, not just hidden. Safe to give to anyone.",
+    publicLlmLabel: 'Public spectator link (LLM plain-text)',
+    publicLlmHint: 'The same view, as plain text. Paste it to a chatbot as a spectator or commentator.',
+    omniscientLabel: 'Omniscient view (for you only)',
+    omniscientHint:
+      "Both sides' full ranks, live. As the creator you already hold both seats' links, so this gives you nothing new — but to anyone else it's the answer to the whole game. Giving it to your opponent ends the game outright.",
+    spectatorLabel: 'Bound spectator link (your view)',
+    spectatorHint:
+      "Exactly what you see — including all of your own ranks. Only give it to someone you're willing to show your hand to; don't hand it to a third party mid-game.",
+  },
+} satisfies Strings<
+  | 'toneSafe'
+  | 'toneDanger'
+  | 'tonePrivate'
+  | 'copied'
+  | 'copy'
+  | 'dialogLabel'
+  | 'title'
+  | 'close'
+  | 'fetchError'
+  | 'loading'
+  | 'publicLabel'
+  | 'publicHint'
+  | 'publicLlmLabel'
+  | 'publicLlmHint'
+  | 'omniscientLabel'
+  | 'omniscientHint'
+  | 'spectatorLabel'
+  | 'spectatorHint'
+>
 
 /**
  * The share links, available from inside the game.
@@ -44,6 +111,8 @@ function Row(props: {
   url: string
   tone: 'safe' | 'private' | 'danger'
 }) {
+  const { lang } = useLang()
+  const s = STR[lang]
   const [copied, setCopied] = useState(false)
   const url = localise(props.url)
 
@@ -63,18 +132,14 @@ function Row(props: {
       <div className="xy-share-head">
         <strong>{props.label}</strong>
         <span className={`xy-share-pill xy-share-pill-${props.tone}`}>
-          {props.tone === 'safe'
-            ? '對局中可安全轉發'
-            : props.tone === 'danger'
-              ? '雙方全部兵種 — 只給你自己'
-              : '含該方全部兵種'}
+          {props.tone === 'safe' ? s.toneSafe : props.tone === 'danger' ? s.toneDanger : s.tonePrivate}
         </span>
       </div>
       <p className="xy-share-hint">{props.hint}</p>
       <div className="xy-share-url">
         <input readOnly value={url} onFocus={(e) => e.currentTarget.select()} />
         <button type="button" onClick={() => void copy()}>
-          {copied ? '已複製' : '複製'}
+          {copied ? s.copied : s.copy}
         </button>
       </div>
     </div>
@@ -82,6 +147,8 @@ function Row(props: {
 }
 
 export function SharePanel({ token, onClose }: SharePanelProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   const [links, setLinks] = useState<LinksResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -106,51 +173,31 @@ export function SharePanel({ token, onClose }: SharePanelProps) {
         className="xy-share"
         role="dialog"
         aria-modal="true"
-        aria-label="分享連結"
+        aria-label={s.dialogLabel}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="xy-share-top">
-          <h2>分享這局</h2>
-          <button type="button" onClick={onClose} aria-label="關閉">✕</button>
+          <h2>{s.title}</h2>
+          <button type="button" onClick={onClose} aria-label={s.close}>✕</button>
         </div>
 
-        {error !== null && <p className="xy-share-err">取不到連結：{error}</p>}
-        {error === null && links === null && <p className="xy-share-hint">載入中…</p>}
+        {error !== null && <p className="xy-share-err">{fill(s.fetchError, { error })}</p>}
+        {error === null && links === null && <p className="xy-share-hint">{s.loading}</p>}
 
         {links?.publicUrl !== undefined && (
-          <Row
-            tone="safe"
-            label="公開觀戰連結"
-            hint="棋盤、公開紀錄、已翻明的兵種與比分。任何一方的隱藏兵種都不會送出，不只是不顯示。給誰都可以。"
-            url={links.publicUrl}
-          />
+          <Row tone="safe" label={s.publicLabel} hint={s.publicHint} url={links.publicUrl} />
         )}
 
         {links?.publicLlmUrl != null && (
-          <Row
-            tone="safe"
-            label="公開觀戰連結（LLM 純文字版）"
-            hint="同一個視角，改成純文字。可以貼給聊天機器人當旁觀者或講評。"
-            url={links.publicLlmUrl}
-          />
+          <Row tone="safe" label={s.publicLlmLabel} hint={s.publicLlmHint} url={links.publicLlmUrl} />
         )}
 
         {links?.omniscientUrl != null && (
-          <Row
-            tone="danger"
-            label="全知者視角（只有你拿得到）"
-            hint="雙方的全部兵種，即時。你身為建立者本來就同時持有兩個座位的連結，所以這條沒有給你任何新東西——但它對任何其他人來說就是整局的答案。給對手等於直接結束遊戲。"
-            url={links.omniscientUrl}
-          />
+          <Row tone="danger" label={s.omniscientLabel} hint={s.omniscientHint} url={links.omniscientUrl} />
         )}
 
         {links?.spectatorUrl != null && (
-          <Row
-            tone="private"
-            label="綁定觀戰連結（你的視角）"
-            hint="與你看到的完全相同——包含你的全部兵種。只給你願意攤牌的人；對局進行中不要給第三者。"
-            url={links.spectatorUrl}
-          />
+          <Row tone="private" label={s.spectatorLabel} hint={s.spectatorHint} url={links.spectatorUrl} />
         )}
       </div>
 

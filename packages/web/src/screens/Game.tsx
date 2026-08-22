@@ -12,7 +12,6 @@ import { RankTable } from '../components/RankTable.js'
 import { ReplayBar, type Perspective } from '../components/ReplayBar.js'
 import {
   CARRIER_LABEL,
-  COLOR_LABEL,
   PROMOTION_CHOICES,
   RANK_LABEL,
 } from '../constants.js'
@@ -28,6 +27,7 @@ import {
   useStore,
   viewerColor,
 } from '../store.js'
+import { useLang, fill, type Lang, type Strings } from '../i18n.js'
 
 /**
  * Game screen (techspec §7).
@@ -105,7 +105,179 @@ interface PendingPromotion {
   options: BoardMove[]
 }
 
+const STR = {
+  zh: {
+    resignConfirm: '確定認輸？此動作不可回復。',
+    hintPublicPlaying: '輪到{{color}}行動 — 你在觀看，不參與。',
+    hintWatchOnly: '觀看視角，僅供觀看。',
+    hintWatchColor: '觀戰視角（綁定{{color}}），僅供觀看。',
+    hintSelectPiece: '點一顆有亮框的棋子，再點目標格。',
+    hintSelected: '已選 {{square}} — 點目標格，或再點一次取消。',
+    hintWaitingOpponent: '等待對手行動…',
+    plyTotal: '共 {{n}} 手',
+    plyCurrent: '第 {{n}} 手',
+    gameOver: '對局結束',
+    turnLabel: '輪到{{color}}{{you}}',
+    youSuffix: '（你）',
+    scoreLine: '分數線 {{target}} · 黑方貼目 +{{komi}} · 停滯 {{cur}}/{{max}} 回合',
+    captureScoreTitle:
+      '決定性勝負時，勝方得 k ×（勝方階級數字）；階級 司令 1 … 軍旗 10，越弱得分越高（規則書 §7.3）',
+    captureScoreSuffix: ' · 吃子 k {{k}}',
+    fizzleTitle: '有煙無傷時存活方得的固定額，與存活者是工兵或軍旗無關；同歸於盡雙方皆零分（規則書 §7.3）',
+    fizzleSuffix: ' · 有煙無傷 +{{n}}',
+    botChipTitle: '機器人只收到自己視角的盤面（規則書 §10），與你拿到的是同一種資料',
+    botOpponentPrefix: '對手：',
+    botLabel: '機器人',
+    botColorSuffix: '（{{color}}）',
+    publicTitle: '公開觀戰視角 — 你沒有陣營',
+    publicOverPre: '對局已結束。依規則書 §10「終局公開全部兵種」，雙方的兵種現在對所有人公開，這個視角一併看到。對局進行中它只有',
+    publicOverStrong: '雙方共同知道',
+    publicOverPost: '的部分——棋盤與載體、公開事件紀錄、已翻明的兵種、比分與時鐘——所以當時轉發這條連結不會洩漏任何一方的軍容。',
+    publicLivePre: '這個畫面只有',
+    publicLiveStrong: '雙方共同知道',
+    publicLivePost:
+      '的東西：棋盤與載體、公開事件紀錄、已翻明的兵種、已離場的棋子、比分與時鐘。未翻明的兵種一個也沒有，兩方都沒有——不是收到了不顯示，是伺服器根本沒送（規則書 §10）。所以這裡不能落子、不能跳過、不能認輸，也沒有「你的棋子」可看；你手上這條連結不含任何一方的軍容，轉發出去也不會洩漏誰是什麼。終局時雙方兵種全部公開，這個視角會一起看到。',
+    overReplayNote: '棋盤已切換為回放 — 見下方的回放列',
+    promoteLabel: '升變為：',
+    cancelLabel: '取消',
+    shareLink: '分享／觀戰連結',
+    passForcedTitle: '無合法移動，強制 pass — 給予增秒（§8）',
+    passVoluntaryTitle: '主動 pass 永遠合法，但不給增秒（§8）',
+    passForcedLabel: '跳過（無合法移動）',
+    passLabel: '跳過（pass）',
+    castleTitle: '無條件易位：雙方皆未動過且中間無子即可（規則書 §3②）',
+    castleKingside: 'O-O 王翼易位',
+    castleQueenside: 'O-O-O 后翼易位',
+    resignLabel: '認輸',
+    botThinking: '機器人思考中…',
+    pencilHelp:
+      '右鍵或長按敵方棋子可寫下猜測（未選取自己棋子時，左鍵點擊亦可）。已離場的棋子在「已離場棋子」面板按「標記」即可標。一顆棋子可標多個兵種；系統不驗證、不推論。',
+    revealedBoth: '已翻明的兵種（雙方）',
+    revealedEnemy: '已翻明的敵方兵種',
+    revealedNone: '尚無。',
+    revealedReplayNote: '這是回放位置當下已經翻明的兵種（§4.3）——不是終局的全貌。棋盤上其餘的兵種是否顯示，由上方的視角決定。',
+    revealedPublicNote: '本遊戲不提供推論輔助；未翻明的兵種不在這個視角的資料裡，請自行由公開紀錄推得（規則書 §10）。',
+    revealedLiveNote: '本遊戲不提供推論輔助；其餘敵方兵種請自行由公開紀錄推得（規則書 §10）。',
+    thisMove: '本手',
+    clockUnlimited: '無限',
+  },
+  en: {
+    resignConfirm: 'Resign the game? This cannot be undone.',
+    hintPublicPlaying: "{{color}} to move — you're watching, not playing.",
+    hintWatchOnly: 'Spectator view — for watching only.',
+    hintWatchColor: 'Spectator view (bound to {{color}}) — for watching only.',
+    hintSelectPiece: 'Click one of your highlighted pieces, then click a destination square.',
+    hintSelected: '{{square}} selected — click a destination, or click it again to cancel.',
+    hintWaitingOpponent: 'Waiting for opponent…',
+    plyTotal: '{{n}} plies total',
+    plyCurrent: 'Ply {{n}}',
+    gameOver: 'Game over',
+    turnLabel: '{{color}} to move{{you}}',
+    youSuffix: ' (you)',
+    scoreLine: 'Score target {{target}} · Black komi +{{komi}} · No-progress {{cur}}/{{max}} turns',
+    captureScoreTitle:
+      "On a decisive result, the winner scores k × (winner's rank number); ranks run Commander 1 … Flag 10, so a weaker piece scores more (gamebook §7.3)",
+    captureScoreSuffix: ' · Capture k {{k}}',
+    fizzleTitle:
+      "A flat bonus paid to the survivor on a fizzle, regardless of whether the survivor is the Engineer or the Flag; a mutual destruction pays zero to both sides (gamebook §7.3)",
+    fizzleSuffix: ' · Fizzle +{{n}}',
+    botChipTitle: 'The bot receives only its own redacted view (gamebook §10) — the same kind of payload you get',
+    botOpponentPrefix: 'Opponent: ',
+    botLabel: 'Bot',
+    botColorSuffix: ' ({{color}})',
+    publicTitle: 'Public spectator view — you have no side',
+    publicOverPre:
+      'The game has ended. Under gamebook §10 ("every rank is revealed at game end"), both sides’ ranks are now public to everyone, and this view sees them too. While the game was in progress, it held only what ',
+    publicOverStrong: 'both sides already knew in common',
+    publicOverPost:
+      '— the board and carriers, the public event log, revealed ranks, the score, and the clocks — so forwarding this link at the time would not have leaked either side’s army.',
+    publicLivePre: 'This screen holds only what ',
+    publicLiveStrong: 'both sides already know in common',
+    publicLivePost:
+      ': the board and carriers, the public event log, revealed ranks, captured pieces, the score, and the clocks. Not one unrevealed rank is here, for either side — not withheld from display, simply never sent by the server at all (gamebook §10). So there’s no moving, no passing, no resigning here, and no "your pieces" to look at; the link in your hand carries neither side’s army, and forwarding it leaks nothing about who is what. When the game ends, both sides’ ranks become fully public, and this view will see them too.',
+    overReplayNote: 'The board has switched to replay — see the replay bar below',
+    promoteLabel: 'Promote to:',
+    cancelLabel: 'Cancel',
+    shareLink: 'Share / spectate link',
+    passForcedTitle: 'No legal move; pass is forced — grants an increment (§8)',
+    passVoluntaryTitle: 'A voluntary pass is always legal, but grants no increment (§8)',
+    passForcedLabel: 'Pass (no legal move)',
+    passLabel: 'Pass',
+    castleTitle: 'Unconditional castling: legal once both pieces are unmoved and nothing sits between them (gamebook §3②)',
+    castleKingside: 'O-O kingside castle',
+    castleQueenside: 'O-O-O queenside castle',
+    resignLabel: 'Resign',
+    botThinking: 'Bot is thinking…',
+    pencilHelp:
+      "Right-click or long-press an enemy piece to write down a guess (a left click works too, as long as none of your own pieces is selected). For a piece that's already left the board, use the \"Mark\" button in the captured-pieces panel. One piece can carry multiple rank guesses; the system neither checks nor infers anything.",
+    revealedBoth: 'Revealed ranks (both sides)',
+    revealedEnemy: "Revealed enemy ranks",
+    revealedNone: 'None yet.',
+    revealedReplayNote:
+      "This is what had been revealed (§4.3) as of this replay position — not the full picture at game end. Whether the rest of the board's ranks are shown is decided by the perspective toggle above.",
+    revealedPublicNote:
+      "This game offers no deduction assistance; ranks that haven't been revealed simply aren't in this view's data — work them out yourself from the public record (gamebook §10).",
+    revealedLiveNote:
+      "This game offers no deduction assistance; work out the rest of the enemy's ranks yourself from the public record (gamebook §10).",
+    thisMove: 'This move',
+    clockUnlimited: 'Unlimited',
+  },
+} satisfies Strings<
+  | 'resignConfirm'
+  | 'hintPublicPlaying'
+  | 'hintWatchOnly'
+  | 'hintWatchColor'
+  | 'hintSelectPiece'
+  | 'hintSelected'
+  | 'hintWaitingOpponent'
+  | 'plyTotal'
+  | 'plyCurrent'
+  | 'gameOver'
+  | 'turnLabel'
+  | 'youSuffix'
+  | 'scoreLine'
+  | 'captureScoreTitle'
+  | 'captureScoreSuffix'
+  | 'fizzleTitle'
+  | 'fizzleSuffix'
+  | 'botChipTitle'
+  | 'botOpponentPrefix'
+  | 'botLabel'
+  | 'botColorSuffix'
+  | 'publicTitle'
+  | 'publicOverPre'
+  | 'publicOverStrong'
+  | 'publicOverPost'
+  | 'publicLivePre'
+  | 'publicLiveStrong'
+  | 'publicLivePost'
+  | 'overReplayNote'
+  | 'promoteLabel'
+  | 'cancelLabel'
+  | 'shareLink'
+  | 'passForcedTitle'
+  | 'passVoluntaryTitle'
+  | 'passForcedLabel'
+  | 'passLabel'
+  | 'castleTitle'
+  | 'castleKingside'
+  | 'castleQueenside'
+  | 'resignLabel'
+  | 'botThinking'
+  | 'pencilHelp'
+  | 'revealedBoth'
+  | 'revealedEnemy'
+  | 'revealedNone'
+  | 'revealedReplayNote'
+  | 'revealedPublicNote'
+  | 'revealedLiveNote'
+  | 'thisMove'
+  | 'clockUnlimited'
+>
+
 export function Game({ view }: GameProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   const [shareOpen, setShareOpen] = useState(false)
   const shareToken = useStore((st) => st.token)
   const sendMove = useStore((s) => s.sendMove)
@@ -540,7 +712,7 @@ export function Game({ view }: GameProps) {
   }
 
   function onResign() {
-    if (window.confirm('確定認輸？此動作不可回復。')) sendResign()
+    if (window.confirm(s.resignConfirm)) sendResign()
   }
 
   /**
@@ -597,20 +769,20 @@ export function Game({ view }: GameProps) {
     // Over: the replay bar directly above this line is now the answer to「what
     // can I do」, at length. A second sentence here would only compete with it.
     if (replaying) return ''
-    if (publicView) return playing ? `輪到${colorLabel(view.toMove)}行動 — 你在觀看，不參與。` : ''
+    if (publicView) return playing ? fill(s.hintPublicPlaying, { color: colorLabel(view.toMove, lang) }) : ''
     // a 綁定觀戰者 always has a colour; anything else read-only and colourless
     // says so plainly rather than printing an empty bracket
     if (!seated) {
-      return me === null ? '觀看視角，僅供觀看。' : `觀戰視角（綁定${colorLabel(me)}），僅供觀看。`
+      return me === null ? s.hintWatchOnly : fill(s.hintWatchColor, { color: colorLabel(me, lang) })
     }
     if (myTurn) {
       return selected === null
-        ? '點一顆有亮框的棋子，再點目標格。'
-        : `已選 ${squareName(selected)} — 點目標格，或再點一次取消。`
+        ? s.hintSelectPiece
+        : fill(s.hintSelected, { square: squareName(selected) })
     }
     if (!playing) return ''
     // the bot's turn already has a line of its own directly above this one
-    return botThinking ? '' : '等待對手行動…'
+    return botThinking ? '' : s.hintWaitingOpponent
   }
 
   const hint = hintText()
@@ -650,14 +822,18 @@ export function Game({ view }: GameProps) {
             {/* The game's own length once it is over — 「第 87 手」 beside a
                 board parked on ply 10 reads as a contradiction, and the ply the
                 board IS showing is the replay bar's job to say. */}
-            {replaying ? `共 ${view.log.length} 手` : `第 ${view.ply} 手`} ·{' '}
+            {replaying ? fill(s.plyTotal, { n: view.log.length }) : fill(s.plyCurrent, { n: view.ply })} ·{' '}
             {view.status.kind === 'over'
-              ? '對局結束'
-              : `輪到${colorLabel(view.toMove)}${myTurn ? '（你）' : ''}`}
+              ? s.gameOver
+              : fill(s.turnLabel, { color: colorLabel(view.toMove, lang), you: myTurn ? s.youSuffix : '' })}
           </div>
           <div className="muted small">
-            分數線 {view.config.scoreTarget} · 黑方貼目 +{formatScore(view.config.komi)} · 停滯{' '}
-            {shownView.noProgressTurns}/{view.config.noProgressTurns} 回合
+            {fill(s.scoreLine, {
+              target: view.config.scoreTarget,
+              komi: formatScore(view.config.komi),
+              cur: shownView.noProgressTurns,
+              max: view.config.noProgressTurns,
+            })}
             {/*
              * 吃子得分 (§7.3), and ONLY when this game actually pays it. Both
              * ship at 0 (附錄 B: 待定), and a permanent 「吃子 k 0」 on the
@@ -666,29 +842,26 @@ export function Game({ view }: GameProps) {
              * itself — `{n && …}` would print a bare 0 for the default.
              */}
             {view.config.captureScoreK > 0 && (
-              <span title="決定性勝負時，勝方得 k ×（勝方階級數字）；階級 司令 1 … 軍旗 10，越弱得分越高（規則書 §7.3）">
-                {' '}
-                · 吃子 k {view.config.captureScoreK}
+              <span title={s.captureScoreTitle}>
+                {fill(s.captureScoreSuffix, { k: view.config.captureScoreK })}
               </span>
             )}
             {view.config.fizzleBonus > 0 && (
-              <span title="有煙無傷時存活方得的固定額，與存活者是工兵或軍旗無關；同歸於盡雙方皆零分（規則書 §7.3）">
-                {' '}
-                · 有煙無傷 +{view.config.fizzleBonus}
-              </span>
+              <span title={s.fizzleTitle}>{fill(s.fizzleSuffix, { n: view.config.fizzleBonus })}</span>
             )}
           </div>
           {/* who is across the table. Says it once, permanently, so the
               thinking indicator below reads as an opponent and not a stall */}
           {bot !== null && (
-            <div className="xy-bot-chip" title="機器人只收到自己視角的盤面（規則書 §10），與你拿到的是同一種資料">
+            <div className="xy-bot-chip" title={s.botChipTitle}>
               <span className="xy-bot-mark" aria-hidden="true">
                 ⌬
               </span>
               <span>
-                {seated ? '對手：' : ''}機器人
-                {botColor === null ? '' : `（${colorLabel(botColor)}）`} ·{' '}
-                {botPolicyLabel(bot.policy)}
+                {seated ? s.botOpponentPrefix : ''}
+                {s.botLabel}
+                {botColor === null ? '' : fill(s.botColorSuffix, { color: colorLabel(botColor, lang) })} ·{' '}
+                {botPolicyLabel(bot.policy, lang)}
               </span>
             </div>
           )}
@@ -703,7 +876,7 @@ export function Game({ view }: GameProps) {
        */}
       {publicView && (
         <div className="banner xy-public">
-          <div className="xy-public-title">公開觀戰視角 — 你沒有陣營</div>
+          <div className="xy-public-title">{s.publicTitle}</div>
           {/*
            * Two truths, because 終局公開全部兵種 (§10.5) changes what this view
            * holds. Saying「未翻明的兵種一個也沒有」over a finished game, whose
@@ -713,15 +886,15 @@ export function Game({ view }: GameProps) {
           <p className="xy-public-body">
             {view.status.kind === 'over' ? (
               <>
-                對局已結束。依規則書 §10「終局公開全部兵種」，雙方的兵種現在對所有人公開，這個視角一併看到。
-                對局進行中它只有<strong>雙方共同知道</strong>的部分——棋盤與載體、公開事件紀錄、已翻明的兵種、比分與時鐘——所以當時轉發這條連結不會洩漏任何一方的軍容。
+                {s.publicOverPre}
+                <strong>{s.publicOverStrong}</strong>
+                {s.publicOverPost}
               </>
             ) : (
               <>
-                這個畫面只有<strong>雙方共同知道</strong>的東西：棋盤與載體、公開事件紀錄、已翻明的兵種、已離場的棋子、比分與時鐘。
-                未翻明的兵種一個也沒有，兩方都沒有——不是收到了不顯示，是伺服器根本沒送（規則書 §10）。
-                所以這裡不能落子、不能跳過、不能認輸，也沒有「你的棋子」可看；你手上這條連結不含任何一方的軍容，轉發出去也不會洩漏誰是什麼。
-                終局時雙方兵種全部公開，這個視角會一起看到。
+                {s.publicLivePre}
+                <strong>{s.publicLiveStrong}</strong>
+                {s.publicLivePost}
               </>
             )}
           </p>
@@ -731,11 +904,11 @@ export function Game({ view }: GameProps) {
       {view.status.kind === 'over' && (
         <div className="banner xy-over">
           <span>
-            {resultText(view.status.result)}
+            {resultText(view.status.result, lang)}
             {/* Said at the top too, not only on the bar itself. This banner is
                 where the eye goes the moment a game ends, and「the board stopped
                 responding」is the wrong conclusion to let anyone reach. */}
-            {replaying && <span className="xy-over-replay">棋盤已切換為回放 — 見下方的回放列</span>}
+            {replaying && <span className="xy-over-replay">{s.overReplayNote}</span>}
           </span>
           {/* the moment the record is actually wanted — put it in the banner */}
           <ExportButton onClick={openExport} prominent />
@@ -804,18 +977,18 @@ export function Game({ view }: GameProps) {
               `onSquareClick` can never enter it (see `seatedBoardProps`) */}
           {promotion && (
             <div className="promotion">
-              <span>升變為：</span>
+              <span>{s.promoteLabel}</span>
               {PROMOTION_CHOICES.map((carrier) => {
                 const move = promotion.options.find((m) => m.promote === carrier)
                 if (!move) return null
                 return (
                   <button type="button" key={carrier} onClick={() => play(move)}>
-                    {CARRIER_LABEL[carrier]}
+                    {CARRIER_LABEL[lang][carrier]}
                   </button>
                 )
               })}
               <button type="button" onClick={() => setPromotion(null)}>
-                取消
+                {s.cancelLabel}
               </button>
             </div>
           )}
@@ -825,7 +998,7 @@ export function Game({ view }: GameProps) {
                 are inside your own game that screen is gone, and with it the
                 only way to hand someone the public-watch link. */}
             {shareToken !== null && (
-              <button type="button" onClick={() => setShareOpen(true)}>分享／觀戰連結</button>
+              <button type="button" onClick={() => setShareOpen(true)}>{s.shareLink}</button>
             )}
             {/*
              * A seat's controls, and only a seat gets them. Rendering them
@@ -841,13 +1014,9 @@ export function Game({ view }: GameProps) {
                   type="button"
                   disabled={!myTurn || passMove === undefined}
                   onClick={() => passMove && play(passMove)}
-                  title={
-                    forcedPass
-                      ? '無合法移動，強制 pass — 給予增秒（§8）'
-                      : '主動 pass 永遠合法，但不給增秒（§8）'
-                  }
+                  title={forcedPass ? s.passForcedTitle : s.passVoluntaryTitle}
                 >
-                  {forcedPass ? '跳過（無合法移動）' : '跳過（pass）'}
+                  {forcedPass ? s.passForcedLabel : s.passLabel}
                 </button>
                 {castleMoves.map((m) => (
                   <button
@@ -855,9 +1024,9 @@ export function Game({ view }: GameProps) {
                     key={m.side}
                     disabled={!myTurn}
                     onClick={() => play(m)}
-                    title="無條件易位：雙方皆未動過且中間無子即可（規則書 §3②）"
+                    title={s.castleTitle}
                   >
-                    {m.side === 'king' ? 'O-O 王翼易位' : 'O-O-O 后翼易位'}
+                    {m.side === 'king' ? s.castleKingside : s.castleQueenside}
                   </button>
                 ))}
               </>
@@ -873,7 +1042,7 @@ export function Game({ view }: GameProps) {
                 disabled={!seated || view.status.kind === 'over'}
                 onClick={onResign}
               >
-                認輸
+                {s.resignLabel}
               </button>
             )}
           </div>
@@ -897,7 +1066,7 @@ export function Game({ view }: GameProps) {
                 <i />
                 <i />
               </span>
-              <span>機器人思考中…</span>
+              <span>{s.botThinking}</span>
             </div>
           )}
 
@@ -913,9 +1082,7 @@ export function Game({ view }: GameProps) {
            * §10.5 has already opened every 兵種.
            */}
           {me !== null && !replaying && (
-            <p className="muted small">
-              右鍵或長按敵方棋子可寫下猜測（未選取自己棋子時，左鍵點擊亦可）。已離場的棋子在「已離場棋子」面板按「標記」即可標。一顆棋子可標多個兵種；系統不驗證、不推論。
-            </p>
+            <p className="muted small">{s.pencilHelp}</p>
           )}
         </div>
 
@@ -941,9 +1108,9 @@ export function Game({ view }: GameProps) {
             {/* `shownMe === null` is the same question `publicView` used to ask
                 here — no colour means no enemy, so the list is both sides —
                 and it answers it for the 全知 replay as well. */}
-            <h2>{shownMe === null ? '已翻明的兵種（雙方）' : '已翻明的敵方兵種'}</h2>
+            <h2>{shownMe === null ? s.revealedBoth : s.revealedEnemy}</h2>
             {revealedRanks.length === 0 ? (
-              <p className="muted small">尚無。</p>
+              <p className="muted small">{s.revealedNone}</p>
             ) : (
               <ul className="revealed-list">
                 {revealedRanks.map((p) => (
@@ -951,19 +1118,19 @@ export function Game({ view }: GameProps) {
                     <code>{p.square !== null ? squareName(p.square) : '—'}</code>{' '}
                     {/* with both colours in one list, whose piece it is has to be
                         on the row — it is public either way (§4.3) */}
-                    {shownMe === null && <span className="muted">{COLOR_LABEL[p.color]}方</span>}{' '}
-                    <span className="muted">{carrierShort(p.carrier)}</span>{' '}
-                    <strong>{p.rank ? RANK_LABEL[p.rank] : ''}</strong>
+                    {shownMe === null && <span className="muted">{colorLabel(p.color, lang)}</span>}{' '}
+                    <span className="muted">{carrierShort(p.carrier, lang)}</span>{' '}
+                    <strong>{p.rank ? RANK_LABEL[lang][p.rank] : ''}</strong>
                   </li>
                 ))}
               </ul>
             )}
             <p className="muted small">
               {replaying
-                ? '這是回放位置當下已經翻明的兵種（§4.3）——不是終局的全貌。棋盤上其餘的兵種是否顯示，由上方的視角決定。'
+                ? s.revealedReplayNote
                 : publicView
-                  ? '本遊戲不提供推論輔助；未翻明的兵種不在這個視角的資料裡，請自行由公開紀錄推得（規則書 §10）。'
-                  : '本遊戲不提供推論輔助；其餘敵方兵種請自行由公開紀錄推得（規則書 §10）。'}
+                  ? s.revealedPublicNote
+                  : s.revealedLiveNote}
             </p>
           </section>
 
@@ -1000,8 +1167,8 @@ export function Game({ view }: GameProps) {
   )
 }
 
-function carrierShort(carrier: Carrier): string {
-  return CARRIER_LABEL[carrier].split(' ')[0]
+function carrierShort(carrier: Carrier, lang: Lang): string {
+  return CARRIER_LABEL[lang][carrier].split(' ')[0]
 }
 
 interface SidePanelProps {
@@ -1033,20 +1200,22 @@ function SidePanel({
   income,
   justMoved = false,
 }: SidePanelProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   return (
     <div className={`side side-${color}${toMove ? ' side-active' : ''}`}>
       <div className="side-name">
-        {COLOR_LABEL[color]}方{isMe ? '（你）' : ''}
-        {justMoved && <span className="xy-moved">本手</span>}
+        {colorLabel(color, lang)}{isMe ? s.youSuffix : ''}
+        {justMoved && <span className="xy-moved">{s.thisMove}</span>}
       </div>
       <div className="side-score">{formatScore(score)}</div>
       {income !== undefined && (
         <div className={income ? 'xy-income xy-income-paid' : 'xy-income'}>
-          本手 {income === null ? '—' : `+${formatScore(income)}`}
+          {s.thisMove} {income === null ? '—' : `+${formatScore(income)}`}
         </div>
       )}
       <div className={clockMs < 30_000 && clockEnabled ? 'clock urgent' : 'clock'}>
-        {clockEnabled ? formatClock(clockMs) : '無限'}
+        {clockEnabled ? formatClock(clockMs) : s.clockUnlimited}
       </div>
     </div>
   )

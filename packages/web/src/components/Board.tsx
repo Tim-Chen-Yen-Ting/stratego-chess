@@ -4,12 +4,60 @@ import type { Color, PieceId, Rank, Square, ViewerPiece } from '@xiyang/rules'
 import {
   CARRIER_GLYPH,
   CARRIER_LABEL,
+  COLOR_LABEL,
   RANKS_IN_ORDER,
   RANK_LABEL,
   scoringSquaresOf,
 } from '../constants.js'
 import { isDarkSquare, squareName } from '../format.js'
 import { useStore } from '../store.js'
+import { fill, useLang, type Lang, type Strings } from '../i18n.js'
+
+const STR = {
+  zh: {
+    board: '棋盤',
+    roleContact: '本手接觸格',
+    roleFrom: '本手起點',
+    roleTo: '本手終點',
+    revealed: '（已翻明）',
+    myMarkNotFact: '我的標記，非事實',
+    unassigned: ' 未指派',
+    markMenuLabel: '{{square}} 的標記',
+    closeMarkMenu: '關閉標記選單',
+    close: '關閉',
+    clear: '清除',
+    pencilHint: '自己的猜測，系統不驗證、不推論',
+  },
+  en: {
+    board: 'Board',
+    roleContact: 'contact square this ply',
+    roleFrom: 'starting square this ply',
+    roleTo: 'destination square this ply',
+    revealed: ' (revealed)',
+    myMarkNotFact: 'my own guess, not a fact',
+    unassigned: ' unassigned',
+    markMenuLabel: 'Marks for {{square}}',
+    closeMarkMenu: 'Close marks menu',
+    close: 'Close',
+    clear: 'Clear',
+    pencilHint: 'Your own guesses only — the system never checks or infers them.',
+  },
+} satisfies Strings<
+  | 'board'
+  | 'roleContact'
+  | 'roleFrom'
+  | 'roleTo'
+  | 'revealed'
+  | 'myMarkNotFact'
+  | 'unassigned'
+  | 'markMenuLabel'
+  | 'closeMarkMenu'
+  | 'close'
+  | 'clear'
+  | 'pencilHint'
+>
+
+const PENCIL_SEPARATOR: Record<'zh' | 'en', string> = { zh: '、', en: ', ' }
 
 /**
  * Dumb 8×8 grid. It renders whatever the server sent and reports clicks and
@@ -168,7 +216,6 @@ function resolveTag(
  * viewer's own handwriting — it counts what the player wrote, never what is
  * left in the §2 table (gamebook §10 forbids the second).
  */
-const PENCIL_SEPARATOR = '、'
 /**
  * Width budget in units of one full-width character. The multi-mark tag is set
  * at 0.155 × --sq inside a square of width --sq, so a little over six units fit
@@ -183,19 +230,19 @@ function tagWidth(text: string): number {
   return w
 }
 
-function pencilTagText(marks: readonly Rank[]): string {
+function pencilTagText(marks: readonly Rank[], lang: Lang): string {
   if (marks.length === 0) return ''
-  if (marks.length === 1) return `〔${RANK_LABEL[marks[0]]}〕`
+  if (marks.length === 1) return `〔${RANK_LABEL[lang][marks[0]]}〕`
   if (marks.length <= 3) {
-    const text = `〔${marks.map((r) => RANK_LABEL[r]).join(PENCIL_SEPARATOR)}〕`
+    const text = `〔${marks.map((r) => RANK_LABEL[lang][r]).join(PENCIL_SEPARATOR[lang])}〕`
     if (tagWidth(text) <= PENCIL_TAG_BUDGET) return text
   }
   return `〔?${marks.length}〕`
 }
 
 /** The full list, for tooltips and screen readers, where width is not a problem. */
-function pencilFullText(marks: readonly Rank[]): string {
-  return `〔${marks.map((r) => RANK_LABEL[r]).join(PENCIL_SEPARATOR)}〕`
+function pencilFullText(marks: readonly Rank[], lang: Lang): string {
+  return `〔${marks.map((r) => RANK_LABEL[lang][r]).join(PENCIL_SEPARATOR[lang])}〕`
 }
 
 /** `lastMove` after both of its forms have been flattened into one. */
@@ -228,10 +275,10 @@ function resolveMarks(value: BoardProps['lastMove']): ResolvedMarks {
 }
 
 /** What this square is to the move being marked, for the label. */
-function markRole(sq: Square, marks: ResolvedMarks): string | null {
-  if (sq === marks.contact) return '本手接觸格'
-  if (sq === marks.from) return '本手起點'
-  if (sq === marks.to) return '本手終點'
+function markRole(sq: Square, marks: ResolvedMarks, s: (typeof STR)['zh']): string | null {
+  if (sq === marks.contact) return s.roleContact
+  if (sq === marks.from) return s.roleFrom
+  if (sq === marks.to) return s.roleTo
   return null
 }
 
@@ -271,6 +318,9 @@ export function Board(props: BoardProps) {
     onSquareDragEnd,
     onSquareDrop,
   } = props
+
+  const { lang } = useLang()
+  const s = STR[lang]
 
   /*
    * The 計分區, from the config of the game actually on screen. The selector
@@ -338,7 +388,7 @@ export function Board(props: BoardProps) {
   return (
     <div className="board-wrap">
       <style>{STYLE}</style>
-      <div className="board" role="grid" aria-label="棋盤">
+      <div className="board" role="grid" aria-label={s.board}>
         {rows.map((r) => (
           <div className="board-row" role="row" key={r}>
             <div className="coord coord-rank" aria-hidden="true">
@@ -378,8 +428,8 @@ export function Board(props: BoardProps) {
                 onSquareDragStart !== undefined &&
                 (dragSources?.has(sq) ?? false)
 
-              const role = markRole(sq, moveMarks)
-              const described = describe(sq, piece, fact, marks, pendingIds)
+              const role = markRole(sq, moveMarks, s)
+              const described = describe(sq, piece, fact, marks, pendingIds, lang, s)
               const label = role === null ? described : `${described}（${role}）`
 
               return (
@@ -510,9 +560,9 @@ export function Board(props: BoardProps) {
                         }
                       >
                         {fact
-                          ? RANK_LABEL[fact]
+                          ? RANK_LABEL[lang][fact]
                           : pencil
-                            ? pencilTagText(marks)
+                            ? pencilTagText(marks, lang)
                             : pendingIds?.has(piece.id)
                               ? '？'
                               : ''}
@@ -541,6 +591,7 @@ export function Board(props: BoardProps) {
           marks={pencilMarks?.[openPiece.id] ?? []}
           rowIdx={rows.indexOf(Math.floor(pencilOpen / 8))}
           colIdx={cols.indexOf(pencilOpen % 8)}
+          lang={lang}
           onToggle={onPencilToggle}
           onClearPiece={onPencilClearPiece}
           onClose={onPencilClose}
@@ -556,6 +607,7 @@ interface PencilPopoverProps {
   marks: readonly Rank[]
   rowIdx: number
   colIdx: number
+  lang: Lang
   onToggle?: (pieceId: PieceId, rank: Rank) => void
   onClearPiece?: (pieceId: PieceId) => void
   onClose?: () => void
@@ -573,10 +625,12 @@ function PencilPopover({
   marks,
   rowIdx,
   colIdx,
+  lang,
   onToggle,
   onClearPiece,
   onClose,
 }: PencilPopoverProps) {
+  const s = STR[lang]
   const on = new Set<Rank>(marks)
   // Anchored to the square: horizontally at its centre, nudged inwards near the
   // edges so it stays over the board; flipped above for the bottom rows.
@@ -591,7 +645,7 @@ function PencilPopover({
     <div
       className="xy-pop"
       role="dialog"
-      aria-label={`${squareName(square)} 的標記`}
+      aria-label={fill(s.markMenuLabel, { square: squareName(square) })}
       style={{
         left,
         top,
@@ -600,13 +654,13 @@ function PencilPopover({
     >
       <div className="xy-pop-head">
         <code>{squareName(square)}</code>
-        <span className="muted small">{CARRIER_LABEL[piece.carrier]}</span>
+        <span className="muted small">{CARRIER_LABEL[lang][piece.carrier]}</span>
         <button
           type="button"
           className="xy-pop-close"
           onClick={() => onClose?.()}
-          aria-label="關閉標記選單"
-          title="關閉"
+          aria-label={s.closeMarkMenu}
+          title={s.close}
         >
           ×
         </button>
@@ -623,7 +677,7 @@ function PencilPopover({
               aria-pressed={ticked}
               onClick={() => onToggle?.(piece.id, rank)}
             >
-              {RANK_LABEL[rank]}
+              {RANK_LABEL[lang][rank]}
             </button>
           )
         })}
@@ -636,9 +690,9 @@ function PencilPopover({
           disabled={marks.length === 0}
           onClick={() => onClearPiece?.(piece.id)}
         >
-          清除
+          {s.clear}
         </button>
-        <span className="muted small">自己的猜測，系統不驗證、不推論</span>
+        <span className="muted small">{s.pencilHint}</span>
       </div>
     </div>
   )
@@ -650,18 +704,20 @@ function describe(
   fact: Rank | null,
   marks: readonly Rank[],
   pendingIds: ReadonlySet<PieceId> | undefined,
+  lang: Lang,
+  s: (typeof STR)['zh'],
 ): string {
   const name = squareName(sq)
   if (!piece) return name
-  const who = piece.color === 'white' ? '白' : '黑'
-  const carrier = CARRIER_LABEL[piece.carrier]
+  const who = COLOR_LABEL[lang][piece.color]
+  const carrier = CARRIER_LABEL[lang][piece.carrier]
   if (fact !== null) {
-    return `${name} ${who} ${carrier} ${RANK_LABEL[fact]}${piece.revealed ? '（已翻明）' : ''}`
+    return `${name} ${who} ${carrier} ${RANK_LABEL[lang][fact]}${piece.revealed ? s.revealed : ''}`
   }
   if (marks.length > 0) {
-    return `${name} ${who} ${carrier} ${pencilFullText(marks)}我的標記，非事實`
+    return `${name} ${who} ${carrier} ${pencilFullText(marks, lang)}${s.myMarkNotFact}`
   }
-  return `${name} ${who} ${carrier}${pendingIds?.has(piece.id) ? ' 未指派' : ''}`
+  return `${name} ${who} ${carrier}${pendingIds?.has(piece.id) ? s.unassigned : ''}`
 }
 
 /**

@@ -4,6 +4,25 @@ import { Setup } from './screens/Setup.js'
 import { Game } from './screens/Game.js'
 import { useStore } from './store.js'
 import { parseToken } from './url.js'
+import { useLang, type Strings } from './i18n.js'
+import { LangToggle } from './components/LangToggle.js'
+
+const STR = {
+  zh: {
+    close: '關閉',
+    reconnecting: '連線中斷，重新連線中…（讀秒持續進行）',
+    title: '行軍西洋棋',
+    connecting: '連線中…',
+    waiting: '等待伺服器狀態…',
+  },
+  en: {
+    close: 'Close',
+    reconnecting: 'Connection lost, reconnecting… (the clock keeps running)',
+    title: 'Marching Chess',
+    connecting: 'Connecting…',
+    waiting: 'Waiting for server state…',
+  },
+} satisfies Strings<'close' | 'reconnecting' | 'title' | 'connecting' | 'waiting'>
 
 /**
  * Routing (techspec §7). There are only two routes in practice: "no token in
@@ -17,29 +36,37 @@ export function App() {
   const view = useStore((s) => s.view)
   const error = useStore((s) => s.error)
   const clearError = useStore((s) => s.clearError)
+  const { lang } = useLang()
+  const s = STR[lang]
 
   useEffect(() => {
     if (token) connect(token)
   }, [token, connect])
 
-  if (!token) return <Create />
+  if (!token) return (
+    <>
+      <LangToggle />
+      <Create />
+    </>
+  )
 
   return (
     <>
+      <LangToggle />
       {error && (
         <div className="toast" role="alert">
           {error}
-          <button type="button" onClick={clearError} aria-label="關閉">
+          <button type="button" onClick={clearError} aria-label={s.close}>
             ×
           </button>
         </div>
       )}
-      {connection === 'closed' && <div className="toast warn">連線中斷，重新連線中…（讀秒持續進行）</div>}
+      {connection === 'closed' && <div className="toast warn">{s.reconnecting}</div>}
 
       {!view ? (
         <main className="screen">
-          <h1>行軍西洋棋</h1>
-          <p className="muted">{connection === 'connecting' ? '連線中…' : '等待伺服器狀態…'}</p>
+          <h1>{s.title}</h1>
+          <p className="muted">{connection === 'connecting' ? s.connecting : s.waiting}</p>
         </main>
       ) : view.status.kind === 'setup' ? (
         <Setup view={view} />

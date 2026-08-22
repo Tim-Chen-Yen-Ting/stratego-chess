@@ -2,6 +2,123 @@ import { useCallback, useEffect } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { Color } from '@xiyang/rules'
 import { colorLabel } from '../format.js'
+import { fill, useLang, type Lang, type Strings } from '../i18n.js'
+
+const STR = {
+  zh: {
+    finished: '對局已結束——這個棋盤現在可以逐手重看。',
+    replay: '回放',
+    replayViewer: '對局回放',
+    backToStart: '回到開局（Home）',
+    backToStartLabel: '回到開局',
+    prevMove: '上一手（←）',
+    prevMoveLabel: '上一手',
+    nextMove: '下一手（→）',
+    nextMoveLabel: '下一手',
+    toEnd: '跳到最後一手（End）',
+    toEndLabel: '跳到最後一手',
+    playPause: '自動播放／暫停（空白鍵）',
+    pause: '暫停',
+    play: '自動播放',
+    ofTotal: '共 {{n}} 手',
+    moverSuffix: '行動',
+    opening: '開局（尚未行動）',
+    ply: '第 {{n}} 手',
+    progress: '回放進度',
+    perspectiveGroup: '回放視角',
+    blackPerspective: '黑方視角',
+    whitePerspective: '白方視角',
+    omniscient: '全知',
+    blackTitle: '只顯示黑方在該手當時知道的兵種：黑方全部，加上當時已翻明的白方兵種（規則書 §10.1）',
+    whiteTitle: '只顯示白方在該手當時知道的兵種：白方全部，加上當時已翻明的黑方兵種（規則書 §10.1）',
+    omniscientTitle: '雙方全部兵種（規則書 §10.1 全知者）。終局後這本來就是公開的（§10.5）',
+    omniscientNote: '全知視角：雙方全部兵種（規則書 §10.1）。',
+    playerNote:
+      '{{color}}方視角：只顯示該方在那一手當時知道的兵種——己方全部，加上當時已翻明的敵方兵種。這是它下那一手時手上的資訊。',
+    endNote: ' 最後一手為終局，依 §10.5 雙方兵種全部公開，三個視角在該手相同。',
+    keysHint: '逐手 · ',
+    homeEndHint: '首尾 · ',
+    spaceHint: '自動播放 · 點「公開紀錄」任何一列可直接跳到那一手',
+    black: '黑',
+    white: '白',
+  },
+  en: {
+    finished: 'The game has ended — this board can now be reviewed move by move.',
+    replay: 'Replay',
+    replayViewer: 'Game replay',
+    backToStart: 'Back to the start (Home)',
+    backToStartLabel: 'Back to the start',
+    prevMove: 'Previous move (←)',
+    prevMoveLabel: 'Previous move',
+    nextMove: 'Next move (→)',
+    nextMoveLabel: 'Next move',
+    toEnd: 'Jump to the last move (End)',
+    toEndLabel: 'Jump to the last move',
+    playPause: 'Play / pause (Space)',
+    pause: 'Pause',
+    play: 'Auto-play',
+    ofTotal: 'of {{n}}',
+    moverSuffix: ' to move',
+    opening: 'Opening (no move yet)',
+    ply: 'Ply {{n}}',
+    progress: 'Replay progress',
+    perspectiveGroup: 'Replay perspective',
+    blackPerspective: "Black's perspective",
+    whitePerspective: "White's perspective",
+    omniscient: 'Omniscient',
+    blackTitle:
+      "Shows only what Black knew about ranks at that ply: all of Black's own pieces, plus whichever White ranks had already been revealed (gamebook §10.1).",
+    whiteTitle:
+      "Shows only what White knew about ranks at that ply: all of White's own pieces, plus whichever Black ranks had already been revealed (gamebook §10.1).",
+    omniscientTitle:
+      'All ranks on both sides (gamebook §10.1, the omniscient viewer). This is public anyway once the game has ended (§10.5).',
+    omniscientNote: 'Omniscient view: every rank on both sides (gamebook §10.1).',
+    playerNote:
+      "{{color}}'s perspective: shows only the ranks that side actually knew at that ply — all of its own pieces, plus whichever enemy ranks had already been revealed. This is the information it had when it made that move.",
+    endNote:
+      ' The last ply is the end of the game, so per §10.5 every rank on both sides is public — the three perspectives agree at that ply.',
+    keysHint: 'step · ',
+    homeEndHint: 'start/end · ',
+    spaceHint: 'auto-play · click any row in the public log to jump straight to that ply',
+    black: 'Black',
+    white: 'White',
+  },
+} satisfies Strings<
+  | 'finished'
+  | 'replay'
+  | 'replayViewer'
+  | 'backToStart'
+  | 'backToStartLabel'
+  | 'prevMove'
+  | 'prevMoveLabel'
+  | 'nextMove'
+  | 'nextMoveLabel'
+  | 'toEnd'
+  | 'toEndLabel'
+  | 'playPause'
+  | 'pause'
+  | 'play'
+  | 'ofTotal'
+  | 'moverSuffix'
+  | 'opening'
+  | 'ply'
+  | 'progress'
+  | 'perspectiveGroup'
+  | 'blackPerspective'
+  | 'whitePerspective'
+  | 'omniscient'
+  | 'blackTitle'
+  | 'whiteTitle'
+  | 'omniscientTitle'
+  | 'omniscientNote'
+  | 'playerNote'
+  | 'endNote'
+  | 'keysHint'
+  | 'homeEndHint'
+  | 'spaceHint'
+  | 'black'
+  | 'white'
+>
 
 /**
  * The transport for a finished game (gamebook §10.1「回放觀看者」).
@@ -35,23 +152,13 @@ interface PerspectiveOption {
  * 全知 in the middle because it is the neutral reading and the default; a player
  * perspective is a deliberate step to one side of it.
  */
-const PERSPECTIVES: readonly PerspectiveOption[] = [
-  {
-    id: 'black',
-    label: '黑方視角',
-    title: '只顯示黑方在該手當時知道的兵種：黑方全部，加上當時已翻明的白方兵種（規則書 §10.1）',
-  },
-  {
-    id: 'omniscient',
-    label: '全知',
-    title: '雙方全部兵種（規則書 §10.1 全知者）。終局後這本來就是公開的（§10.5）',
-  },
-  {
-    id: 'white',
-    label: '白方視角',
-    title: '只顯示白方在該手當時知道的兵種：白方全部，加上當時已翻明的黑方兵種（規則書 §10.1）',
-  },
-]
+function perspectives(s: (typeof STR)['zh']): readonly PerspectiveOption[] {
+  return [
+    { id: 'black', label: s.blackPerspective, title: s.blackTitle },
+    { id: 'omniscient', label: s.omniscient, title: s.omniscientTitle },
+    { id: 'white', label: s.whitePerspective, title: s.whiteTitle },
+  ]
+}
 
 /** One ply per this many ms while auto-advancing. */
 const STEP_MS = 750
@@ -93,6 +200,9 @@ export function ReplayBar({
   onPlayingChange,
   keyboard = true,
 }: ReplayBarProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
+  const PERSPECTIVES = perspectives(s)
   const atStart = index <= 0
   const atEnd = index >= maxIndex
 
@@ -182,15 +292,15 @@ export function ReplayBar({
     if (e.detail > 0) e.currentTarget.blur()
   }
 
-  const positionText = ply === null ? '開局（尚未行動）' : `第 ${ply} 手`
+  const positionText = ply === null ? s.opening : fill(s.ply, { n: ply })
 
   return (
-    <section className="xy-rp" aria-label="對局回放">
+    <section className="xy-rp" aria-label={s.replayViewer}>
       <style>{STYLE}</style>
 
       <div className="xy-rp-title">
-        <span className="xy-rp-badge">回放</span>
-        <span>對局已結束——這個棋盤現在可以逐手重看。</span>
+        <span className="xy-rp-badge">{s.replay}</span>
+        <span>{s.finished}</span>
       </div>
 
       <div className="xy-rp-row">
@@ -199,8 +309,8 @@ export function ReplayBar({
             type="button"
             className="xy-rp-step"
             disabled={atStart}
-            title="回到開局（Home）"
-            aria-label="回到開局"
+            title={s.backToStart}
+            aria-label={s.backToStartLabel}
             onClick={(e) => {
               dropMouseFocus(e)
               seek(0)
@@ -212,8 +322,8 @@ export function ReplayBar({
             type="button"
             className="xy-rp-step"
             disabled={atStart}
-            title="上一手（←）"
-            aria-label="上一手"
+            title={s.prevMove}
+            aria-label={s.prevMoveLabel}
             onClick={(e) => {
               dropMouseFocus(e)
               seek(index - 1)
@@ -225,8 +335,8 @@ export function ReplayBar({
             type="button"
             className="xy-rp-step"
             disabled={atEnd}
-            title="下一手（→）"
-            aria-label="下一手"
+            title={s.nextMove}
+            aria-label={s.nextMoveLabel}
             onClick={(e) => {
               dropMouseFocus(e)
               seek(index + 1)
@@ -238,8 +348,8 @@ export function ReplayBar({
             type="button"
             className="xy-rp-step"
             disabled={atEnd}
-            title="跳到最後一手（End）"
-            aria-label="跳到最後一手"
+            title={s.toEnd}
+            aria-label={s.toEndLabel}
             onClick={(e) => {
               dropMouseFocus(e)
               seek(maxIndex)
@@ -252,22 +362,25 @@ export function ReplayBar({
             className={playing ? 'xy-rp-play xy-rp-play-on' : 'xy-rp-play'}
             disabled={maxIndex === 0}
             aria-pressed={playing}
-            title="自動播放／暫停（空白鍵）"
+            title={s.playPause}
             onClick={(e) => {
               dropMouseFocus(e)
               togglePlay()
             }}
           >
             <span aria-hidden="true">{playing ? '⏸' : '▶'}</span>
-            {playing ? '暫停' : '自動播放'}
+            {playing ? s.pause : s.play}
           </button>
         </div>
 
         <div className="xy-rp-readout" role="status">
           <strong className="xy-rp-n">{positionText}</strong>
-          <span className="muted"> / 共 {totalPlies} 手</span>
+          <span className="muted"> / {fill(s.ofTotal, { n: totalPlies })}</span>
           {mover !== null && (
-            <span className={`xy-rp-mover xy-rp-mover-${mover}`}>{colorLabel(mover)}行動</span>
+            <span className={`xy-rp-mover xy-rp-mover-${mover}`}>
+              {colorLabel(mover, lang)}
+              {s.moverSuffix}
+            </span>
           )}
         </div>
       </div>
@@ -280,7 +393,7 @@ export function ReplayBar({
         step={1}
         value={index}
         disabled={maxIndex === 0}
-        aria-label="回放進度"
+        aria-label={s.progress}
         aria-valuetext={positionText}
         onChange={(e) => seek(Number(e.currentTarget.value))}
       />
@@ -291,7 +404,7 @@ export function ReplayBar({
        * Three toggle buttons, one of them pressed, promises exactly what this
        * offers and no more.
        */}
-      <div className="xy-rp-persp" role="group" aria-label="回放視角">
+      <div className="xy-rp-persp" role="group" aria-label={s.perspectiveGroup}>
         {PERSPECTIVES.map((option) => (
           <button
             type="button"
@@ -321,13 +434,14 @@ export function ReplayBar({
        */}
       <p className="xy-rp-note muted small">
         {perspective === 'omniscient'
-          ? '全知視角：雙方全部兵種（規則書 §10.1）。'
-          : `${perspective === 'black' ? '黑' : '白'}方視角：只顯示該方在那一手當時知道的兵種——己方全部，加上當時已翻明的敵方兵種。這是它下那一手時手上的資訊。`}
-        {' 最後一手為終局，依 §10.5 雙方兵種全部公開，三個視角在該手相同。'}
+          ? s.omniscientNote
+          : fill(s.playerNote, { color: perspective === 'black' ? s.black : s.white })}
+        {s.endNote}
       </p>
       <p className="xy-rp-keys muted small">
-        <kbd>←</kbd> <kbd>→</kbd> 逐手 · <kbd>Home</kbd> <kbd>End</kbd> 首尾 ·{' '}
-        <kbd>空白鍵</kbd> 自動播放 · 點「公開紀錄」任何一列可直接跳到那一手
+        <kbd>←</kbd> <kbd>→</kbd> {s.keysHint}
+        <kbd>Home</kbd> <kbd>End</kbd> {s.homeEndHint}
+        <kbd>{lang === 'zh' ? '空白鍵' : 'Space'}</kbd> {s.spaceHint}
       </p>
     </section>
   )

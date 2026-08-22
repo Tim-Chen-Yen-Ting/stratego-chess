@@ -3,6 +3,7 @@ import type { Color, PieceId, Rank, ViewerPiece } from '@xiyang/rules'
 import { CARRIER_GLYPH, CARRIER_LABEL, COLOR_LABEL, RANK_LABEL } from '../constants.js'
 import { combatText, moveText, other, squareName } from '../format.js'
 import type { CaptureRecord } from '../store.js'
+import { fill, useLang, type Lang, type Strings } from '../i18n.js'
 import { RankPicker, isAnnotatable } from './PencilPanel.js'
 
 /**
@@ -54,6 +55,96 @@ import { RankPicker, isAnnotatable } from './PencilPanel.js'
  * counted, and any of the eleven ranks may go on any dead piece.
  */
 
+const STR = {
+  zh: {
+    title: '已離場棋子',
+    noneYet: '尚無棋子離場。',
+    you: '（你）',
+    none: '—',
+    removeMarkTitle: '移除「{{rank}}」（我的標記）',
+    removeMarkAria: '移除標記 {{rank}}',
+    markTitle: '寫下我的猜測（系統不驗證、不推論）',
+    markAria: '標記這顆已離場的{{carrier}}',
+    markButton: '標記',
+    pickerTitlePly: '第 {{ply}} 手離場',
+    pickerTitleUnknown: '已離場',
+    lineWithPly: '第 {{ply}} 手 · {{line}}',
+    lineUnknown: '離場紀錄不明',
+    noteBefore: '每一列是當時的',
+    noteBold: '公開公告',
+    noteAfter:
+      '，只是搬到棋子旁邊。「？」＝該子的兵種未公開；本畫面不推測、不列可能範圍、不計算剩餘（規則書 §10）。〔　〕為你自己寫的猜測，點一下可擦掉。',
+    ownerColor: '{{color}}方的',
+    ownerMine: '你的',
+    ownerOpponent: '對方的',
+    plainRemoved: '離場',
+    attackerWinsLine: '於 {{here}} 被{{owner}}{{rank}}吃掉',
+    defenderWinsLine: '由 {{here}} 攻擊 {{contact}} 落敗 — {{owner}}{{rank}}守住並翻明',
+    mutualLine: '接觸於 {{contact}} 雙方同時移除 — 同階或爆裂物，公開紀錄不區分（雙方兵種皆不公開）',
+    fizzleLine: '接觸於 {{contact}} 有煙無傷 — {{owner}}{{bomb}}落敗移除（不翻明）',
+    rankUndisclosed: '兵種未公開',
+    logLine: '第 {{ply}} 手 公開紀錄：{{record}}',
+  },
+  en: {
+    title: 'Captured pieces',
+    noneYet: 'No pieces have left the board yet.',
+    you: ' (you)',
+    none: '—',
+    removeMarkTitle: 'Remove “{{rank}}” (my mark)',
+    removeMarkAria: 'Remove mark {{rank}}',
+    markTitle: 'Write down my guess (the system does not verify or infer)',
+    markAria: 'Mark this captured {{carrier}}',
+    markButton: 'Mark',
+    pickerTitlePly: 'Left on move {{ply}}',
+    pickerTitleUnknown: 'Left the board',
+    lineWithPly: 'Move {{ply}} · {{line}}',
+    lineUnknown: 'No removal record',
+    noteBefore: 'Each line is the ',
+    noteBold: 'public announcement',
+    noteAfter:
+      ' from the moment it happened, just moved next to the piece. “？” means that piece’s rank has not been disclosed; this panel never guesses, lists a candidate range, or counts down what remains (gamebook §10). 〔 〕 marks are your own guesses — click one to erase it.',
+    ownerColor: '{{color}}’s',
+    ownerMine: 'your',
+    ownerOpponent: 'the opponent’s',
+    plainRemoved: 'Left the board',
+    attackerWinsLine: 'Captured at {{here}} by {{owner}} {{rank}}',
+    defenderWinsLine:
+      'Attacked from {{here}} into {{contact}} and lost — {{owner}} {{rank}} held its ground and was revealed',
+    mutualLine:
+      'Contact at {{contact}}, both removed simultaneously — an equal-rank tie or a bomb; the public record does not distinguish (neither side’s rank is disclosed)',
+    fizzleLine: 'Contact at {{contact}}, fizzle — {{owner}} {{bomb}} was removed in the loss (not revealed)',
+    rankUndisclosed: 'Rank undisclosed',
+    logLine: 'Move {{ply}} public record: {{record}}',
+  },
+} satisfies Strings<
+  | 'title'
+  | 'noneYet'
+  | 'you'
+  | 'none'
+  | 'removeMarkTitle'
+  | 'removeMarkAria'
+  | 'markTitle'
+  | 'markAria'
+  | 'markButton'
+  | 'pickerTitlePly'
+  | 'pickerTitleUnknown'
+  | 'lineWithPly'
+  | 'lineUnknown'
+  | 'noteBefore'
+  | 'noteBold'
+  | 'noteAfter'
+  | 'ownerColor'
+  | 'ownerMine'
+  | 'ownerOpponent'
+  | 'plainRemoved'
+  | 'attackerWinsLine'
+  | 'defenderWinsLine'
+  | 'mutualLine'
+  | 'fizzleLine'
+  | 'rankUndisclosed'
+  | 'logLine'
+>
+
 export interface CapturedTrayProps {
   pieces: readonly ViewerPiece[]
   /** the seat this viewer occupies, for the「你」marker and mark entitlement */
@@ -76,6 +167,8 @@ export function CapturedTray({
   onToggleMark,
   onClearMark,
 }: CapturedTrayProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   /** which captured piece has its notepad open, if any */
   const [openId, setOpenId] = useState<PieceId | null>(null)
 
@@ -88,20 +181,22 @@ export function CapturedTray({
     <>
       <style>{STYLE}</style>
       <section className="panel xy-cap">
-        <h2>已離場棋子</h2>
+        <h2>{s.title}</h2>
         {dead.length === 0 ? (
-          <p className="muted small">尚無棋子離場。</p>
+          <p className="muted small">{s.noneYet}</p>
         ) : (
           SIDES.map((color) => {
             const list = dead.filter((p) => p.color === color).sort((a, b) => order(a) - order(b))
             return (
               <div className="xy-cap-side" key={color}>
                 <div className="xy-cap-head">
-                  {COLOR_LABEL[color]}方{me === color ? '（你）' : ''}
+                  {COLOR_LABEL[lang][color]}
+                  {lang === 'zh' ? '方' : ''}
+                  {me === color ? s.you : ''}
                   <span className="muted xy-cap-n">{list.length}</span>
                 </div>
                 {list.length === 0 ? (
-                  <p className="muted small xy-cap-none">—</p>
+                  <p className="muted small xy-cap-none">{s.none}</p>
                 ) : (
                   <ul className="xy-cap-list">
                     {list.map((p) => {
@@ -111,7 +206,7 @@ export function CapturedTray({
                       const open = openId === p.id
                       return (
                         <li className="xy-cap-entry" key={p.id}>
-                          <div className="xy-cap-item" title={describe(p, rec, me)}>
+                          <div className="xy-cap-item" title={describe(p, rec, me, lang)}>
                             <span
                               className={`piece xy-cap-face ${
                                 p.color === 'white' ? 'piece-white' : 'piece-black'
@@ -121,7 +216,7 @@ export function CapturedTray({
                             </span>
 
                             {p.rank !== null ? (
-                              <span className="xy-cap-rank">{RANK_LABEL[p.rank]}</span>
+                              <span className="xy-cap-rank">{RANK_LABEL[lang][p.rank]}</span>
                             ) : mine.length > 0 ? (
                               <span className="xy-cap-marks">
                                 {mine.map((rank) => (
@@ -130,10 +225,10 @@ export function CapturedTray({
                                     key={rank}
                                     className="xy-cap-mark"
                                     onClick={() => onToggleMark(p.id, rank)}
-                                    title={`移除「${RANK_LABEL[rank]}」（我的標記）`}
-                                    aria-label={`移除標記 ${RANK_LABEL[rank]}`}
+                                    title={fill(s.removeMarkTitle, { rank: RANK_LABEL[lang][rank] })}
+                                    aria-label={fill(s.removeMarkAria, { rank: RANK_LABEL[lang][rank] })}
                                   >
-                                    〔{RANK_LABEL[rank]}〕
+                                    〔{RANK_LABEL[lang][rank]}〕
                                   </button>
                                 ))}
                               </span>
@@ -147,25 +242,32 @@ export function CapturedTray({
                                 className={open ? 'xy-cap-edit xy-cap-edit-on' : 'xy-cap-edit'}
                                 aria-expanded={open}
                                 onClick={() => setOpenId(open ? null : p.id)}
-                                title="寫下我的猜測（系統不驗證、不推論）"
-                                aria-label={`標記這顆已離場的${CARRIER_LABEL[p.carrier]}`}
+                                title={s.markTitle}
+                                aria-label={fill(s.markAria, {
+                                  carrier: CARRIER_LABEL[lang][p.carrier],
+                                })}
                               >
-                                標記
+                                {s.markButton}
                               </button>
                             )}
 
                             <span className="muted small xy-cap-line">
-                              {rec ? `第 ${rec.ply} 手 · ${captureLine(rec, me)}` : '離場紀錄不明'}
+                              {rec
+                                ? fill(s.lineWithPly, { ply: rec.ply, line: captureLine(rec, me, lang) })
+                                : s.lineUnknown}
                             </span>
                           </div>
 
                           {open && (
                             <RankPicker
-                              title={`${rec ? `第 ${rec.ply} 手離場` : '已離場'} · ${shortCarrier(p)}`}
+                              title={`${
+                                rec ? fill(s.pickerTitlePly, { ply: rec.ply }) : s.pickerTitleUnknown
+                              } · ${shortCarrier(p, lang)}`}
                               marks={mine}
                               onToggle={(rank) => onToggleMark(p.id, rank)}
                               onClear={() => onClearMark(p.id)}
                               onClose={() => setOpenId(null)}
+                              lang={lang}
                             />
                           )}
                         </li>
@@ -178,8 +280,9 @@ export function CapturedTray({
           })
         )}
         <p className="muted small xy-cap-note">
-          每一列是當時的<strong>公開公告</strong>，只是搬到棋子旁邊。「？」＝該子的兵種未公開；本畫面不推測、不列可能範圍、不計算剩餘（規則書
-          §10）。〔　〕為你自己寫的猜測，點一下可擦掉。
+          {s.noteBefore}
+          <strong>{s.noteBold}</strong>
+          {s.noteAfter}
         </p>
       </section>
     </>
@@ -200,14 +303,16 @@ function deadColorOf(rec: CaptureRecord): Color {
   return rec.role === 'attacker' ? rec.event.color : other(rec.event.color)
 }
 
-function ownerLabel(color: Color, me: Color | null): string {
-  if (me === null) return `${COLOR_LABEL[color]}方的`
-  return color === me ? '你的' : '對方的'
+function ownerLabel(color: Color, me: Color | null, lang: Lang): string {
+  const s = STR[lang]
+  if (me === null) return fill(s.ownerColor, { color: COLOR_LABEL[lang][color] })
+  return color === me ? s.ownerMine : s.ownerOpponent
 }
 
-export function captureLine(rec: CaptureRecord, me: Color | null): string {
+export function captureLine(rec: CaptureRecord, me: Color | null, lang: Lang): string {
+  const s = STR[lang]
   const combat = rec.event.combat
-  if (combat === undefined) return '離場'
+  if (combat === undefined) return s.plainRemoved
 
   const { outcome, defenderSquare } = combat
   const mover = rec.event.color
@@ -217,12 +322,19 @@ export function captureLine(rec: CaptureRecord, me: Color | null): string {
   switch (outcome.kind) {
     case 'attacker-wins':
       // this piece was standing there; the winner is 永久翻明 by announcement
-      return `於 ${here} 被${ownerLabel(mover, me)}${RANK_LABEL[outcome.winnerRank]}吃掉`
+      return fill(s.attackerWinsLine, {
+        here,
+        owner: ownerLabel(mover, me, lang),
+        rank: RANK_LABEL[lang][outcome.winnerRank],
+      })
     case 'defender-wins':
       // 攻方由其原格移除 (§4 位置結算) — this piece never entered the target
-      return `由 ${here} 攻擊 ${contact} 落敗 — ${ownerLabel(other(mover), me)}${
-        RANK_LABEL[outcome.winnerRank]
-      }守住並翻明`
+      return fill(s.defenderWinsLine, {
+        here,
+        contact,
+        owner: ownerLabel(other(mover), me, lang),
+        rank: RANK_LABEL[lang][outcome.winnerRank],
+      })
     case 'mutual-destruction':
       // Both are removed, so 「接觸於」 rather than 「於」: the attacker died at
       // its own origin and never entered the contact square (§4 位置結算).
@@ -232,36 +344,39 @@ export function captureLine(rec: CaptureRecord, me: Color | null): string {
       // was is not public — the piece it is attached to could be either half of
       // either story. Writing 「同階雙亡」 here would hand the reader a rank
       // equality the server never announced.
-      return `接觸於 ${contact} 雙方同時移除 — 同階或爆裂物，公開紀錄不區分（雙方兵種皆不公開）`
+      return fill(s.mutualLine, { contact })
     case 'fizzle':
       // 有煙無傷 (§5): the 爆裂物 is the piece removed, and 附錄 A(a) keeps BOTH
       // sides unrevealed — which is why this card still shows「？」. What the
       // survivor is, the 公開紀錄 states in its own words; this card does not
       // speak for it, and nothing here narrows anything.
-      return `接觸於 ${contact} 有煙無傷 — ${ownerLabel(deadColorOf(rec), me)}${
-        RANK_LABEL.bomb
-      }落敗移除（不翻明）`
+      return fill(s.fizzleLine, {
+        contact,
+        owner: ownerLabel(deadColorOf(rec), me, lang),
+        bomb: RANK_LABEL[lang].bomb,
+      })
   }
 }
 
-function shortCarrier(p: ViewerPiece): string {
-  return CARRIER_LABEL[p.carrier].split(' ')[0]
+function shortCarrier(p: ViewerPiece, lang: Lang): string {
+  return CARRIER_LABEL[lang][p.carrier].split(' ')[0]!
 }
 
 /**
  * Hover text. The 兵種 half is the payload; the event half is the very sentence
  * the 公開紀錄 panel shows for that ply, quoted rather than re-derived.
  */
-function describe(p: ViewerPiece, rec: CaptureRecord | undefined, me: Color | null): string {
-  const who = COLOR_LABEL[p.color]
-  const carrier = CARRIER_LABEL[p.carrier]
-  const head = `${who} ${carrier}　${p.rank ? RANK_LABEL[p.rank] : '兵種未公開'}`
+function describe(p: ViewerPiece, rec: CaptureRecord | undefined, me: Color | null, lang: Lang): string {
+  const s = STR[lang]
+  const who = COLOR_LABEL[lang][p.color]
+  const carrier = CARRIER_LABEL[lang][p.carrier]
+  const head = `${who} ${carrier}　${p.rank ? RANK_LABEL[lang][p.rank] : s.rankUndisclosed}`
   if (rec === undefined) return head
   const ev = rec.event
   const record = ev.combat
-    ? `${moveText(ev.move, true, ev.promoted)}｜${combatText(ev.combat.outcome, ev.color)}`
-    : moveText(ev.move, false, ev.promoted)
-  return `${head}\n第 ${rec.ply} 手 公開紀錄：${record}\n${captureLine(rec, me)}`
+    ? `${moveText(ev.move, true, lang, ev.promoted)}｜${combatText(ev.combat.outcome, ev.color, lang)}`
+    : moveText(ev.move, false, lang, ev.promoted)
+  return `${head}\n${fill(s.logLine, { ply: rec.ply, record })}\n${captureLine(rec, me, lang)}`
 }
 
 const STYLE = `

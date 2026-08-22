@@ -11,6 +11,7 @@ import {
   isStandardDistribution,
 } from '../constants.js'
 import { useStore } from '../store.js'
+import { fill, useLang, type Strings } from '../i18n.js'
 
 /**
  * The remaining pool from THIS GAME's 兵種 table (gamebook §2, 附錄 B — the
@@ -28,6 +29,38 @@ import { useStore } from '../store.js'
  * anything from it. `remaining` is arithmetic on the caller's draft against the
  * §2 table; `validateAssignment()` on the server is the authority.
  */
+
+const STR = {
+  zh: {
+    poolLabel: '兵種池',
+    poolLabelVariant: '兵種池 · {{name}}配置',
+    dragHint: '拖曳兵種到棋子上，或點兵種再點棋子',
+    titleUnused: '{{num}} {{label}} — 本局不使用',
+    titleRemaining: '{{num}} {{label}} — 尚餘 {{left}} / {{total}}',
+    unused: '本局不使用',
+    spent: '已用完',
+    note: '爆裂物無固定階級，接觸時視同同階；但對工兵與軍旗無效（雙向）。軍旗以任何方式離場即判負。',
+  },
+  en: {
+    poolLabel: 'Rank pool',
+    poolLabelVariant: 'Rank pool · {{name}}',
+    dragHint: 'Drag a rank onto a piece, or click a rank then click a piece',
+    titleUnused: '{{num}} {{label}} — not used this game',
+    titleRemaining: '{{num}} {{label}} — {{left}} / {{total}} left',
+    unused: 'Not used',
+    spent: 'Used up',
+    note: 'A bomb has no fixed rank — on contact it counts as equal-rank to anything — but is harmless against Engineers and the Flag (both directions). The Flag leaving the board by any means is an immediate loss.',
+  },
+} satisfies Strings<
+  | 'poolLabel'
+  | 'poolLabelVariant'
+  | 'dragHint'
+  | 'titleUnused'
+  | 'titleRemaining'
+  | 'unused'
+  | 'spent'
+  | 'note'
+>
 
 export interface PieceTrayProps {
   /** how many of each rank are still unassigned */
@@ -60,6 +93,8 @@ export function PieceTray({
   onPoolDrop,
   poolDropActive = false,
 }: PieceTrayProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   const acceptsDrop = onPoolDrop !== undefined && !disabled
 
   // Same mechanism as Board.tsx: subscribed unconditionally, stable reference,
@@ -72,6 +107,7 @@ export function PieceTray({
   // is the ONLY place the counts appear. If they are not §2's, say which table
   // this is — the player is about to commit sixteen pieces to it.
   const isStandard = isStandardDistribution(counts)
+  const distName = distributionName(counts, lang)
 
   return (
     <div
@@ -96,8 +132,8 @@ export function PieceTray({
       }
     >
       <div className="tray-head">
-        <span>兵種池{isStandard ? '' : ` · ${distributionName(counts)}配置`}</span>
-        <span className="muted small">拖曳兵種到棋子上，或點兵種再點棋子</span>
+        <span>{isStandard ? s.poolLabel : fill(s.poolLabelVariant, { name: distName })}</span>
+        <span className="muted small">{s.dragHint}</span>
       </div>
       <div className="tray-grid">
         {RANKS_IN_ORDER.map((rank) => {
@@ -129,23 +165,26 @@ export function PieceTray({
               onClick={() => onSelect(isSelected ? null : rank)}
               title={
                 unused
-                  ? `${RANK_NUMBER_LABEL[rank]} ${RANK_LABEL[rank]} — 本局不使用`
-                  : `${RANK_NUMBER_LABEL[rank]} ${RANK_LABEL[rank]} — 尚餘 ${Math.max(0, left)} / ${total}`
+                  ? fill(s.titleUnused, { num: RANK_NUMBER_LABEL[rank], label: RANK_LABEL[lang][rank] })
+                  : fill(s.titleRemaining, {
+                      num: RANK_NUMBER_LABEL[rank],
+                      label: RANK_LABEL[lang][rank],
+                      left: Math.max(0, left),
+                      total,
+                    })
               }
             >
               <span className="tray-order">{RANK_NUMBER_LABEL[rank]}</span>
-              <span className="tray-label">{RANK_LABEL[rank]}</span>
+              <span className="tray-label">{RANK_LABEL[lang][rank]}</span>
               <span className="tray-count">
-                {unused ? '本局不使用' : spent ? '已用完' : `×${left}`}
+                {unused ? s.unused : spent ? s.spent : `×${left}`}
                 {!unused && <span className="tray-total"> / {total}</span>}
               </span>
             </button>
           )
         })}
       </div>
-      <p className="muted small tray-note">
-        爆裂物無固定階級，接觸時視同同階；但對工兵與軍旗無效（雙向）。軍旗以任何方式離場即判負。
-      </p>
+      <p className="muted small tray-note">{s.note}</p>
     </div>
   )
 }

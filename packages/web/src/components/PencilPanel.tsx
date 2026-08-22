@@ -4,6 +4,7 @@ import type { Color, PieceId, Rank, Square, ViewerPiece } from '@xiyang/rules'
 import { CARRIER_GLYPH, CARRIER_LABEL, RANKS_IN_ORDER, RANK_LABEL } from '../constants.js'
 import { squareName } from '../format.js'
 import type { CaptureRecord } from '../store.js'
+import { fill, useLang, type Lang, type Strings } from '../i18n.js'
 
 /**
  * 玩家標記 — pencil marks (gamebook §10).
@@ -43,6 +44,117 @@ import type { CaptureRecord } from '../store.js'
  * Entitlement is about which pieces are annotatable — never a deduction about
  * which rank they hold.
  */
+
+const STR = {
+  zh: {
+    heading: '我的標記（猜測）',
+    note1:
+      '自己寫的便條紙。一顆棋子可以同時標好幾個兵種——擋下爆裂物的那顆就是「工兵或軍旗」。系統不驗證、不推論、不過濾、不代為計數，你可以把同一個兵種標在五顆棋子上，也可以標得跟事實相反（規則書 §10）。標記只存在這台裝置，永不送出。',
+    note2:
+      '在棋盤上右鍵（或長按）敵方棋子即可開啟標記選單；未選取自己棋子時，左鍵點擊也可以。已離場的棋子沒有格子可點，改由下方或「已離場棋子」面板標記。',
+    note2Strong: '右鍵',
+    poolAria: '兵種標記，可拖到下方棋子',
+    chipTitle: '把「{{rank}}」拖到棋盤上的敵方棋子，或拖到下方清單',
+    sectionLiving: '存活・未翻明',
+    sectionDead: '已離場',
+    sectionStale: '其他標記（標記保留）',
+    livingEmpty: '目前沒有可標記的存活敵方棋子。',
+    deadEmpty: '尚無已離場且兵種未公開的敵方棋子。',
+    markButton: '標記',
+    livingMarkTitle: '在棋盤上開啟標記選單',
+    livingMarkAria: '編輯 {{label}} 的標記',
+    deadMarkAria: '編輯 {{label}} 離場棋子的標記',
+    deadPickerTitle: '{{label}}離場 · {{carrier}}',
+    deadLabelWithPly: '第 {{ply}} 手',
+    deadLabelUnknown: '已離場',
+    offBoard: '{{carrier}}（不在盤上）',
+    clearOneTitle: '清除這個標記',
+    clearOneAria: '清除這個標記',
+    clearAll: '全部清除',
+    footCount: '{{pieces}} 顆棋子 · {{marks}} 個標記',
+    clearThisTitle: '清除這顆棋子的標記',
+    clearThisAria: '清除 {{label}} 的標記',
+    pickerAria: '{{title}} 的標記',
+    pickerClose: '關閉標記選單',
+    pickerCloseShort: '關閉',
+    pickerClear: '清除',
+    pickerFoot: '自己的猜測，系統不驗證、不推論',
+    markEmpty: '未標記',
+    chipRemoveTitle: '移除「{{rank}}」',
+    chipRemoveAria: '移除 {{label}} 的標記 {{rank}}',
+  },
+  en: {
+    heading: 'My marks (guesses)',
+    note1:
+      'Your own scratch notes. One piece can carry several rank guesses at once — the one that blocked a bomb is “Engineer or Flag.” The system never verifies, infers, filters or counts on your behalf: you can pencil the same rank onto five pieces, or mark something you know contradicts the facts (gamebook §10). Marks live only on this device and are never sent anywhere.',
+    note2:
+      'Right-click (or long-press) an enemy piece on the board to open the mark menu; a plain left click works too when you have no piece of your own selected. A captured piece has no square to click, so mark it below instead, or from the “Captured pieces” panel.',
+    note2Strong: 'right-click',
+    poolAria: 'Rank marks — drag onto a piece below',
+    chipTitle: 'Drag “{{rank}}” onto an enemy piece on the board, or onto the list below',
+    sectionLiving: 'On the board, undisclosed',
+    sectionDead: 'Captured',
+    sectionStale: 'Other marks (kept)',
+    livingEmpty: 'No markable enemy pieces on the board right now.',
+    deadEmpty: 'No captured enemy pieces with an undisclosed rank yet.',
+    markButton: 'Mark',
+    livingMarkTitle: 'Open the mark menu on the board',
+    livingMarkAria: 'Edit marks for {{label}}',
+    deadMarkAria: 'Edit marks for the captured piece at {{label}}',
+    deadPickerTitle: '{{label}} · {{carrier}}',
+    deadLabelWithPly: 'Move {{ply}}',
+    deadLabelUnknown: 'Captured',
+    offBoard: '{{carrier}} (off the board)',
+    clearOneTitle: 'Clear this mark',
+    clearOneAria: 'Clear this mark',
+    clearAll: 'Clear all',
+    footCount: '{{pieces}} pieces · {{marks}} marks',
+    clearThisTitle: 'Clear marks for this piece',
+    clearThisAria: 'Clear marks for {{label}}',
+    pickerAria: 'Marks for {{title}}',
+    pickerClose: 'Close the mark menu',
+    pickerCloseShort: 'Close',
+    pickerClear: 'Clear',
+    pickerFoot: 'Your own guess — the system does not verify or infer',
+    markEmpty: 'Unmarked',
+    chipRemoveTitle: 'Remove “{{rank}}”',
+    chipRemoveAria: 'Remove {{label}}’s mark {{rank}}',
+  },
+} satisfies Strings<
+  | 'heading'
+  | 'note1'
+  | 'note2'
+  | 'note2Strong'
+  | 'poolAria'
+  | 'chipTitle'
+  | 'sectionLiving'
+  | 'sectionDead'
+  | 'sectionStale'
+  | 'livingEmpty'
+  | 'deadEmpty'
+  | 'markButton'
+  | 'livingMarkTitle'
+  | 'livingMarkAria'
+  | 'deadMarkAria'
+  | 'deadPickerTitle'
+  | 'deadLabelWithPly'
+  | 'deadLabelUnknown'
+  | 'offBoard'
+  | 'clearOneTitle'
+  | 'clearOneAria'
+  | 'clearAll'
+  | 'footCount'
+  | 'clearThisTitle'
+  | 'clearThisAria'
+  | 'pickerAria'
+  | 'pickerClose'
+  | 'pickerCloseShort'
+  | 'pickerClear'
+  | 'pickerFoot'
+  | 'markEmpty'
+  | 'chipRemoveTitle'
+  | 'chipRemoveAria'
+>
 
 export interface PencilPanelProps {
   pieces: readonly ViewerPiece[]
@@ -110,6 +222,8 @@ export function PencilPanel({
   onDragRankStart,
   onDragRankEnd,
 }: PencilPanelProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   const [dragOver, setDragOver] = useState<PieceId | null>(null)
   /** which captured row has its inline picker open, if any */
   const [openId, setOpenId] = useState<PieceId | null>(null)
@@ -128,7 +242,7 @@ export function PencilPanel({
         piece: p,
         square: null,
         // Which ply removed it, straight from the log. Never why, never what.
-        label: rec ? `第 ${rec.ply} 手` : '已離場',
+        label: rec ? fill(s.deadLabelWithPly, { ply: rec.ply }) : s.deadLabelUnknown,
       })
     }
   }
@@ -156,22 +270,31 @@ export function PencilPanel({
     onAdd,
     onToggle,
     onClear,
+    lang,
   }
 
   return (
     <>
       <style>{STYLE}</style>
       <section className="panel xy-pencil">
-        <h2>我的標記（猜測）</h2>
+        <h2>{s.heading}</h2>
+        <p className="muted small xy-pencil-note">{s.note1}</p>
         <p className="muted small xy-pencil-note">
-          自己寫的便條紙。一顆棋子可以同時標好幾個兵種——擋下爆裂物的那顆就是「工兵或軍旗」。系統不驗證、不推論、不過濾、不代為計數，你可以把同一個兵種標在五顆棋子上，也可以標得跟事實相反（規則書
-          §10）。標記只存在這台裝置，永不送出。
-        </p>
-        <p className="muted small xy-pencil-note">
-          在棋盤上<strong>右鍵</strong>（或長按）敵方棋子即可開啟標記選單；未選取自己棋子時，左鍵點擊也可以。已離場的棋子沒有格子可點，改由下方或「已離場棋子」面板標記。
+          {lang === 'zh' ? (
+            <>
+              在棋盤上<strong>右鍵</strong>
+              （或長按）敵方棋子即可開啟標記選單；未選取自己棋子時，左鍵點擊也可以。已離場的棋子沒有格子可點，改由下方或「已離場棋子」面板標記。
+            </>
+          ) : (
+            <>
+              <strong>Right-click</strong> (or long-press) an enemy piece on the board to open the mark
+              menu; a plain left click works too when you have no piece of your own selected. A captured
+              piece has no square to click, so mark it below instead, or from the “Captured pieces” panel.
+            </>
+          )}
         </p>
 
-        <div className="xy-pencil-pool" role="group" aria-label="兵種標記，可拖到下方棋子">
+        <div className="xy-pencil-pool" role="group" aria-label={s.poolAria}>
           {RANKS_IN_ORDER.map((rank) => (
             <span
               key={rank}
@@ -186,16 +309,16 @@ export function PencilPanel({
                 setDragOver(null)
                 onDragRankEnd?.()
               }}
-              title={`把「${RANK_LABEL[rank]}」拖到棋盤上的敵方棋子，或拖到下方清單`}
+              title={fill(s.chipTitle, { rank: RANK_LABEL[lang][rank] })}
             >
-              {RANK_LABEL[rank]}
+              {RANK_LABEL[lang][rank]}
             </span>
           ))}
         </div>
 
-        <div className="muted small xy-pencil-section">存活・未翻明</div>
+        <div className="muted small xy-pencil-section">{s.sectionLiving}</div>
         {living.length === 0 ? (
-          <p className="muted small xy-pencil-empty">目前沒有可標記的存活敵方棋子。</p>
+          <p className="muted small xy-pencil-empty">{s.livingEmpty}</p>
         ) : (
           <ul className="xy-pencil-list">
             {living.map((row) => {
@@ -211,10 +334,10 @@ export function PencilPanel({
                           type="button"
                           className="xy-pencil-edit"
                           onClick={() => onOpenPicker(sq)}
-                          title="在棋盤上開啟標記選單"
-                          aria-label={`編輯 ${row.label} 的標記`}
+                          title={s.livingMarkTitle}
+                          aria-label={fill(s.livingMarkAria, { label: row.label })}
                         >
-                          標記
+                          {s.markButton}
                         </button>
                       ) : null
                     }
@@ -225,9 +348,9 @@ export function PencilPanel({
           </ul>
         )}
 
-        <div className="muted small xy-pencil-section">已離場</div>
+        <div className="muted small xy-pencil-section">{s.sectionDead}</div>
         {dead.length === 0 ? (
-          <p className="muted small xy-pencil-empty">尚無已離場且兵種未公開的敵方棋子。</p>
+          <p className="muted small xy-pencil-empty">{s.deadEmpty}</p>
         ) : (
           <ul className="xy-pencil-list">
             {dead.map((row) => {
@@ -243,19 +366,23 @@ export function PencilPanel({
                         className={open ? 'xy-pencil-edit xy-pencil-edit-on' : 'xy-pencil-edit'}
                         aria-expanded={open}
                         onClick={() => setOpenId(open ? null : row.piece.id)}
-                        aria-label={`編輯 ${row.label} 離場棋子的標記`}
+                        aria-label={fill(s.deadMarkAria, { label: row.label })}
                       >
-                        標記
+                        {s.markButton}
                       </button>
                     }
                   />
                   {open && (
                     <RankPicker
-                      title={`${row.label}離場 · ${short(row.piece.carrier)}`}
+                      title={fill(s.deadPickerTitle, {
+                        label: row.label,
+                        carrier: short(row.piece.carrier, lang),
+                      })}
                       marks={marks[row.piece.id] ?? []}
                       onToggle={(rank) => onToggle(row.piece.id, rank)}
                       onClear={() => onClear(row.piece.id)}
                       onClose={() => setOpenId(null)}
+                      lang={lang}
                     />
                   )}
                 </li>
@@ -268,7 +395,7 @@ export function PencilPanel({
           <div className="xy-pencil-stale">
             {/* Not a claim about those pieces — only that they are in neither
                 section above. The system never says what became of them. */}
-            <div className="muted small xy-pencil-section">其他標記（標記保留）</div>
+            <div className="muted small xy-pencil-section">{s.sectionStale}</div>
             <ul className="xy-pencil-list">
               {other.map((id) => {
                 const list = marks[id] ?? []
@@ -278,7 +405,7 @@ export function PencilPanel({
                     ? id
                     : piece.square !== null
                       ? squareName(piece.square)
-                      : `${short(piece.carrier)}（不在盤上）`
+                      : fill(s.offBoard, { carrier: short(piece.carrier, lang) })
                 return (
                   <li key={id} className="xy-pencil-row">
                     <code className="xy-pencil-sq xy-pencil-sq-wide">{where}</code>
@@ -291,13 +418,13 @@ export function PencilPanel({
                         <span className="glyph">{CARRIER_GLYPH[piece.carrier]}</span>
                       </span>
                     )}
-                    <MarkChips marks={list} label={where} onRemove={(rank) => onToggle(id, rank)} />
+                    <MarkChips marks={list} label={where} onRemove={(rank) => onToggle(id, rank)} lang={lang} />
                     <button
                       type="button"
                       className="xy-pencil-x"
                       onClick={() => onClear(id)}
-                      title="清除這個標記"
-                      aria-label="清除這個標記"
+                      title={s.clearOneTitle}
+                      aria-label={s.clearOneAria}
                     >
                       ×
                     </button>
@@ -310,11 +437,9 @@ export function PencilPanel({
 
         <div className="xy-pencil-foot">
           <button type="button" disabled={markCount === 0} onClick={onClearAll}>
-            全部清除
+            {s.clearAll}
           </button>
-          <span className="muted small">
-            {pieceCount} 顆棋子 · {markCount} 個標記
-          </span>
+          <span className="muted small">{fill(s.footCount, { pieces: pieceCount, marks: markCount })}</span>
         </div>
       </section>
     </>
@@ -329,6 +454,7 @@ interface PencilRowProps {
   onAdd: (pieceId: PieceId, rank: Rank) => void
   onToggle: (pieceId: PieceId, rank: Rank) => void
   onClear: (pieceId: PieceId) => void
+  lang: Lang
   /** the per-row edit affordance: board popover for living, inline for dead */
   action: ReactNode
 }
@@ -342,8 +468,10 @@ function PencilRow({
   onAdd,
   onToggle,
   onClear,
+  lang,
   action,
 }: PencilRowProps) {
+  const s = STR[lang]
   const { piece, label } = row
   const list = marks[piece.id] ?? []
 
@@ -367,9 +495,9 @@ function PencilRow({
       <span className={`piece ${piece.color === 'white' ? 'piece-white' : 'piece-black'}`}>
         <span className="glyph">{CARRIER_GLYPH[piece.carrier]}</span>
       </span>
-      <span className="muted small xy-pencil-carrier">{short(piece.carrier)}</span>
+      <span className="muted small xy-pencil-carrier">{short(piece.carrier, lang)}</span>
 
-      <MarkChips marks={list} label={label} onRemove={(rank) => onToggle(piece.id, rank)} />
+      <MarkChips marks={list} label={label} onRemove={(rank) => onToggle(piece.id, rank)} lang={lang} />
 
       {action}
 
@@ -378,8 +506,8 @@ function PencilRow({
         className="xy-pencil-x"
         disabled={list.length === 0}
         onClick={() => onClear(piece.id)}
-        title="清除這顆棋子的標記"
-        aria-label={`清除 ${label} 的標記`}
+        title={s.clearThisTitle}
+        aria-label={fill(s.clearThisAria, { label })}
       >
         ×
       </button>
@@ -394,6 +522,7 @@ export interface RankPickerProps {
   onToggle: (rank: Rank) => void
   onClear: () => void
   onClose?: () => void
+  lang: Lang
 }
 
 /**
@@ -407,12 +536,13 @@ export interface RankPickerProps {
  * panel and the captured tray. It carries its own <style> so it renders
  * correctly wherever it is mounted.
  */
-export function RankPicker({ title, marks, onToggle, onClear, onClose }: RankPickerProps) {
+export function RankPicker({ title, marks, onToggle, onClear, onClose, lang }: RankPickerProps) {
+  const s = STR[lang]
   const on = new Set<Rank>(marks)
   return (
     <>
       <style>{PICKER_STYLE}</style>
-      <div className="xy-pick" role="group" aria-label={`${title} 的標記`}>
+      <div className="xy-pick" role="group" aria-label={fill(s.pickerAria, { title })}>
         <div className="xy-pick-head">
           <span className="muted small">{title}</span>
           {onClose && (
@@ -420,8 +550,8 @@ export function RankPicker({ title, marks, onToggle, onClear, onClose }: RankPic
               type="button"
               className="xy-pick-close"
               onClick={onClose}
-              aria-label="關閉標記選單"
-              title="關閉"
+              aria-label={s.pickerClose}
+              title={s.pickerCloseShort}
             >
               ×
             </button>
@@ -438,7 +568,7 @@ export function RankPicker({ title, marks, onToggle, onClear, onClose }: RankPic
                 aria-pressed={ticked}
                 onClick={() => onToggle(rank)}
               >
-                {RANK_LABEL[rank]}
+                {RANK_LABEL[lang][rank]}
               </button>
             )
           })}
@@ -450,9 +580,9 @@ export function RankPicker({ title, marks, onToggle, onClear, onClose }: RankPic
             disabled={marks.length === 0}
             onClick={onClear}
           >
-            清除
+            {s.pickerClear}
           </button>
-          <span className="muted small">自己的猜測，系統不驗證、不推論</span>
+          <span className="muted small">{s.pickerFoot}</span>
         </div>
       </div>
     </>
@@ -463,11 +593,13 @@ interface MarkChipsProps {
   marks: readonly Rank[]
   label: string
   onRemove: (rank: Rank) => void
+  lang: Lang
 }
 
 /** The player's own handwriting, one chip per guess. Click a chip to rub it out. */
-function MarkChips({ marks, label, onRemove }: MarkChipsProps) {
-  if (marks.length === 0) return <span className="xy-mark xy-mark-empty">未標記</span>
+function MarkChips({ marks, label, onRemove, lang }: MarkChipsProps) {
+  const s = STR[lang]
+  if (marks.length === 0) return <span className="xy-mark xy-mark-empty">{s.markEmpty}</span>
   return (
     <span className="xy-marks">
       {marks.map((rank) => (
@@ -476,18 +608,18 @@ function MarkChips({ marks, label, onRemove }: MarkChipsProps) {
           type="button"
           className="xy-mark xy-mark-chip"
           onClick={() => onRemove(rank)}
-          title={`移除「${RANK_LABEL[rank]}」`}
-          aria-label={`移除 ${label} 的標記 ${RANK_LABEL[rank]}`}
+          title={fill(s.chipRemoveTitle, { rank: RANK_LABEL[lang][rank] })}
+          aria-label={fill(s.chipRemoveAria, { label, rank: RANK_LABEL[lang][rank] })}
         >
-          {RANK_LABEL[rank]}
+          {RANK_LABEL[lang][rank]}
         </button>
       ))}
     </span>
   )
 }
 
-function short(carrier: ViewerPiece['carrier']): string {
-  return CARRIER_LABEL[carrier].split(' ')[0]
+function short(carrier: ViewerPiece['carrier'], lang: Lang): string {
+  return CARRIER_LABEL[lang][carrier].split(' ')[0]!
 }
 
 /**

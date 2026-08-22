@@ -12,6 +12,7 @@ import {
   isStandardDistribution,
 } from '../constants.js'
 import { useStore } from '../store.js'
+import { fill, useLang, type Strings } from '../i18n.js'
 
 /**
  * The 兵種 hierarchy (gamebook §2), highest to lowest, with the per-side count
@@ -52,6 +53,89 @@ const RANK_EN: Record<Rank, string> = {
   bomb: 'bomb',
 }
 
+const STR = {
+  zh: {
+    title: '兵種階級表',
+    refStandard: '規則書 §2',
+    refVariant: '本局配置 {{name}}',
+    refSuffix: '固定參考',
+    colRank: '階',
+    colName: '兵種',
+    colCount: '每方',
+    total: '合計',
+    totalWarn: '⚠ 應為 {{n}}',
+    variantPre: '本局採用',
+    variantAfter: '配置，數量與規則書 §2 的表不同（附錄 B：數量為可調參數）。階級與規則不變。',
+    line: '一律大吃小，無兵種例外（1 最大，10 最小）。',
+    rule1Strong: '同歸於盡：一種公告，三種原因。',
+    rule1Rest:
+      '階級相同、爆裂物撞上一般兵種、爆裂物撞上爆裂物，三者都是雙方同時移除、該格淨空、',
+    rule1Strong2: '不翻明任何一方',
+    rule1Rest2:
+      '，而且公告完全相同——你無從得知自己碰上的是同階還是爆裂物，也無法從紀錄數對手還剩幾顆爆裂物。',
+    rule2Strong: '爆裂物：工兵與軍旗雙向免疫。',
+    rule2Rest:
+      '爆裂物無固定階級，接觸時視同同階，故對任何兵種皆為雙亡；唯獨工兵與軍旗擊敗它——攻守兩個方向皆然。此時為「有煙無傷」，存活者不翻明，只公告其為工兵或軍旗。這是',
+    rule2Strong2: '唯一',
+    rule2Rest2: '會點出爆裂物的事件：成功引爆的爆裂物永遠不留名，失效的才會自曝。',
+    rule3Strong: '軍旗離場即刻判負。',
+    rule3Rest: '軍旗以任何方式離開棋盤，該方立即輸；雙方同時離場為和局。升變與易位不算離場。',
+  },
+  en: {
+    title: 'Rank table',
+    refStandard: 'Gamebook §2',
+    refVariant: 'This game’s {{name}} setup',
+    refSuffix: 'fixed reference',
+    colRank: '#',
+    colName: 'Rank',
+    colCount: 'Per side',
+    total: 'Total',
+    totalWarn: '⚠ should be {{n}}',
+    variantPre: 'This game uses the',
+    variantAfter:
+      'setup, whose counts differ from the gamebook §2 table (Appendix B: the counts are a tunable parameter). The rank order and rules are unchanged.',
+    line: 'Higher rank always beats lower, no exceptions (1 is highest, 10 is lowest).',
+    rule1Strong: 'Mutual destruction: one announcement, three causes.',
+    rule1Rest:
+      'Equal rank, a bomb hitting an ordinary piece, or a bomb hitting a bomb — all three remove both pieces simultaneously, clear the square, and ',
+    rule1Strong2: 'reveal neither side',
+    rule1Rest2:
+      ' — and the announcement is identical in all three cases, so you cannot tell whether you hit an equal rank or a bomb, nor count how many bombs the opponent has left from the record.',
+    rule2Strong: 'Bombs: Engineers and the Flag are immune, both directions.',
+    rule2Rest:
+      'A bomb has no fixed rank — on contact it counts as equal rank — so it destroys both pieces against any rank; only the Engineer and the Flag defeat it, whether attacking or defending. This is a "fizzle" (no harm, no foul): the survivor is not revealed, only announced as an Engineer or the Flag. This is the ',
+    rule2Strong2: 'only',
+    rule2Rest2:
+      ' event that points at a bomb at all — a bomb that successfully detonates never leaves a name; only a defused one gives itself away.',
+    rule3Strong: 'The Flag leaving the board is an immediate loss.',
+    rule3Rest:
+      'The Flag leaving the board by any means loses the game for that side immediately; both flags leaving simultaneously is a draw. Promotion and castling do not count as leaving.',
+  },
+} satisfies Strings<
+  | 'title'
+  | 'refStandard'
+  | 'refVariant'
+  | 'refSuffix'
+  | 'colRank'
+  | 'colName'
+  | 'colCount'
+  | 'total'
+  | 'totalWarn'
+  | 'variantPre'
+  | 'variantAfter'
+  | 'line'
+  | 'rule1Strong'
+  | 'rule1Rest'
+  | 'rule1Strong2'
+  | 'rule1Rest2'
+  | 'rule2Strong'
+  | 'rule2Rest'
+  | 'rule2Strong2'
+  | 'rule2Rest2'
+  | 'rule3Strong'
+  | 'rule3Rest'
+>
+
 export interface RankTableProps {
   /**
    * 本局的兵種數量表 (§2, 附錄 B). Omit it and the card reads the config of the
@@ -61,6 +145,8 @@ export interface RankTableProps {
 }
 
 export function RankTable({ distribution }: RankTableProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   // Subscribed unconditionally so the hook order never changes. The selector
   // returns a stable reference (see `distributionOf`). With no game on screen
   // there is no per-game table to be wrong about, so the §2 default stands in.
@@ -68,7 +154,7 @@ export function RankTable({ distribution }: RankTableProps) {
   const counts = distribution ?? configCounts
 
   const total = distributionTotal(counts)
-  const name = distributionName(counts)
+  const name = distributionName(counts, lang)
   const isStandard = isStandardDistribution(counts)
 
   return (
@@ -76,9 +162,9 @@ export function RankTable({ distribution }: RankTableProps) {
       <style>{STYLE}</style>
       <details className="panel xy-ranks" open>
         <summary className="xy-ranks-summary">
-          兵種階級表{' '}
+          {s.title}{' '}
           <span className="muted small">
-            （{isStandard ? '規則書 §2' : `本局配置 ${name}`} · 固定參考）
+            （{isStandard ? s.refStandard : fill(s.refVariant, { name })} · {s.refSuffix}）
           </span>
         </summary>
 
@@ -86,11 +172,11 @@ export function RankTable({ distribution }: RankTableProps) {
           <thead>
             <tr>
               <th scope="col" className="xy-ranks-num">
-                階
+                {s.colRank}
               </th>
-              <th scope="col">兵種</th>
+              <th scope="col">{s.colName}</th>
               <th scope="col" className="xy-ranks-count">
-                每方
+                {s.colCount}
               </th>
             </tr>
           </thead>
@@ -102,7 +188,7 @@ export function RankTable({ distribution }: RankTableProps) {
                 <tr key={rank} className={rank === 'bomb' ? 'xy-ranks-bomb' : undefined}>
                   <td className="xy-ranks-num">{RANK_NUMBER_LABEL[rank]}</td>
                   <td>
-                    <span className="xy-ranks-name">{RANK_LABEL[rank]}</span>{' '}
+                    <span className="xy-ranks-name">{RANK_LABEL[lang][rank]}</span>{' '}
                     <span className="muted xy-ranks-en">{RANK_EN[rank]}</span>
                   </td>
                   <td className={moved ? 'xy-ranks-count xy-ranks-moved' : 'xy-ranks-count'}>
@@ -115,7 +201,7 @@ export function RankTable({ distribution }: RankTableProps) {
           <tfoot>
             <tr>
               <td />
-              <td className="muted">合計</td>
+              <td className="muted">{s.total}</td>
               {/* §2 says 16. Stated, not assumed — a table that sums to anything
                   else is unplayable (§9 bijection) and the card says so instead
                   of quietly printing the wrong number. */}
@@ -125,7 +211,7 @@ export function RankTable({ distribution }: RankTableProps) {
                 }
               >
                 {total}
-                {total !== PIECES_PER_SIDE && ` ⚠ 應為 ${PIECES_PER_SIDE}`}
+                {total !== PIECES_PER_SIDE && ` ${fill(s.totalWarn, { n: PIECES_PER_SIDE })}`}
               </td>
             </tr>
           </tfoot>
@@ -133,24 +219,30 @@ export function RankTable({ distribution }: RankTableProps) {
 
         {!isStandard && (
           <p className="xy-ranks-variant">
-            本局採用<strong>{name}</strong>配置，數量與規則書 §2 的表不同（附錄 B：數量為可調參數）。
-            階級與規則不變。
+            {s.variantPre}
+            <strong>{name}</strong>
+            {s.variantAfter}
           </p>
         )}
 
-        <p className="xy-ranks-line">一律大吃小，無兵種例外（1 最大，10 最小）。</p>
+        <p className="xy-ranks-line">{s.line}</p>
 
         <ul className="xy-ranks-rules">
           <li>
-            <strong>同歸於盡：一種公告，三種原因。</strong>階級相同、爆裂物撞上一般兵種、爆裂物撞上爆裂物，三者都是雙方同時移除、該格淨空、
-            <strong>不翻明任何一方</strong>，而且公告完全相同——你無從得知自己碰上的是同階還是爆裂物，也無法從紀錄數對手還剩幾顆爆裂物。
+            <strong>{s.rule1Strong}</strong>
+            {s.rule1Rest}
+            <strong>{s.rule1Strong2}</strong>
+            {s.rule1Rest2}
           </li>
           <li>
-            <strong>爆裂物：工兵與軍旗雙向免疫。</strong>爆裂物無固定階級，接觸時視同同階，故對任何兵種皆為雙亡；唯獨工兵與軍旗擊敗它——攻守兩個方向皆然。此時為「有煙無傷」，存活者不翻明，只公告其為工兵或軍旗。
-            這是<strong>唯一</strong>會點出爆裂物的事件：成功引爆的爆裂物永遠不留名，失效的才會自曝。
+            <strong>{s.rule2Strong}</strong>
+            {s.rule2Rest}
+            <strong>{s.rule2Strong2}</strong>
+            {s.rule2Rest2}
           </li>
           <li>
-            <strong>軍旗離場即刻判負。</strong>軍旗以任何方式離開棋盤，該方立即輸；雙方同時離場為和局。升變與易位不算離場。
+            <strong>{s.rule3Strong}</strong>
+            {s.rule3Rest}
           </li>
         </ul>
       </details>

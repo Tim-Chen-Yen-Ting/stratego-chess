@@ -6,6 +6,74 @@ import { PieceTray } from '../components/PieceTray.js'
 import { RANKS_IN_ORDER, RANK_LABEL, distributionOf } from '../constants.js'
 import { colorLabel, formatCountdown } from '../format.js'
 import { canAct, useStore, viewerColor } from '../store.js'
+import { useLang, fill, type Strings } from '../i18n.js'
+
+const STR = {
+  zh: {
+    title: '佈署兵種',
+    aboutMs: '約 {{time}}',
+    autoAssign: '逾時系統自動指派',
+    youAre: '你執{{color}}',
+    spectatorView: '觀看者視角',
+    spectating: ' · 觀戰中，無法佈署',
+    bothSubmitted: '雙方皆已送出，即將開始。',
+    waitingOpponent: '等待對手佈署…',
+    draggingHint: '拖曳中 {{rank}} — 放到自己的棋子上{{clearHint}}。',
+    draggingClearHint: '，或放回兵種池以清除',
+    selectedHint: '已選 {{rank}} — 點一顆自己的棋子指派。',
+    idleHint: '拖曳兵種到自己的棋子上；或點兵種再點棋子。把棋子拖回兵種池即清除。',
+    overAssigned: '兵種數量超過配置表。',
+    fillRandomly: '隨機填滿',
+    clear: '清除',
+    submitted: '已送出',
+    submit: '送出佈署',
+    waitingBoth: '等待雙方佈署',
+    spectatorBound: '觀戰視角綁定於邀請你的玩家，你所見與其完全相同（規則書 §10）。',
+  },
+  en: {
+    title: 'Deploy Ranks',
+    aboutMs: 'about {{time}}',
+    autoAssign: 'The system auto-assigns on timeout',
+    youAre: 'You are {{color}}',
+    spectatorView: 'Spectator view',
+    spectating: ' · Spectating, cannot deploy',
+    bothSubmitted: 'Both sides have submitted — starting shortly.',
+    waitingOpponent: 'Waiting for opponent to deploy…',
+    draggingHint: 'Dragging {{rank}} — drop it on one of your own pieces{{clearHint}}.',
+    draggingClearHint: ', or drop it back on the pool to clear it',
+    selectedHint: '{{rank}} selected — click one of your own pieces to assign it.',
+    idleHint:
+      'Drag a rank onto one of your own pieces, or click a rank then click a piece. Drag a piece back to the pool to clear it.',
+    overAssigned: 'Rank count exceeds the configured table.',
+    fillRandomly: 'Fill randomly',
+    clear: 'Clear',
+    submitted: 'Submitted',
+    submit: 'Submit deployment',
+    waitingBoth: 'Waiting for both sides to deploy',
+    spectatorBound:
+      'The spectator view is bound to the player who invited you — you see exactly what they see (gamebook §10).',
+  },
+} satisfies Strings<
+  | 'title'
+  | 'aboutMs'
+  | 'autoAssign'
+  | 'youAre'
+  | 'spectatorView'
+  | 'spectating'
+  | 'bothSubmitted'
+  | 'waitingOpponent'
+  | 'draggingHint'
+  | 'draggingClearHint'
+  | 'selectedHint'
+  | 'idleHint'
+  | 'overAssigned'
+  | 'fillRandomly'
+  | 'clear'
+  | 'submitted'
+  | 'submit'
+  | 'waitingBoth'
+  | 'spectatorBound'
+>
 
 /**
  * Setup screen (techspec §7, gamebook §9). Both sides assign their 16 兵種 to
@@ -56,6 +124,8 @@ function emptyRemaining(dist: Readonly<Record<Rank, number>>): Record<Rank, numb
 }
 
 export function Setup({ view }: SetupProps) {
+  const { lang } = useLang()
+  const s = STR[lang]
   const sendAssign = useStore((s) => s.sendAssign)
   const me = viewerColor(view.viewer)
   const seated = canAct(view) && me !== null
@@ -163,7 +233,7 @@ export function Setup({ view }: SetupProps) {
   function beginDrag(payload: DragPayload, e: DragEvent<HTMLElement>) {
     setDrag(payload)
     e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', RANK_LABEL[payload.rank])
+    e.dataTransfer.setData('text/plain', RANK_LABEL[lang][payload.rank])
   }
 
   function onRankDragStart(rank: Rank, e: DragEvent<HTMLElement>) {
@@ -260,19 +330,19 @@ export function Setup({ view }: SetupProps) {
   return (
     <main className="screen screen-setup">
       <header className="topbar">
-        <h1>佈署兵種</h1>
+        <h1>{s.title}</h1>
         <div className="topbar-right">
           <span className={remainingMs < 30_000 ? 'clock urgent' : 'clock'}>
-            約 {formatCountdown(remainingMs)}
+            {fill(s.aboutMs, { time: formatCountdown(remainingMs) })}
           </span>
-          <span className="muted small">逾時系統自動指派</span>
+          <span className="muted small">{s.autoAssign}</span>
         </div>
       </header>
 
       <div className="setup-stack">
         <div className="seat">
-          {me ? `你執${colorLabel(me)}` : '觀看者視角'}
-          {!seated && <span className="muted"> · 觀戰中，無法佈署</span>}
+          {me ? fill(s.youAre, { color: colorLabel(me, lang) }) : s.spectatorView}
+          {!seated && <span className="muted">{s.spectating}</span>}
         </div>
 
         <Board
@@ -310,15 +380,16 @@ export function Setup({ view }: SetupProps) {
             <p className="muted small setup-hint">
               {mySubmitted
                 ? theirSubmitted
-                  ? '雙方皆已送出，即將開始。'
-                  : '等待對手佈署…'
+                  ? s.bothSubmitted
+                  : s.waitingOpponent
                 : drag
-                  ? `拖曳中 ${RANK_LABEL[drag.rank]} — 放到自己的棋子上${
-                      drag.fromId ? '，或放回兵種池以清除' : ''
-                    }。`
+                  ? fill(s.draggingHint, {
+                      rank: RANK_LABEL[lang][drag.rank],
+                      clearHint: drag.fromId ? s.draggingClearHint : '',
+                    })
                   : selectedRank
-                    ? `已選 ${RANK_LABEL[selectedRank]} — 點一顆自己的棋子指派。`
-                    : '拖曳兵種到自己的棋子上；或點兵種再點棋子。把棋子拖回兵種池即清除。'}
+                    ? fill(s.selectedHint, { rank: RANK_LABEL[lang][selectedRank] })
+                    : s.idleHint}
             </p>
 
             <PieceTray
@@ -332,11 +403,11 @@ export function Setup({ view }: SetupProps) {
               poolDropActive={drag !== null && drag.fromId !== null}
             />
 
-            {overAssigned && <p className="error">兵種數量超過配置表。</p>}
+            {overAssigned && <p className="error">{s.overAssigned}</p>}
 
             <div className="setup-actions">
               <button type="button" onClick={fillRandomly} disabled={mySubmitted}>
-                隨機填滿
+                {s.fillRandomly}
               </button>
               <button
                 type="button"
@@ -346,7 +417,7 @@ export function Setup({ view }: SetupProps) {
                 }}
                 disabled={mySubmitted}
               >
-                清除
+                {s.clear}
               </button>
               <button
                 className="primary"
@@ -354,17 +425,15 @@ export function Setup({ view }: SetupProps) {
                 onClick={submit}
                 disabled={!complete || mySubmitted}
               >
-                {mySubmitted ? '已送出' : '送出佈署'}
+                {mySubmitted ? s.submitted : s.submit}
               </button>
             </div>
           </div>
         ) : (
           <div className="setup-pool">
             <div className="panel">
-              <h2>等待雙方佈署</h2>
-              <p className="muted small">
-                觀戰視角綁定於邀請你的玩家，你所見與其完全相同（規則書 §10）。
-              </p>
+              <h2>{s.waitingBoth}</h2>
+              <p className="muted small">{s.spectatorBound}</p>
             </div>
           </div>
         )}

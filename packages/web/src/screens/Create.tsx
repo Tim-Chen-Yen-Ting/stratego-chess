@@ -12,11 +12,13 @@ import type { BotSeat, CreatedGame } from '../socket.js'
 import {
   DISTRIBUTIONS,
   DISTRIBUTION_IDS,
+  DISTRIBUTION_TEXT,
   PIECES_PER_SIDE,
   RANK_LABEL,
   SCORING_AREAS,
   SCORING_AREA_DEFAULT_X,
   SCORING_AREA_IDS,
+  SCORING_AREA_LABEL,
   checkDistribution,
   distributionDiff,
   distributionName,
@@ -26,6 +28,7 @@ import {
 } from '../constants.js'
 import { formatClock, other, squareName } from '../format.js'
 import { localizeUrl } from '../url.js'
+import { useLang, fill, type Strings } from '../i18n.js'
 
 /**
  * Create screen (techspec §7). A handful of settings, one POST /api/game, then
@@ -99,9 +102,10 @@ function squareList(squares: readonly Square[]): string {
  * cannot drift from the table being sent even if the preset is retuned in
  * `@xiyang/rules`.
  */
-function distributionDiffText(distribution: RankDistribution): string {
+function distributionDiffText(distribution: RankDistribution, lang: 'zh' | 'en'): string {
+  const standardWord = lang === 'zh' ? '標準' : 'standard'
   return distributionDiff(distribution)
-    .map(({ rank, count, standard }) => `${RANK_LABEL[rank]}×${count}（標準 ${standard}）`)
+    .map(({ rank, count, standard }) => `${RANK_LABEL[lang][rank]}×${count}（${standardWord} ${standard}）`)
     .join(' · ')
 }
 
@@ -121,6 +125,7 @@ function distributionDiffText(distribution: RankDistribution): string {
 async function postCreateGame(
   options: CreateOptions,
   botPolicy: string | null,
+  lang: 'zh' | 'en',
 ): Promise<CreatedGame> {
   const res = await fetch('/api/game', {
     method: 'POST',
@@ -135,11 +140,15 @@ async function postCreateGame(
       .json()
       .then((body: unknown) =>
         typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
-          ? `：${(body as { error: string }).error}`
+          ? `${lang === 'zh' ? '：' : ': '}${(body as { error: string }).error}`
           : '',
       )
       .catch(() => '')
-    throw new Error(`建立對局失敗（HTTP ${res.status}）${detail}`)
+    throw new Error(
+      lang === 'zh'
+        ? `建立對局失敗（HTTP ${res.status}）${detail}`
+        : `Failed to create game (HTTP ${res.status})${detail}`,
+    )
   }
   return (await res.json()) as CreatedGame
 }
@@ -164,8 +173,9 @@ async function postCreateGame(
  * 吃子得分, which this screen also configures, so the old pair would read as a
  * claim about capture scoring.)
  */
-function seatLabel(color: Color): string {
-  return color === 'white' ? '執白（先手）' : '執黑（後手，貼目 +0.5）'
+function seatLabel(color: Color, lang: 'zh' | 'en'): string {
+  if (lang === 'zh') return color === 'white' ? '執白（先手）' : '執黑（後手，貼目 +0.5）'
+  return color === 'white' ? 'White (moves first)' : 'Black (moves second, +0.5 komi)'
 }
 
 function llmForm(playUrl: string): string {
@@ -237,7 +247,228 @@ interface CreatedState {
   bot: BotSeat | null
 }
 
+const STR = {
+  zh: {
+    pageTitle: '行軍西洋棋',
+    pitch: '西洋棋的載體，行軍棋的兵種。載體公開、兵種隱藏，一律大吃小；中央四格每手結算，只有剛行動的一方計分，軍旗離場即判負。',
+    settingsTitle: '對局設定',
+    opponentLabel: '對手',
+    opponentTypeAria: '對手類型',
+    opponentHuman: '人類（邀請連結）',
+    opponentBot: '機器人',
+    opponentHintHuman: '建立後拿到一條邀請連結，交給對手，他用瀏覽器開啟即可入座。',
+    opponentHintBot: '伺服器會在另一個座位坐一個機器人，建立完直接開局，沒有邀請連結。',
+    botLabel: '機器人',
+    botDefaultSuffix: '（預設）',
+    botOnlyOpponentHint: '只有{{name}}是對手，其餘三個是量測儀器：它們是為了量棋盤而寫的，棋力低且各有一件事永遠不做（不吃子、不估勝算、不思考）。想下棋就用預設那個。',
+    botIsPlayerHint: '機器人是{{playerWord}}，不是旁觀者：它跟你一樣只收到自己視角的盤面（規則書 §10），自己秘密佈署十六個兵種，看不到你的軍容——你也不會拿到它的。這局不會發出第二個座位的連結。',
+    playerWord: '玩家',
+    clockLabel: '時鐘',
+    clockAria: '是否計時',
+    clockTimed: '計時對局',
+    clockUntimed: '不計時',
+    clockHintTimed: '雙方各 {{summary}}，時間用盡即判負。',
+    clockHintTimedBot: '機器人幾乎不耗時，讀秒實際上只約束你自己。',
+    clockHintTimedHuman: '人對人請用這個。',
+    clockHintUntimed: '完全關閉時鐘：不讀秒，也不會超時判負。與 LLM 靠複製貼上對弈時請選這個——一來一回的節奏遠慢於任何時鐘。',
+    advancedSummary: '進階設定',
+    areaLabel: '計分區',
+    areaDefaultSuffix: '（預設）',
+    areaHint1: '每一手結束時結算，{{onlyMover}}計分：該方棋子每佔一格得 1 分。目前選的是 {{squares}}。',
+    onlyMoverWord: '只有剛行動的一方',
+    areaHint2: '八格版把 a、h 兩條 rook 直線與兩側翼也變成有分可搶的地方，讓中央以外的半盤有東西可爭。',
+    distLabel: '兵種配置',
+    distDefaultSuffix: '（預設）',
+    distTotalPrefix: '雙方同表，且對雙方公開——這是設定，不是暗牌。每方合計',
+    distTotalUnit: '顆',
+    distTotalBad: '（必須是 {{n}}）',
+    distSameAsStandard: '，與規則書 §2 的表相同。',
+    distDiffPrefix: '，與標準不同的是',
+    xLabel: '目標分數 X',
+    xHint1: '先達到 X 分者獲勝。每一手只有{{onlyMover}}結算，因此每方每個完整回合恰好結算一次；但一次結算拿的是{{currentSquares}}，所以{{autoFill}}——{{centerLabel}} {{centerX}} 分、{{wideLabel}} {{wideX}} 分，換計分區會跟著換，自己填過就不再自動換。這兩個數字是實際對局採用的，不是附錄 B 的定案（附錄 B 只定了四格版 {{defaultX}} 分，八格版{{undecided}}）。',
+    onlyMoverBold: '只有剛行動的一方',
+    currentSquaresBold: '當下持有的格數',
+    autoFillBold: 'X 隨計分區自動帶入',
+    undecidedWord: '待定',
+    xHintWide: '八格版一次結算約 4 分、四格版約 2 分：同樣 X 下八格版短得多（《對局筆記》§9.3），所以八格版的預設 X 大約是四格版的兩倍。',
+    xHintCentre: '試玩短局時調低。',
+    kLabel: '吃子得分係數 k',
+    kHint1: '分數的第二個來源（規則書 §7.3）：決定性勝負時，{{winner}}得 k ×（{{winner}}階級數字）。階級數字為 司令 1 … 軍旗 10，數字越大代表越弱，所以以弱勝強拿得越多。得分只看勝方的階級——那顆棋子在同一則公告裡已被強制翻明——永遠不看敗方的。',
+    winnerWord: '勝方',
+    kHint2: '{{zeroMeans}}：分數只來自佔領計分格。附錄 B 本身尚未定案，仍是 {{engineDefault}}；這個表單另外預填 {{formDefault}}，是實際對局採用的數字，改回 0 隨時可以。此分於行動階段①即時入帳，因此奪旗結束的那一手照樣付（§7.6）。{{mustBeInt}}——貼目須是唯一的非整數分數來源，否則 §7.4 的「分數永不相等」不再成立。',
+    kZeroMeans: '0 表示關閉吃子得分',
+    kMustBeInt: '必須為整數',
+    fizzleLabel: '有煙無傷獎勵',
+    fizzleHint: '工兵或軍旗碰上爆裂物時（有煙無傷 §5.4），{{survivor}}得這筆固定額。固定額，且與存活者是誰無關：工兵與軍旗若給的分不同，這一分本身就把兵種報了出來。同歸於盡則雙方皆零分，沒有這個旋鈕——那正是爆裂物無法從分數欄被數出來的原因。{{zeroMeans}}。附錄 B 本身仍是 {{engineDefault}}；這個表單另外預填 {{formDefault}}。',
+    survivorWord: '存活方',
+    fizzleZeroMeans: '0 表示拆彈不另外給分',
+    noProgressLabel: '無進展回合 N',
+    noProgressHint: '連續 N 個完整回合無吃子且無得分即終局，由比分高者獲勝（預設 {{n}}）。',
+    setupLabel: '佈署時限（分）',
+    setupHint: '時間內未佈署者，伺服器代為{{random}}配置後開局。與 LLM 對局時需要來回貼網址，務必留足時間——逾時的隨機軍容與自選的看起來完全一樣，不會有任何提示。',
+    randomWord: '隨機',
+    createBusy: '建立中…',
+    createBot: '開始對局',
+    createHuman: '建立對局',
+    footerMemory: '對局存於記憶體，伺服器重啟即消失。無帳號、無配對',
+    footerBotSuffix: '；機器人對局不發邀請連結。',
+    footerHumanSuffix: '，僅邀請連結。',
+    createdTitle: '對局已建立',
+    summaryGameId: '對局編號',
+    summaryOpponentBot: '對手 機器人',
+    summaryClock: '計時',
+    summaryUntimed: '不計時',
+    summaryArea: '計分區',
+    summaryAreaUnit: '格',
+    summaryDist: '兵種配置',
+    summaryTarget: '目標',
+    summaryTargetUnit: '分',
+    summaryK: '吃子 k',
+    summaryFizzle: '有煙無傷 +',
+    summaryNoProgress: '無進展',
+    summaryNoProgressUnit: '回合',
+    summarySetup: '佈署時限',
+    summarySetupUnit: '分',
+    botFallbackError: '這個伺服器沒有座機器人（可能是較舊的版本），已改建立一般對局。下面是邀請連結，找個人來坐，或重新整理再試一次。',
+    botCreatedHeadline: '對手 {{name}}　它已入座，並會自己秘密佈署十六個兵種',
+    botCreatedSeat: '擲幣結果：你{{seat}}{{firstMoveNote}}',
+    botFirstMoveNote: '，機器人先行',
+    botNextStep: '下一步是你的佈署：把十六個兵種指派到自己的十六顆棋子上。機器人同時、獨立地做同一件事——它看不到你的，你也看不到它的。',
+    botEnter: '進入對局 →',
+    botEntering: '正在進入…沒有自動跳轉的話，按上面的按鈕。',
+    inviteLabel: '邀請對手（分享這條）— {{seat}}',
+    linkFormAria: '對手連結形式',
+    linkFormHuman: '人類',
+    linkFormLlm: 'LLM',
+    copyDone: '已複製',
+    copyAction: '複製',
+    seatNote: '同一個座位、同一組 token，只是換一種呈現：人類走 /g/ 的介面，LLM 走 /llm/ 的純文字。',
+    llmHint: '把這條貼進網頁版聊天機器人，請它抓取（fetch）這個網址：它會拿到純文字盤面，以及每個合法著法各自的網址，抓其中一條就是落子。',
+    humanUrlHint: '對手用瀏覽器開啟即可入座。',
+    coinNote: '擲幣已決定顏色。想要另一色就把兩條連結對調——誰拿到哪條，誰就坐那個位子。',
+    hostLabel: '你的入口（房主）— {{seat}}',
+    publicLabel: '公開觀戰 — 無陣營，不入座',
+    publicSafe: '對局進行中可安全轉發',
+    publicHint1: '拿到這條的人看到的是雙方本來就都知道的那些：棋盤與載體、公開事件紀錄、已翻明的兵種、比分與時鐘。任何一方未翻明的兵種都不在裡面——不是收到了不顯示，是伺服器根本不送（規則書 §10）。他也不能落子、不能認輸。終局後全部兵種對所有人公開（§10 終局公開全部兵種），這條連結也會一起看到。',
+    publicCareful: '別跟「綁定觀戰連結」搞混：',
+    publicHint2: '那條綁定某一方的視角（規則書 §10.2 ①），等於把那方的整副軍容交出去，對局中不能給第三者；要轉發的是上面這條。',
+    hostEnter: '以房主身分進入 →',
+    domainNote: '若上方分享連結的網域與此頁不同（開發模式常見），對手仍應使用伺服器發出的連結。',
+    copyFailed: '無法複製，請手動選取網址。',
+  },
+  en: {
+    pageTitle: 'Marching Chess',
+    pitch: 'Chess carriers, 行軍棋 ranks. Carriers are public, ranks are hidden, and it’s always big-beats-small. Centre 4 settles every ply, only the side that just moved scores, and losing your flag loses the game outright.',
+    settingsTitle: 'Game settings',
+    opponentLabel: 'Opponent',
+    opponentTypeAria: 'Opponent type',
+    opponentHuman: 'Human (invite link)',
+    opponentBot: 'Bot',
+    opponentHintHuman: 'You’ll get an invite link after creating — hand it to your opponent, they open it in a browser and take their seat.',
+    opponentHintBot: 'The server seats a bot in the other chair. The game starts immediately once created — no invite link.',
+    botLabel: 'Bot',
+    botDefaultSuffix: ' (default)',
+    botOnlyOpponentHint: 'Only {{name}} is an opponent — the other three are measuring instruments, built to measure the board, weak, and each permanently refusing to do one thing (never captures, never estimates odds, never plans). If you actually want a game, use the default one.',
+    botIsPlayerHint: 'The bot is a {{playerWord}}, not a spectator: it receives exactly its own redacted view, same as you (gamebook §10), secretly deploys its own sixteen ranks, and can’t see yours — you won’t get to see its either. This game issues no second-seat link.',
+    playerWord: 'player',
+    clockLabel: 'Clock',
+    clockAria: 'Timed or not',
+    clockTimed: 'Timed game',
+    clockUntimed: 'Untimed',
+    clockHintTimed: 'Each side gets {{summary}}; running out loses the game.',
+    clockHintTimedBot: 'The bot barely spends any time — the clock is really just constraining you.',
+    clockHintTimedHuman: 'Use this for human vs. human.',
+    clockHintUntimed: 'The clock is fully off: no countdown, no timeout loss. Use this when playing an LLM by copy-pasting URLs back and forth — that back-and-forth is far slower than any clock.',
+    advancedSummary: 'Advanced settings',
+    areaLabel: 'Scoring area',
+    areaDefaultSuffix: ' (default)',
+    areaHint1: 'Settlement runs at the end of every ply, but {{onlyMover}} scores: 1 point per square that side currently occupies. Currently selected: {{squares}}.',
+    onlyMoverWord: 'only the side that just moved',
+    areaHint2: 'The 8-square board turns the a/h rook files and both flanks into contested ground too, so there’s something to fight over off-centre as well.',
+    distLabel: 'Rank distribution',
+    distDefaultSuffix: ' (default)',
+    distTotalPrefix: 'Same table for both sides, public to both — this is a setting, not a hidden card. Each side totals',
+    distTotalUnit: 'pieces',
+    distTotalBad: ' (must be {{n}})',
+    distSameAsStandard: ', same as the gamebook §2 table.',
+    distDiffPrefix: ', differing from standard by',
+    xLabel: 'Score target (X)',
+    xHint1: 'First to X points wins. Each ply only {{onlyMover}} settles, so each side settles exactly once per full turn — but a settlement pays {{currentSquares}}, so {{autoFill}} — {{centerLabel}} {{centerX}} points, {{wideLabel}} {{wideX}} points, switching the scoring area updates it, and it stops auto-updating once you type your own. These two numbers are what real games have actually used, not an Appendix B ruling (Appendix B only specifies {{defaultX}} points for the 4-square board — the 8-square board is still {{undecided}}).',
+    onlyMoverBold: 'only the side that just moved',
+    currentSquaresBold: 'the squares it currently holds',
+    autoFillBold: 'X auto-fills from the scoring area',
+    undecidedWord: 'undecided',
+    xHintWide: 'A settlement on the 8-square board is worth about 4 points versus about 2 on the 4-square board: at the same X, the 8-square game is much shorter ({《對局筆記》§9.3}), so its default X is set to roughly double the 4-square board’s.',
+    xHintCentre: 'Lower this for quick practice games.',
+    kLabel: 'Capture-score coefficient (k)',
+    kHint1: 'The second source of points (gamebook §7.3): on a decisive fight, the {{winner}} gets k × (the {{winner}}’s own rank number). Rank numbers run Commander 1 … Flag 10 — higher means weaker, so beating a stronger piece with a weaker one pays more. Only the winner’s rank counts — it’s already forced face-up in the same announcement — never the loser’s.',
+    winnerWord: 'winner',
+    kHint2: '{{zeroMeans}}: points come only from holding scoring squares. Appendix B itself is still undecided, at {{engineDefault}}; this form separately pre-fills {{formDefault}}, the number real games have actually used — switch back to 0 any time. This is paid immediately in the action phase, so the very move that captures the flag still pays it (§7.6). {{mustBeInt}} — komi has to stay the only non-integer source of points, or §7.4’s "the score can never tie" stops holding.',
+    kZeroMeans: '0 turns capture-scoring off',
+    kMustBeInt: 'Must be a whole number',
+    fizzleLabel: 'Fizzle bonus',
+    fizzleHint: 'When an Engineer or the Flag meets a bomb (fizzle, §5.4), the {{survivor}} gets this flat amount. Flat, and independent of who survived: if Engineer and Flag paid different amounts, that payment alone would out the piece’s rank. A mutual destruction pays both sides zero and has no knob here — that’s exactly why a bomb can’t be counted off the score column. {{zeroMeans}}. Appendix B itself is still {{engineDefault}}; this form separately pre-fills {{formDefault}}.',
+    survivorWord: 'survivor',
+    fizzleZeroMeans: '0 means disarming a bomb pays nothing extra',
+    noProgressLabel: 'No-progress limit (N)',
+    noProgressHint: 'N consecutive full turns with no capture and no score change ends the game; the higher score wins (default {{n}}).',
+    setupLabel: 'Setup time limit (min)',
+    setupHint: 'Anyone who hasn’t deployed in time gets a {{random}} assignment from the server, and the game starts anyway. Playing an LLM means pasting URLs back and forth, so leave plenty of time — a timed-out random army looks exactly like a chosen one, with no indication either way.',
+    randomWord: 'random',
+    createBusy: 'Creating…',
+    createBot: 'Start game',
+    createHuman: 'Create game',
+    footerMemory: 'Games live in memory; a server restart drops them. No accounts, no matchmaking',
+    footerBotSuffix: '; bot games issue no invite link.',
+    footerHumanSuffix: ', invite links only.',
+    createdTitle: 'Game created',
+    summaryGameId: 'Game',
+    summaryOpponentBot: 'Opponent bot',
+    summaryClock: 'Timed',
+    summaryUntimed: 'Untimed',
+    summaryArea: 'Scoring area',
+    summaryAreaUnit: 'squares',
+    summaryDist: 'Ranks',
+    summaryTarget: 'Target',
+    summaryTargetUnit: 'points',
+    summaryK: 'capture k',
+    summaryFizzle: 'fizzle +',
+    summaryNoProgress: 'no-progress',
+    summaryNoProgressUnit: 'turns',
+    summarySetup: 'setup limit',
+    summarySetupUnit: 'min',
+    botFallbackError: 'This server has no bot seated (possibly an older version) — created a regular game instead. Below is the invite link: find someone to take the seat, or refresh and try again.',
+    botCreatedHeadline: 'Opponent {{name}}　it has taken its seat and will secretly deploy its own sixteen ranks',
+    botCreatedSeat: 'Coin flip: you are {{seat}}{{firstMoveNote}}',
+    botFirstMoveNote: ', the bot moves first',
+    botNextStep: 'Next is your deployment: assign your sixteen ranks to your sixteen pieces. The bot is doing the same thing at the same time, independently — it can’t see yours, you can’t see its.',
+    botEnter: 'Enter game →',
+    botEntering: 'Entering… if it doesn’t redirect automatically, use the button above.',
+    inviteLabel: 'Invite your opponent (share this) — {{seat}}',
+    linkFormAria: 'Opponent link format',
+    linkFormHuman: 'Human',
+    linkFormLlm: 'LLM',
+    copyDone: 'Copied',
+    copyAction: 'Copy',
+    seatNote: 'Same seat, same token, just a different rendering: humans use the /g/ UI, LLMs use the /llm/ plain text.',
+    llmHint: 'Paste this into a web chatbot and ask it to fetch this URL: it gets back a plain-text board plus a URL for every legal move — fetching one plays it.',
+    humanUrlHint: 'Your opponent opens it in a browser to take their seat.',
+    coinNote: 'The coin flip already decided colours. Want the other one? Swap the two links — whoever holds which link sits in that seat.',
+    hostLabel: 'Your entrance (host) — {{seat}}',
+    publicLabel: 'Public spectator — no side, no seat',
+    publicSafe: 'Safe to forward while the game is in progress',
+    publicHint1: 'Whoever holds this link sees exactly what both players already know: the board and carriers, the public event log, revealed ranks, score, and clock. Neither side’s un-revealed ranks are in it — not received-but-hidden, the server simply never sends them (gamebook §10). They can’t move or resign either. Once the game ends, every rank opens to everyone (§10), and this link sees that too.',
+    publicCareful: 'Don’t confuse this with a bound spectator link:',
+    publicHint2: 'that one is bound to one side’s view (gamebook §10.2 ①) — equivalent to handing over that side’s entire army, and must never go to a third party mid-game. Forward the link above instead.',
+    hostEnter: 'Enter as host →',
+    domainNote: 'If the shared link’s domain differs from this page (common in dev mode), your opponent should still use the link the server issued.',
+    copyFailed: 'Couldn’t copy — please select the URL manually.',
+  },
+} satisfies Strings<string>
+
 export function Create() {
+  const { lang } = useLang()
+  const s = STR[lang]
   const [created, setCreated] = useState<CreatedState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -254,8 +485,9 @@ export function Create() {
   // the §2 table it dealt before this picker existed.
   const [distributionId, setDistributionId] = useState<DistributionId>('standard')
   const distributionPreset = DISTRIBUTIONS[distributionId]
+  const distributionText = DISTRIBUTION_TEXT[lang][distributionId]
   const distributionSize = distributionTotal(distributionPreset.counts)
-  const distributionChanges = distributionDiffText(distributionPreset.counts)
+  const distributionChanges = distributionDiffText(distributionPreset.counts, lang)
 
   // null until the player types a value, so flipping the clock preset can keep
   // moving the default without ever discarding something they chose themselves
@@ -311,7 +543,9 @@ export function Create() {
     const problem = checkDistribution(distributionPreset.counts)
     if (problem !== null) {
       setError(
-        `兵種配置「${distributionPreset.label}」不合法：合計 ${distributionSize} 顆，必須恰好 ${PIECES_PER_SIDE} 顆（規則書 §2）。已停止建立。［${problem}］`,
+        lang === 'zh'
+          ? `兵種配置「${distributionText.label}」不合法：合計 ${distributionSize} 顆，必須恰好 ${PIECES_PER_SIDE} 顆（規則書 §2）。已停止建立。［${problem}］`
+          : `Rank set "${distributionText.label}" is invalid: totals ${distributionSize} pieces, must be exactly ${PIECES_PER_SIDE} (gamebook §2). Not creating the game. [${problem}]`,
       )
       return
     }
@@ -332,7 +566,7 @@ export function Create() {
     setBusy(true)
     setError(null)
     try {
-      const game = await postCreateGame(options, requestedBot)
+      const game = await postCreateGame(options, requestedBot, lang)
       const bot = botSeatOf(game, requestedBot)
       // Carried across the navigation into the game, where a fresh page load
       // knows only its token. Server-side marking wins wherever it exists; this
@@ -372,7 +606,7 @@ export function Create() {
       setCopied(label)
       window.setTimeout(() => setCopied(null), 1500)
     } catch {
-      setError('無法複製，請手動選取網址。')
+      setError(s.copyFailed)
     }
   }
 
@@ -404,51 +638,46 @@ export function Create() {
   return (
     <main className="screen screen-create">
       <style>{CREATE_CSS}</style>
-      <h1>行軍西洋棋</h1>
-      <p className="muted">
-        西洋棋的載體，行軍棋的兵種。載體公開、兵種隱藏，一律大吃小；中央四格每手結算，
-        只有剛行動的一方計分，軍旗離場即判負。
-      </p>
+      <h1>{s.pageTitle}</h1>
+      <p className="muted">{s.pitch}</p>
 
       {!created && (
         <>
           <section className="panel">
-            <h2>對局設定</h2>
+            <h2>{s.settingsTitle}</h2>
 
             {/* WHO first, then how long and how much — the rest of this panel
                 only makes sense once it is known whether a second person is
                 coming. */}
             <div className="c-field c-opponent">
               <div className="c-field-head">
-                <span className="c-field-label">對手</span>
-                <span className="c-seg c-seg-big" role="group" aria-label="對手類型">
+                <span className="c-field-label">{s.opponentLabel}</span>
+                <span className="c-seg c-seg-big" role="group" aria-label={s.opponentTypeAria}>
                   <button
                     type="button"
                     aria-pressed={opponentKind === 'human'}
                     onClick={() => setOpponentKind('human')}
                   >
-                    人類（邀請連結）
+                    {s.opponentHuman}
                   </button>
                   <button
                     type="button"
                     aria-pressed={opponentKind === 'bot'}
                     onClick={() => setOpponentKind('bot')}
                   >
-                    機器人
+                    {s.opponentBot}
                   </button>
                 </span>
               </div>
               <p className="muted small c-hint">
-                {opponentKind === 'human'
-                  ? '建立後拿到一條邀請連結，交給對手，他用瀏覽器開啟即可入座。'
-                  : '伺服器會在另一個座位坐一個機器人，建立完直接開局，沒有邀請連結。'}
+                {opponentKind === 'human' ? s.opponentHintHuman : s.opponentHintBot}
               </p>
 
               {opponentKind === 'bot' && (
                 <>
                   <div className="c-num-row c-bot-row">
                     <span className="c-num-label" id="c-bot-label">
-                      機器人
+                      {s.botLabel}
                     </span>
                     {/* same card shape as the 兵種配置 picker: four options that
                         each need a sentence saying what they will actually do to
@@ -466,13 +695,13 @@ export function Create() {
                             onClick={() => setBotPolicy(policy.id)}
                           >
                             <span className="c-choice-head">
-                              <span className="c-choice-name">{policy.label}</span>
+                              <span className="c-choice-name">{policy.label[lang]}</span>
                               <span className="c-choice-what">
                                 <code className="c-sq">{policy.id}</code>
-                                {policy.id === DEFAULT_BOT_POLICY && '（預設）'}
+                                {policy.id === DEFAULT_BOT_POLICY && s.botDefaultSuffix}
                               </span>
                             </span>
-                            <span className="c-choice-why">{policy.line}</span>
+                            <span className="c-choice-why">{policy.line[lang]}</span>
                           </button>
                         )
                       })}
@@ -487,8 +716,7 @@ export function Create() {
                    * ranks none of them invites the player to pick the weakest.
                    */}
                   <p className="muted small c-hint">
-                    只有<strong>推測</strong>是對手，其餘三個是量測儀器：它們是為了量棋盤而寫的，
-                    棋力低且各有一件事永遠不做（不吃子、不估勝算、不思考）。想下棋就用預設那個。
+                    {fill(s.botOnlyOpponentHint, { name: BOT_POLICIES[0]!.label[lang] })}
                   </p>
                   {/*
                    * The claim that makes a bot an opponent rather than a
@@ -498,9 +726,7 @@ export function Create() {
                    * (規則書 §10). It cannot see your 兵種; you cannot see its.
                    */}
                   <p className="muted small c-hint">
-                    機器人是<strong>玩家</strong>，不是旁觀者：它跟你一樣只收到自己視角的盤面（規則書
-                    §10），自己秘密佈署十六個兵種，看不到你的軍容——你也不會拿到它的。
-                    這局不會發出第二個座位的連結。
+                    {fill(s.botIsPlayerHint, { playerWord: s.playerWord })}
                   </p>
                 </>
               )}
@@ -508,40 +734,38 @@ export function Create() {
 
             <div className="c-field">
               <div className="c-field-head">
-                <span className="c-field-label">時鐘</span>
-                <span className="c-seg c-seg-big" role="group" aria-label="是否計時">
+                <span className="c-field-label">{s.clockLabel}</span>
+                <span className="c-seg c-seg-big" role="group" aria-label={s.clockAria}>
                   <button
                     type="button"
                     aria-pressed={clockEnabled}
                     onClick={() => setClockEnabled(true)}
                   >
-                    計時對局
+                    {s.clockTimed}
                   </button>
                   <button
                     type="button"
                     aria-pressed={!clockEnabled}
                     onClick={() => setClockEnabled(false)}
                   >
-                    不計時
+                    {s.clockUntimed}
                   </button>
                 </span>
               </div>
               <p className="muted small c-hint">
                 {clockEnabled
-                  ? `雙方各 ${CLOCK_SUMMARY}，時間用盡即判負。` +
-                    (opponentKind === 'bot'
-                      ? '機器人幾乎不耗時，讀秒實際上只約束你自己。'
-                      : '人對人請用這個。')
-                  : '完全關閉時鐘：不讀秒，也不會超時判負。與 LLM 靠複製貼上對弈時請選這個——一來一回的節奏遠慢於任何時鐘。'}
+                  ? fill(s.clockHintTimed, { summary: CLOCK_SUMMARY }) +
+                    (opponentKind === 'bot' ? s.clockHintTimedBot : s.clockHintTimedHuman)
+                  : s.clockHintUntimed}
               </p>
             </div>
 
             <details className="c-adv">
-              <summary>進階設定</summary>
+              <summary>{s.advancedSummary}</summary>
               <div className="c-adv-body">
                 <div className="c-num-row c-area-row">
                   <span className="c-num-label" id="c-area-label">
-                    計分區
+                    {s.areaLabel}
                   </span>
                   <span className="c-seg" role="group" aria-labelledby="c-area-label">
                     {SCORING_AREA_IDS.map((id) => (
@@ -551,23 +775,23 @@ export function Create() {
                         aria-pressed={scoringAreaId === id}
                         onClick={() => setScoringAreaId(id)}
                       >
-                        {SCORING_AREAS[id].label}
-                        {id === 'center' && '（預設）'}
+                        {SCORING_AREA_LABEL[lang][id]}
+                        {id === 'center' && s.areaDefaultSuffix}
                       </button>
                     ))}
                   </span>
                 </div>
                 <p className="muted small c-hint">
-                  每一手結束時結算，<strong>只有剛行動的一方</strong>計分：該方棋子每佔一格得 1
-                  分。目前選的是 <code className="c-sq">{squareList(scoringArea.squares)}</code>。
+                  {fill(s.areaHint1, {
+                    onlyMover: s.onlyMoverWord,
+                    squares: squareList(scoringArea.squares),
+                  })}
                 </p>
-                <p className="muted small c-hint">
-                  八格版把 a、h 兩條 rook 直線與兩側翼也變成有分可搶的地方，讓中央以外的半盤有東西可爭。
-                </p>
+                <p className="muted small c-hint">{s.areaHint2}</p>
 
                 <div className="c-num-row c-dist-row">
                   <span className="c-num-label" id="c-dist-label">
-                    兵種配置
+                    {s.distLabel}
                   </span>
                   {/* Same control semantics as the 計分區 picker above — a group
                       of aria-pressed buttons, not a role="radio" group, because
@@ -576,7 +800,7 @@ export function Create() {
                       sentence of justification only need the shape to change. */}
                   <div className="c-choices" role="group" aria-labelledby="c-dist-label">
                     {DISTRIBUTION_IDS.map((id) => {
-                      const preset = DISTRIBUTIONS[id]
+                      const text = DISTRIBUTION_TEXT[lang][id]
                       const active = distributionId === id
                       return (
                         <button
@@ -587,37 +811,37 @@ export function Create() {
                           onClick={() => setDistributionId(id)}
                         >
                           <span className="c-choice-head">
-                            <span className="c-choice-name">{preset.label}</span>
+                            <span className="c-choice-name">{text.label}</span>
                             <span className="c-choice-what">
-                              {id === 'standard' ? '（預設）' : `— ${preset.what}`}
+                              {id === 'standard' ? s.distDefaultSuffix : `— ${text.what}`}
                             </span>
                           </span>
                           {/* what it is FOR, not what it is */}
-                          <span className="c-choice-why">{preset.why}</span>
+                          <span className="c-choice-why">{text.why}</span>
                         </button>
                       )
                     })}
                   </div>
                 </div>
                 <p className="muted small c-hint">
-                  雙方同表，且對雙方公開——這是設定，不是暗牌。每方合計{' '}
+                  {s.distTotalPrefix}{' '}
                   <strong className={distributionSize === PIECES_PER_SIDE ? undefined : 'c-bad'}>
                     {distributionSize}
                   </strong>{' '}
-                  顆
-                  {distributionSize === PIECES_PER_SIDE ? '' : `（必須是 ${PIECES_PER_SIDE}）`}
+                  {s.distTotalUnit}
+                  {distributionSize === PIECES_PER_SIDE ? '' : fill(s.distTotalBad, { n: PIECES_PER_SIDE })}
                   {distributionChanges === '' ? (
-                    '，與規則書 §2 的表相同。'
+                    s.distSameAsStandard
                   ) : (
                     <>
-                      ，與標準不同的是 <code className="c-sq">{distributionChanges}</code>。
+                      {s.distDiffPrefix} <code className="c-sq">{distributionChanges}</code>。
                     </>
                   )}
                 </p>
-                <p className="muted small c-hint">{distributionPreset.note}</p>
+                <p className="muted small c-hint">{distributionText.note}</p>
 
                 <label className="c-num-row">
-                  <span className="c-num-label">目標分數 X</span>
+                  <span className="c-num-label">{s.xLabel}</span>
                   <input
                     className="c-num"
                     type="number"
@@ -629,16 +853,19 @@ export function Create() {
                   />
                 </label>
                 <p className="muted small c-hint">
-                  先達到 X 分者獲勝。每一手只有<strong>剛行動的一方</strong>結算，因此每方每個完整
-                  回合恰好結算一次；但一次結算拿的是<strong>當下持有的格數</strong>，
-                  所以 <strong>X 隨計分區自動帶入</strong>——{SCORING_AREAS.center.label}{' '}
-                  {SCORING_AREA_DEFAULT_X.center} 分、{SCORING_AREAS.wide.label}{' '}
-                  {SCORING_AREA_DEFAULT_X.wide} 分，換計分區會跟著換，自己填過就不再自動換。
-                  這兩個數字是實際對局採用的，不是附錄 B 的定案（附錄 B 只定了四格版{' '}
-                  {DEFAULT_CONFIG.scoreTarget} 分，八格版<strong>待定</strong>）。
-                  {wideArea
-                    ? '八格版一次結算約 4 分、四格版約 2 分：同樣 X 下八格版短得多（《對局筆記》§9.3），所以八格版的預設 X 大約是四格版的兩倍。'
-                    : '試玩短局時調低。'}
+                  {fill(s.xHint1, {
+                    onlyMover: s.onlyMoverBold,
+                    currentSquares: s.currentSquaresBold,
+                    autoFill: s.autoFillBold,
+                    centerLabel: SCORING_AREA_LABEL[lang].center,
+                    centerX: SCORING_AREA_DEFAULT_X.center,
+                    wideLabel: SCORING_AREA_LABEL[lang].wide,
+                    wideX: SCORING_AREA_DEFAULT_X.wide,
+                    defaultX: DEFAULT_CONFIG.scoreTarget,
+                    undecided: s.undecidedWord,
+                  })}
+                  {' '}
+                  {wideArea ? s.xHintWide : s.xHintCentre}
                 </p>
 
                 {/*
@@ -648,7 +875,7 @@ export function Create() {
                  * against that line.
                  */}
                 <label className="c-num-row">
-                  <span className="c-num-label">吃子得分係數 k</span>
+                  <span className="c-num-label">{s.kLabel}</span>
                   <input
                     className="c-num"
                     type="number"
@@ -660,21 +887,19 @@ export function Create() {
                   />
                 </label>
                 <p className="muted small c-hint">
-                  分數的第二個來源（規則書 §7.3）：決定性勝負時，<strong>勝方</strong>得 k ×（
-                  <strong>勝方</strong>階級數字）。階級數字為 司令 1 … 軍旗 10，數字越大代表越弱，
-                  所以以弱勝強拿得越多。得分只看勝方的階級——那顆棋子在同一則公告裡已被強制翻明——
-                  永遠不看敗方的。
+                  {fill(s.kHint1, { winner: s.winnerWord })}
                 </p>
                 <p className="muted small c-hint">
-                  <strong>0 表示關閉吃子得分</strong>：分數只來自佔領計分格。附錄 B 本身尚未定案，
-                  仍是 {DEFAULT_CONFIG.captureScoreK}；這個表單另外預填{' '}
-                  {FORM_DEFAULT_CAPTURE_K}，是實際對局採用的數字，改回 0 隨時可以。此分於行動階段
-                  ①即時入帳，因此奪旗結束的那一手照樣付（§7.6）。<strong>必須為整數</strong>——
-                  貼目須是唯一的非整數分數來源，否則 §7.4 的「分數永不相等」不再成立。
+                  {fill(s.kHint2, {
+                    zeroMeans: s.kZeroMeans,
+                    engineDefault: DEFAULT_CONFIG.captureScoreK,
+                    formDefault: FORM_DEFAULT_CAPTURE_K,
+                    mustBeInt: s.kMustBeInt,
+                  })}
                 </p>
 
                 <label className="c-num-row">
-                  <span className="c-num-label">有煙無傷獎勵</span>
+                  <span className="c-num-label">{s.fizzleLabel}</span>
                   <input
                     className="c-num"
                     type="number"
@@ -686,15 +911,16 @@ export function Create() {
                   />
                 </label>
                 <p className="muted small c-hint">
-                  工兵或軍旗碰上爆裂物時（有煙無傷 §5.4），<strong>存活方</strong>得這筆固定額。
-                  固定額，且與存活者是誰無關：工兵與軍旗若給的分不同，這一分本身就把兵種報了出來。
-                  同歸於盡則雙方皆零分，沒有這個旋鈕——那正是爆裂物無法從分數欄被數出來的原因。
-                  <strong>0 表示拆彈不另外給分</strong>。附錄 B 本身仍是{' '}
-                  {DEFAULT_CONFIG.fizzleBonus}；這個表單另外預填 {FORM_DEFAULT_FIZZLE_BONUS}。
+                  {fill(s.fizzleHint, {
+                    survivor: s.survivorWord,
+                    zeroMeans: s.fizzleZeroMeans,
+                    engineDefault: DEFAULT_CONFIG.fizzleBonus,
+                    formDefault: FORM_DEFAULT_FIZZLE_BONUS,
+                  })}
                 </p>
 
                 <label className="c-num-row">
-                  <span className="c-num-label">無進展回合 N</span>
+                  <span className="c-num-label">{s.noProgressLabel}</span>
                   <input
                     className="c-num"
                     type="number"
@@ -706,12 +932,11 @@ export function Create() {
                   />
                 </label>
                 <p className="muted small c-hint">
-                  連續 N 個完整回合無吃子且無得分即終局，由比分高者獲勝（預設{' '}
-                  {DEFAULT_CONFIG.noProgressTurns}）。
+                  {fill(s.noProgressHint, { n: DEFAULT_CONFIG.noProgressTurns })}
                 </p>
 
                 <label className="c-num-row">
-                  <span className="c-num-label">佈署時限（分）</span>
+                  <span className="c-num-label">{s.setupLabel}</span>
                   <input
                     className="c-num"
                     type="number"
@@ -723,20 +948,18 @@ export function Create() {
                   />
                 </label>
                 <p className="muted small c-hint">
-                  時間內未佈署者，伺服器代為<strong>隨機</strong>配置後開局。與 LLM
-                  對局時需要來回貼網址，務必留足時間——逾時的隨機軍容與自選的看起來完全一樣，
-                  不會有任何提示。
+                  {fill(s.setupHint, { random: s.randomWord })}
                 </p>
               </div>
             </details>
           </section>
 
           <button className="primary big" type="button" onClick={onCreate} disabled={busy}>
-            {busy ? '建立中…' : opponentKind === 'bot' ? '開始對局' : '建立對局'}
+            {busy ? s.createBusy : opponentKind === 'bot' ? s.createBot : s.createHuman}
           </button>
           <p className="muted small">
-            對局存於記憶體，伺服器重啟即消失。無帳號、無配對
-            {opponentKind === 'bot' ? '；機器人對局不發邀請連結。' : '，僅邀請連結。'}
+            {s.footerMemory}
+            {opponentKind === 'bot' ? s.footerBotSuffix : s.footerHumanSuffix}
           </p>
         </>
       )}
@@ -745,20 +968,20 @@ export function Create() {
 
       {created && (
         <section className="panel">
-          <h2>對局已建立</h2>
+          <h2>{s.createdTitle}</h2>
           <p className="muted small">
-            對局編號 {created.game.gameId} ·{' '}
-            {created.bot !== null ? `對手 機器人 ${botPolicyLabel(created.bot.policy)} · ` : ''}
-            {created.options.clockEnabled ? `計時 ${CLOCK_SUMMARY}` : '不計時'} · 計分區{' '}
-            {created.options.scoringSquares.length} 格 · 兵種配置{' '}
-            {distributionName(created.options.distribution)} · 目標 {created.options.scoreTarget} 分
+            {s.summaryGameId} {created.game.gameId} ·{' '}
+            {created.bot !== null ? `${s.summaryOpponentBot} ${botPolicyLabel(created.bot.policy, lang)} · ` : ''}
+            {created.options.clockEnabled ? `${s.summaryClock} ${CLOCK_SUMMARY}` : s.summaryUntimed} · {s.summaryArea}{' '}
+            {created.options.scoringSquares.length} {s.summaryAreaUnit} · {s.summaryDist}{' '}
+            {distributionName(created.options.distribution, lang)} · {s.summaryTarget} {created.options.scoreTarget} {s.summaryTargetUnit}
             {/* §7.3 is off unless it was switched on, and a line reading
                 「吃子 k 0」 would suggest otherwise — so a default game's summary
                 is byte-for-byte the one it printed before this setting existed. */}
-            {created.options.captureScoreK > 0 && <> · 吃子 k {created.options.captureScoreK}</>}
-            {created.options.fizzleBonus > 0 && <> · 有煙無傷 +{created.options.fizzleBonus}</>}
-            {' '}· 無進展 {created.options.noProgressTurns} 回合 · 佈署時限{' '}
-            {Math.round(created.options.setupTimeoutMs / 60_000)} 分
+            {created.options.captureScoreK > 0 && <> · {s.summaryK} {created.options.captureScoreK}</>}
+            {created.options.fizzleBonus > 0 && <> · {s.summaryFizzle}{created.options.fizzleBonus}</>}
+            {' '}· {s.summaryNoProgress} {created.options.noProgressTurns} {s.summaryNoProgressUnit} · {s.summarySetup}{' '}
+            {Math.round(created.options.setupTimeoutMs / 60_000)} {s.summarySetupUnit}
           </p>
 
           {/*
@@ -767,10 +990,7 @@ export function Create() {
            * is never coming. The invite link below is the honest way out.
            */}
           {created.requestedBot !== null && created.bot === null && (
-            <p className="error">
-              這個伺服器沒有座機器人（可能是較舊的版本），已改建立一般對局。
-              下面是邀請連結，找個人來坐，或重新整理再試一次。
-            </p>
+            <p className="error">{s.botFallbackError}</p>
           )}
 
           {created.bot !== null ? (
@@ -783,25 +1003,25 @@ export function Create() {
              */
             <div className="c-bot-created">
               <div className="c-bot-headline">
-                對手 <strong>機器人 · {botPolicyLabel(created.bot.policy)}</strong>
-                　它已入座，並會自己秘密佈署十六個兵種
+                {fill(s.botCreatedHeadline, {
+                  name: `${lang === 'zh' ? '機器人' : 'Bot'} · ${botPolicyLabel(created.bot.policy, lang)}`,
+                })}
               </div>
               {/* the coin flip already ran (§9) and may well have handed the
                   human Black — say so before the board does */}
               <div className="c-bot-seat">
-                擲幣結果：你<strong>{seatLabel(created.game.hostColor)}</strong>
-                {created.game.hostColor === 'black' && '，機器人先行'}
+                {fill(s.botCreatedSeat, {
+                  seat: seatLabel(created.game.hostColor, lang),
+                  firstMoveNote: created.game.hostColor === 'black' ? s.botFirstMoveNote : '',
+                })}
               </div>
-              <p className="muted small c-hint">
-                下一步是你的佈署：把十六個兵種指派到自己的十六顆棋子上。
-                機器人同時、獨立地做同一件事——它看不到你的，你也看不到它的。
-              </p>
+              <p className="muted small c-hint">{s.botNextStep}</p>
               <p>
                 <a className="primary big as-button" href={localizeUrl(created.game.hostUrl)}>
-                  進入對局 →
+                  {s.botEnter}
                 </a>
               </p>
-              <p className="muted small">正在進入…沒有自動跳轉的話，按上面的按鈕。</p>
+              <p className="muted small">{s.botEntering}</p>
             </div>
           ) : (
             <>
@@ -809,51 +1029,45 @@ export function Create() {
               <div className="link-row">
                 <div className="link-label c-label-row">
                   <span>
-                    邀請對手（分享這條）—{' '}
-                    {seatLabel(created.game.guestColor ?? other(created.game.hostColor))}
+                    {fill(s.inviteLabel, {
+                      seat: seatLabel(created.game.guestColor ?? other(created.game.hostColor), lang),
+                    })}
                   </span>
-                  <span className="c-seg" role="group" aria-label="對手連結形式">
+                  <span className="c-seg" role="group" aria-label={s.linkFormAria}>
                     <button
                       type="button"
                       aria-pressed={opponentMode === 'human'}
                       onClick={() => chooseOpponentMode('human')}
                     >
-                      人類
+                      {s.linkFormHuman}
                     </button>
                     <button
                       type="button"
                       aria-pressed={opponentMode === 'llm'}
                       onClick={() => chooseOpponentMode('llm')}
                     >
-                      LLM
+                      {s.linkFormLlm}
                     </button>
                   </span>
                 </div>
                 <code className="link">{opponentUrl}</code>
                 <button type="button" onClick={() => void copy('guest', opponentUrl)}>
-                  {copied === 'guest' ? '已複製' : '複製'}
+                  {copied === 'guest' ? s.copyDone : s.copyAction}
                 </button>
-                <p className="muted small c-hint c-seat-note">
-                  同一個座位、同一組 token，只是換一種呈現：人類走 <code>/g/</code> 的介面，
-                  LLM 走 <code>/llm/</code> 的純文字。
-                </p>
+                <p className="muted small c-hint c-seat-note">{s.seatNote}</p>
                 <p className="muted small c-hint">
-                  {opponentMode === 'llm'
-                    ? '把這條貼進網頁版聊天機器人，請它抓取（fetch）這個網址：它會拿到純文字盤面，以及每個合法著法各自的網址，抓其中一條就是落子。'
-                    : '對手用瀏覽器開啟即可入座。'}
+                  {opponentMode === 'llm' ? s.llmHint : s.humanUrlHint}
                 </p>
               </div>
             )}
 
             <div className="link-row">
-              <p className="muted small c-hint">
-                擲幣已決定顏色。想要另一色就把兩條連結對調——誰拿到哪條，誰就坐那個位子。
-              </p>
+              <p className="muted small c-hint">{s.coinNote}</p>
 
-              <div className="link-label">你的入口（房主）— {seatLabel(created.game.hostColor)}</div>
+              <div className="link-label">{fill(s.hostLabel, { seat: seatLabel(created.game.hostColor, lang) })}</div>
               <code className="link">{created.game.hostUrl}</code>
               <button type="button" onClick={() => void copy('host', created.game.hostUrl)}>
-                {copied === 'host' ? '已複製' : '複製'}
+                {copied === 'host' ? s.copyDone : s.copyAction}
               </button>
             </div>
 
@@ -867,31 +1081,27 @@ export function Create() {
             {publicUrl !== '' && (
               <div className="link-row c-public-row">
                 <div className="link-label c-label-row">
-                  <span>公開觀戰 — 無陣營，不入座</span>
-                  <span className="c-safe">對局進行中可安全轉發</span>
+                  <span>{s.publicLabel}</span>
+                  <span className="c-safe">{s.publicSafe}</span>
                 </div>
                 <code className="link">{publicUrl}</code>
                 <button type="button" onClick={() => void copy('public', publicUrl)}>
-                  {copied === 'public' ? '已複製' : '複製'}
+                  {copied === 'public' ? s.copyDone : s.copyAction}
                 </button>
+                <p className="muted small c-hint">{s.publicHint1}</p>
                 <p className="muted small c-hint">
-                  拿到這條的人看到的是<strong>雙方本來就都知道的那些</strong>：棋盤與載體、公開事件紀錄、已翻明的兵種、比分與時鐘。任何一方未翻明的兵種都不在裡面——不是收到了不顯示，是伺服器根本不送（規則書 §10）。他也不能落子、不能認輸。終局後全部兵種對所有人公開（§10 終局公開全部兵種），這條連結也會一起看到。
-                </p>
-                <p className="muted small c-hint">
-                  <strong className="c-careful">別跟「綁定觀戰連結」搞混：</strong>
-                  那條綁定某一方的視角（規則書 §10.2 ①），等於把那方的整副軍容交出去，對局中不能給第三者；要轉發的是上面這條。
+                  <strong className="c-careful">{s.publicCareful}</strong>
+                  {s.publicHint2}
                 </p>
               </div>
             )}
 
             <p>
               <a className="primary big as-button" href={localizeUrl(created.game.hostUrl)}>
-                以房主身分進入 →
+                {s.hostEnter}
               </a>
             </p>
-            <p className="muted small">
-              若上方分享連結的網域與此頁不同（開發模式常見），對手仍應使用伺服器發出的連結。
-            </p>
+            <p className="muted small">{s.domainNote}</p>
             </>
           )}
         </section>
