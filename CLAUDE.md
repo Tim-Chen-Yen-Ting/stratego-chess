@@ -14,13 +14,23 @@ what the game *is*. Everything else describes, argues about, or measures it.
 
 | File | Role | Normative? |
 |---|---|---|
-| `gamebook_v05.md` | **The rules.** What is legal, what wins, what is public. | **Yes** |
-| `techspec_v01.md` | Structure, types, APIs. Loses to the gamebook on rules. | For code |
-| `notebook_v01.md` | Derivations, emergent interactions, playtest data, rule history. | No |
-| `strategy_v01.md` | Player-facing 攻略 — how to play well. | No |
-| `fogofwar_v01.md` | Design doc for an unbuilt optional mode. | No |
+| `gamebook.md` | **The rules.** What is legal, what wins, what is public. | **Yes** |
+| `techspec.md` | Structure, types, APIs. Loses to the gamebook on rules. | For code |
+| `notebook_v01.md` | Derivations, emergent interactions, playtest data, rule history. **Gitignored.** | No |
+| `strategy_v01.md` | Player-facing 攻略 — how to play well. **Gitignored.** | No |
+| `fogofwar.md` | Design doc for an unbuilt optional mode. | No |
 | `games/` | Exported game records. **Gitignored** — carries full deployments. | No |
-| `gamebook.md`, `_v02`, `_v03`, `_v04`, `plan_v01.md` | Superseded. Kept for history. | No |
+| `gamebook_v01.md`…`_v05.md`, `plan_v01.md` | Superseded. Kept for history, **gitignored**. | No |
+
+`gamebook.md`, `techspec.md` and `fogofwar.md` are tracked and public as of 2026-08-22 — before
+that, the entire document set was gitignored (same "local research data" treatment `games/` still
+gets) and this repo shipped with no rules documentation at all. Rule history moved from
+filename-suffix versioning (`_v02`, `_v03`, …) to git history for these three: `gamebook.md` is now
+the single file that changes in place, one commit per rule change, and `git log -p gamebook.md`
+is the version record going forward — the old numbered snapshots stay on disk (gitignored) as a
+pre-git-tracking archive, not as an ongoing convention. `notebook_v01.md`, `strategy_v01.md` and
+`plan_v01.md` stay local: research notes and a superseded planning doc, not documentation a GitHub
+visitor needs.
 
 ### The rulebook contains no "why"
 

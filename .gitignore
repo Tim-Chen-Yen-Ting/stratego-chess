@@ -19,10 +19,11 @@ Thumbs.db
 games/
 
 #documents
-gamebook*.md
-fogofwar*.md
+# gamebook.md, techspec.md, fogofwar.md are tracked — the current, canonical
+# versions. Old numbered snapshots stay local, same treatment as notebook/plan/
+# strategy: research history, not something a GitHub visitor needs.
+gamebook_v0*.md
 strategy*.md
-techspec*.md
 plan*.md
 notebook_v01.md
 
