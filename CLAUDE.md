@@ -224,3 +224,18 @@ Render, one Web Service serving API, WebSocket and the built client from one
 origin. `npm ci && npm run build` / `npm start`, health check `/healthz`, and
 `PUBLIC_BASE_URL` must be set — the LLM interface builds absolute move URLs from
 it. Games live in memory; a restart loses them, which is accepted for v1.
+
+**Finished-game archiving** (`packages/server/src/archive.ts`) is separate from
+that and does survive a restart, if configured: set `GAMES_ARCHIVE_DIR` to a
+writable directory and every game that reaches `status.kind === 'over'` writes
+its `exportJson`/`exportMarkdown` there once, automatically — the same content
+a human gets from `ExportPanel`'s omniscient export, unattended. Unset by
+default, so local dev and CI never write files nobody asked for — and unset on
+the live deployment (Free instance type; Render disks need a paid one, judged
+not worth it for this project). Enabling it for real would need a persistent
+disk (paid plans only, one instance) mounted at whatever path
+`GAMES_ARCHIVE_DIR` names — without one, anything written there is as
+ephemeral as everything else in the container. This is deliberately **not**
+`games/`: that directory is the human-curated, hand-indexed archive with
+per-game analysis in `games/README.md`; the auto-archive is the uncurated raw
+feed, and an interesting game still gets copied into `games/` by hand.

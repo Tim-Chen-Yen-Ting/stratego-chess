@@ -291,6 +291,8 @@ npm run dev          # server on :3000 with tsx watch, Vite on :5173 proxying to
 
 ## Deployment
 
+Live at **[stratego-chess.onrender.com](https://stratego-chess.onrender.com)**.
+
 The project runs on Render in practice: one Web Service serving API, WebSocket and the built
 client from a single origin (`npm ci && npm run build`, `npm start`, health check `/healthz`,
 `PUBLIC_BASE_URL` set to the deployed origin).

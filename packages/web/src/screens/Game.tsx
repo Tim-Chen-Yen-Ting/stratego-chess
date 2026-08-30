@@ -140,6 +140,7 @@ const STR = {
     overReplayNote: '棋盤已切換為回放 — 見下方的回放列',
     promoteLabel: '升變為：',
     cancelLabel: '取消',
+    homeLabel: '返回首頁',
     shareLink: '分享／觀戰連結',
     passForcedTitle: '無合法移動，強制 pass — 給予增秒（§8）',
     passVoluntaryTitle: '主動 pass 永遠合法，但不給增秒（§8）',
@@ -198,6 +199,7 @@ const STR = {
     overReplayNote: 'The board has switched to replay — see the replay bar below',
     promoteLabel: 'Promote to:',
     cancelLabel: 'Cancel',
+    homeLabel: 'Home',
     shareLink: 'Share / spectate link',
     passForcedTitle: 'No legal move; pass is forced — grants an increment (§8)',
     passVoluntaryTitle: 'A voluntary pass is always legal, but grants no increment (§8)',
@@ -254,6 +256,7 @@ const STR = {
   | 'overReplayNote'
   | 'promoteLabel'
   | 'cancelLabel'
+  | 'homeLabel'
   | 'shareLink'
   | 'passForcedTitle'
   | 'passVoluntaryTitle'
@@ -994,6 +997,11 @@ export function Game({ view }: GameProps) {
           )}
 
           <div className="controls">
+            {/* No client-side router (App.tsx): "home" is just the origin
+                with no token, which always renders Create. A real navigation
+                rather than a client-side reset, since leaving the game is
+                exactly what it looks like. */}
+            <a className="link-button" href="/">{s.homeLabel}</a>
             {/* Share links live here as well as on the create screen: once you
                 are inside your own game that screen is gone, and with it the
                 only way to hand someone the public-watch link. */}

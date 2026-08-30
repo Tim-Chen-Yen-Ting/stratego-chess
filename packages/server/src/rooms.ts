@@ -202,6 +202,10 @@ export interface Room {
   setupDeadline: number | null
   readonly createdAt: number
   lastActivity: number
+  /** true once the finished-game archiver has been asked to run for this room,
+   *  win or lose — set before the (async, best-effort) write starts so a
+   *  second `notify` on an already-over game can never fire it twice. */
+  archived: boolean
 }
 
 export interface Resolved {
@@ -231,6 +235,15 @@ export function setBroadcaster(fn: (room: Room) => void): void {
   broadcaster = fn
 }
 
+/** index.ts installs the finished-game archiver here; same reason rooms.ts
+ *  must not import sockets.ts — this module must not import archive.ts either,
+ *  since archive.ts needs `Room`/`serialiseFor` from here. */
+let archiver: (room: Room) => void = () => {}
+
+export function setArchiver(fn: (room: Room) => void): void {
+  archiver = fn
+}
+
 /**
  * One state change, fanned out — and then the bot is given the chance to answer.
  *
@@ -244,6 +257,15 @@ function notify(room: Room): void {
     broadcaster(room)
   } catch (error) {
     log.error(`broadcast failed for game ${room.id}: ${describeError(error)}`)
+  }
+  // Fires at most once per room: every path that can reach `notify` with the
+  // game already over (playMove, resignPlayer) refuses to run again on an
+  // 'over' game, so this is the one `notify` call where the flip just
+  // happened. The guard still exists because "fires at most once" is a fact
+  // about the callers today, not an invariant this file enforces elsewhere.
+  if (room.state.status.kind === 'over' && !room.archived) {
+    room.archived = true
+    archiver(room)
   }
   driveBot(room)
 }
@@ -341,6 +363,7 @@ export function createRoom(options: CreateRoomOptions = {}): Room {
     setupDeadline: null,
     createdAt: now,
     lastActivity: now,
+    archived: false,
   }
 
   // A bot seat minted no tokens, so there is nothing to register for it: no

@@ -348,14 +348,25 @@ export const CARRIER_LABEL: Strings<Carrier> = {
   en: { pawn: 'pawn', knight: 'knight', bishop: 'bishop', rook: 'rook', queen: 'queen', king: 'king' },
 }
 
-/** Solid Unicode chess glyphs for both colours; colour comes from CSS. Not translated — glyphs. */
+/**
+ * Solid Unicode chess glyphs for both colours; colour comes from CSS
+ * (`.piece-white .glyph` / `.piece-black .glyph`). Not translated — glyphs.
+ *
+ * Each is suffixed with U+FE0E (text variation selector). Without it, some
+ * mobile browsers — Android's in particular — render these code points with
+ * a colour-emoji font instead of the text font. A colour-emoji glyph is a
+ * fixed-colour image: it ignores `color` and `text-shadow` completely, so
+ * white and black pieces (the same glyph, coloured only by CSS) render
+ * identically — seen live as "white pawns turn black" on mobile. U+FE0E
+ * forces the text presentation, restoring CSS control over colour.
+ */
 export const CARRIER_GLYPH: Record<Carrier, string> = {
-  king: '♚',
-  queen: '♛',
-  rook: '♜',
-  bishop: '♝',
-  knight: '♞',
-  pawn: '♟',
+  king: '♚︎',
+  queen: '♛︎',
+  rook: '♜︎',
+  bishop: '♝︎',
+  knight: '♞︎',
+  pawn: '♟︎',
 }
 
 export const COLOR_LABEL: Strings<Color> = {

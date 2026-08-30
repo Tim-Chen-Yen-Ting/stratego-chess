@@ -38,6 +38,7 @@ import type { GameConfig, Rank, Viewer } from '@xiyang/rules'
 import { POLICIES } from '@xiyang/bot'
 import type { Policy } from '@xiyang/bot'
 
+import { archiveFinishedGame } from './archive.js'
 import { registerLlmRoutes } from './llm.js'
 import {
   createRoom,
@@ -47,6 +48,7 @@ import {
   roomCount,
   seatColor,
   serialiseFor,
+  setArchiver,
   setRoomLog,
   type BotOpponent,
   type Room,
@@ -568,6 +570,11 @@ async function main(): Promise<void> {
   // The registry drives the bot seat, and a policy that returns an illegal move
   // must be shouted about rather than silently freezing the board (rooms.ts).
   setRoomLog(log)
+  // No-op unless GAMES_ARCHIVE_DIR is set (archive.ts). Fire-and-forget: a disk
+  // failure here must not be mistaken for a game failure by anything upstream.
+  setArchiver((room) => {
+    void archiveFinishedGame(room, log)
+  })
 
   let closing = false
   const shutdown = (signal: string): void => {

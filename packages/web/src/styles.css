@@ -128,6 +128,24 @@ a {
   border-radius: 6px;
 }
 
+/* an <a> styled like a plain (non-primary) button — .as-button is always the
+   big blue CTA look, which a routine control like "home" would wear oddly */
+.link-button {
+  display: inline-block;
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.link-button:hover {
+  border-color: var(--accent);
+}
+
 /* ---------- create ---------- */
 
 .link-row {
@@ -422,6 +440,11 @@ a {
 
 .glyph {
   font-size: calc(var(--sq) * 0.6);
+  /* belt-and-braces alongside the U+FE0E in CARRIER_GLYPH (constants.ts): on
+     browsers that support it, this alone would stop a colour-emoji font from
+     swallowing the piece colour; where it isn't supported, the variation
+     selector already in the glyph string is what does the job. */
+  font-variant-emoji: text;
 }
 
 .piece-white .glyph {
