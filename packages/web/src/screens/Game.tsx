@@ -795,30 +795,39 @@ export function Game({ view }: GameProps) {
       <style>{STYLE}</style>
 
       <header className="topbar">
-        {/* Scores, clocks and — while replaying — the income of the ply on the
-            board. Everything positional here reads `shownView`, so stepping a
-            ply steps the scoreboard with it. */}
-        <div className="scoreboard">
-          <SidePanel
-            color="white"
-            score={shownView.score.white}
-            clockMs={shownClock('white')}
-            clockEnabled={view.config.clockEnabled}
-            toMove={playing && shownView.toMove === 'white'}
-            isMe={me === 'white'}
-            income={replaying ? (income?.white ?? null) : undefined}
-            justMoved={replaying && currentEvent?.color === 'white'}
-          />
-          <SidePanel
-            color="black"
-            score={shownView.score.black}
-            clockMs={shownClock('black')}
-            clockEnabled={view.config.clockEnabled}
-            toMove={playing && shownView.toMove === 'black'}
-            isMe={me === 'black'}
-            income={replaying ? (income?.black ?? null) : undefined}
-            justMoved={replaying && currentEvent?.color === 'black'}
-          />
+        <div className="topbar-left">
+          {/* Same destination as the one in .controls below (App.tsx has no
+              client-side router: "home" is just the origin with no token) —
+              duplicated here because a player looking to leave the game
+              looks at the top of the screen first, not at the bottom of the
+              board, and the bottom one stays for reachability once scrolled
+              down to the controls row. */}
+          <a className="link-button" href="/">{s.homeLabel}</a>
+          {/* Scores, clocks and — while replaying — the income of the ply on
+              the board. Everything positional here reads `shownView`, so
+              stepping a ply steps the scoreboard with it. */}
+          <div className="scoreboard">
+            <SidePanel
+              color="white"
+              score={shownView.score.white}
+              clockMs={shownClock('white')}
+              clockEnabled={view.config.clockEnabled}
+              toMove={playing && shownView.toMove === 'white'}
+              isMe={me === 'white'}
+              income={replaying ? (income?.white ?? null) : undefined}
+              justMoved={replaying && currentEvent?.color === 'white'}
+            />
+            <SidePanel
+              color="black"
+              score={shownView.score.black}
+              clockMs={shownClock('black')}
+              clockEnabled={view.config.clockEnabled}
+              toMove={playing && shownView.toMove === 'black'}
+              isMe={me === 'black'}
+              income={replaying ? (income?.black ?? null) : undefined}
+              justMoved={replaying && currentEvent?.color === 'black'}
+            />
+          </div>
         </div>
         <div className="meta">
           <div>

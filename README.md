@@ -1,5 +1,8 @@
 # 行軍西洋棋
 
+**▶ [Play now](https://stratego-chess.onrender.com)** — free-tier hosting, so if it's been idle the
+first load can take 30–60s to wake up. Fast once it's warm.
+
 以西洋棋的棋盤與移動規則作為載體，承載行軍棋的兵種階級、隱藏資訊與吃子判定。
 
 每顆棋子都有**兩個互不相關的層**：

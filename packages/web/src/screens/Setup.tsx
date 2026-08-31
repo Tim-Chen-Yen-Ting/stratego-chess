@@ -11,6 +11,7 @@ import { useLang, fill, type Strings } from '../i18n.js'
 const STR = {
   zh: {
     title: '佈署兵種',
+    homeLabel: '返回首頁',
     aboutMs: '約 {{time}}',
     autoAssign: '逾時系統自動指派',
     youAre: '你執{{color}}',
@@ -32,6 +33,7 @@ const STR = {
   },
   en: {
     title: 'Deploy Ranks',
+    homeLabel: 'Home',
     aboutMs: 'about {{time}}',
     autoAssign: 'The system auto-assigns on timeout',
     youAre: 'You are {{color}}',
@@ -55,6 +57,7 @@ const STR = {
   },
 } satisfies Strings<
   | 'title'
+  | 'homeLabel'
   | 'aboutMs'
   | 'autoAssign'
   | 'youAre'
@@ -330,7 +333,12 @@ export function Setup({ view }: SetupProps) {
   return (
     <main className="screen screen-setup">
       <header className="topbar">
-        <h1>{s.title}</h1>
+        <div className="topbar-left">
+          {/* Same target as Game.tsx's: the origin with no token, which
+              App.tsx always renders as Create — there is no router to ask. */}
+          <a className="link-button" href="/">{s.homeLabel}</a>
+          <h1>{s.title}</h1>
+        </div>
         <div className="topbar-right">
           <span className={remainingMs < 30_000 ? 'clock urgent' : 'clock'}>
             {fill(s.aboutMs, { time: formatCountdown(remainingMs) })}

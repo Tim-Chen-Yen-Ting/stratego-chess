@@ -190,6 +190,12 @@ a {
   gap: 10px;
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .scoreboard {
   display: flex;
   gap: 10px;
