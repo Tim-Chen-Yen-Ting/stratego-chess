@@ -79,7 +79,9 @@ import {
   branchOdds,
   classifyContact,
   contactEV,
+  contextFor,
   economyOf,
+  evaluate,
   flagThreat,
   makeBeliefPolicy,
   revealsOnWin,
@@ -979,6 +981,77 @@ describe('it is not paranoid about a threat it has time to answer', () => {
     // twice and is not going to make a third time.
     expect(MIXING_BAND_SQUARES).toBeLessThan(FLAG_STEP_COST)
     expect(MIXING_BAND_SQUARES).toBeLessThan(REPLY_WEIGHT)
+  })
+})
+
+describe('§15.2 — a guard by deterrence, not by blocking (game archive #025)', () => {
+  /**
+   * The queen (carrying 司令 here, so the deterrence is unambiguous) sits on
+   * c7, threatening to capture on c6 — not blocking anything, c6 is empty and
+   * reachable, landing there just walks into the queen. Black's knight on b4
+   * is one hop from c6 and, from c6, one more hop from our own 軍旗 on a5.
+   *
+   * `b-c7` and `b-b7` are relocated out of the way for reasons that have
+   * nothing to do with what this scene is testing: c7 is Black's own pawn's
+   * home square (placing the queen there without moving it first corrupts
+   * `occupancy` — two pieces claim one square), and b7 is a coincidence of
+   * the standard opening layout — a pawn push to b6 then a diagonal capture
+   * reaches a5 in exactly two plies, the same horizon this section cares
+   * about, and would otherwise register as a second, unrelated lining threat.
+   *
+   * e5 is an ordinary 結算格 (中央四格) — ordinarily a perfectly good queen
+   * move, and exactly what game #025's `belief` played instead of anything
+   * that kept c6 covered.
+   */
+  function guardScene(moves: Move[]): ViewerState {
+    const view = scene({
+      color: 'white',
+      place: [
+        { id: 'w-d1', square: sq('c7'), rank: 'commander' },
+        { id: 'w-a2', square: sq('a5') },
+        { id: 'b-b8', square: sq('b4') },
+        { id: 'b-c7', square: sq('h6') },
+        { id: 'b-b7', square: sq('g6') },
+      ],
+      moves,
+    })
+    return flagOn(view, 'white', 'w-a2')
+  }
+
+  it('refuses to give the guard up for an ordinary scoring-square move', () => {
+    const view = guardScene([move('c7', 'e5'), PASS])
+    expect(playsOver(view, 'white', 40)).toEqual(new Set(['pass']))
+  })
+
+  it('the same move is a real, legal, differently-priced move with the check off', () => {
+    // Isolates §15.2 as the reason: with it switched off, `evaluate` still
+    // recognises c7e5 as a legal, quiet move and prices it (whatever the
+    // price — the point is only that it is a NUMBER, not the refusal above).
+    const view = guardScene([move('c7', 'e5'), PASS])
+    const ctx = contextFor(view, 'white', makeRng(0), { flagGuardCheck: false })
+    expect(evaluate(ctx, move('c7', 'e5'))).not.toBeNull()
+  })
+
+  it('is not paranoid about a square nothing is actually deterred from', () => {
+    // Same queen, same 軍旗 — but the knight is on h4 instead of b4, nowhere
+    // near a two-hop path to a5. Nothing is being guarded, so the check must
+    // be a complete no-op: the exact same price with it on as with it off.
+    const view = scene({
+      color: 'white',
+      place: [
+        { id: 'w-d1', square: sq('c7'), rank: 'commander' },
+        { id: 'w-a2', square: sq('a5') },
+        { id: 'b-b8', square: sq('h4') },
+        { id: 'b-c7', square: sq('h6') },
+        { id: 'b-b7', square: sq('g6') },
+      ],
+      moves: [move('c7', 'e5'), PASS],
+    })
+    const flagged = flagOn(view, 'white', 'w-a2')
+    const withCheck = contextFor(flagged, 'white', makeRng(0), {})
+    const withoutCheck = contextFor(flagged, 'white', makeRng(0), { flagGuardCheck: false })
+    expect(withCheck.guardedApproaches).toEqual([])
+    expect(evaluate(withCheck, move('c7', 'e5'))).toBe(evaluate(withoutCheck, move('c7', 'e5')))
   })
 })
 

@@ -481,6 +481,13 @@ a {
   padding: 0 2px;
   margin-top: 1px;
   white-space: nowrap;
+  /* Belt-and-braces: Board.tsx's boardRankTag() already keeps the content
+     short enough to fit (a rank number in English, the 2-character word in
+     Chinese), but nothing should ever be able to visibly spill out of the
+     tile again regardless of what text ends up here. */
+  max-width: calc(var(--sq) * 0.92);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rank-tag:empty {

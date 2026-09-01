@@ -298,13 +298,13 @@ export const DISTRIBUTION_TEXT: Record<Lang, Record<DistributionId, Distribution
     scouts: {
       label: 'Scouts',
       what: '4 engineers, taken from one regiment and one battalion',
-      why: 'Meant to actually make 有煙無傷 (fizzle) happen — zero occurrences across four recorded games. An engineer is only worth spending when you have more of them than the opponent has bombs: your engineer count is literally how many safe probes you get.',
-      note: 'Notebook §4.5, untested. Cost: 4 engineers + 1 flag is five pieces that basically can’t fight, and the fizzle survivor pool grows from 3 candidates to 5 — the flag gets harder to hunt, but also harder to defend by elimination.',
+      why: 'Meant to actually make fizzles happen — zero occurrences across four recorded games. An engineer is only worth spending when you have more of them than the opponent has bombs: your engineer count is literally how many safe probes you get.',
+      note: 'Notebook §4.5, untested. Cost: 4 engineers + 1 flag is five pieces that basically can\'t fight, and the fizzle survivor pool grows from 3 candidates to 5 — the flag gets harder to hunt, but also harder to defend by elimination.',
     },
     'top-heavy': {
       label: 'Top-heavy',
       what: 'The doubled ranks moved up to ranks that mostly stay home',
-      why: 'Meant to turn the ranks that actually collide into singles, cutting down on expensive equal-rank trades — a trade favours whoever’s already ahead on points, and it’s the trailing side that gets forced into making one.',
+      why: 'Meant to turn the ranks that actually collide into singles, cutting down on expensive equal-rank trades — a trade favours whoever\'s already ahead on points, and it\'s the trailing side that gets forced into making one.',
       note: 'Notebook §4.4, untested. High ranks are no longer unique, so an equal-rank trade can now happen on a more expensive piece.',
     },
   },

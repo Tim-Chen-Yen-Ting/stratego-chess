@@ -84,7 +84,7 @@ const STR = {
   en: {
     title: 'Rank table',
     refStandard: 'Gamebook §2',
-    refVariant: 'This game’s {{name}} setup',
+    refVariant: 'This game\'s {{name}} setup',
     refSuffix: 'fixed reference',
     colRank: '#',
     colName: 'Rank',

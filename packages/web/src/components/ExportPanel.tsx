@@ -93,7 +93,7 @@ const STR = {
     plyListPrefix: '第 {{plies}} 手',
   },
   en: {
-    exportButtonTitle: 'Export this game’s public record (Markdown / JSON) — paste it elsewhere for analysis',
+    exportButtonTitle: 'Export this game\'s public record (Markdown / JSON) — paste it elsewhere for analysis',
     exportButtonLabel: 'Export record',
     panelTitle: 'Export Game Record',
     plyLabel: 'Ply {{ply}}',
@@ -117,7 +117,7 @@ const STR = {
     footerScopeBase: 'Content is limited to what this viewpoint can already see (gamebook §10)',
     footerScopeOver: '. The game is over, every rank is disclosed, so this is the complete game record.',
     footerScopeOngoing:
-      ': the enemy’s undisclosed ranks are not included, and the system attaches no guesses. Exporting after the game ends produces the complete record.',
+      ': the enemy\'s undisclosed ranks are not included, and the system attaches no guesses. Exporting after the game ends produces the complete record.',
     colWhite: 'White',
     colBlack: 'Black',
     rowPlies: 'Plies',

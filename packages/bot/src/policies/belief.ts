@@ -128,6 +128,41 @@
  * make two decisions it could not make at all」, not 「better」.
  *
  * ---------------------------------------------------------------------------
+ * §15.2 — a guard by deterrence, not by blocking
+ * ---------------------------------------------------------------------------
+ *
+ * Game archive #025 (games/README.md): a queen deterred an enemy knight from a
+ * two-hop approach to our own 軍旗 purely by threatening to capture wherever it
+ * landed — nothing blocked, nothing lined up, the knight simply had nowhere
+ * safe to stage from. Five plies later the queen left for a 結算格, on a move
+ * with nothing wrong about it BY THE 1-PLY REACTIVE CHECK §5.3 ALREADY RUNS —
+ * nothing was attacking the 軍旗 at that instant. The knight then took the
+ * route the queen had been closing off, in two ordinary-looking moves.
+ * `guardedApproachesFor` / `movesAGuardian` / `opensGuardedApproach` are that
+ * gap: not "is my flag attacked", which was already answered correctly, but
+ * "did I just give up the one thing making an attack two moves away instead
+ * of one".
+ *
+ * 1200 games a cell (2 seeds × 300 × swapped colours), the identical file with
+ * `flagGuardCheck: false` as the paired comparison:
+ *
+ *                     中央四格   側翼八格
+ *   vs contest          69.4%      67.3%
+ *   without the check   70.0%      67.3%
+ *   head-to-head        49.8%      50.0%
+ *
+ * Every cell is inside one standard error (~1.4pp at this n) of its pair. The
+ * honest reading is `flagSurvivesEscalation`'s own: **not worse**, not
+ * **better** — this measurement cannot see the thing it was built to fix,
+ * because that failure needs a specific shape (an unrevealed piece guarding a
+ * staging square near our own 軍旗) that is rare enough not to move a
+ * thousand-game win rate either way. What it answers is the question that
+ * actually mattered before shipping it: does asking this question on every
+ * ordinary move cost anything. Measured answer: no. See
+ * `beliefPolicy.test.ts`'s §15.2 scenes for proof the mechanism itself fires
+ * correctly on the position that motivated it — hand-built, not waited for.
+ *
+ * ---------------------------------------------------------------------------
  * The lens (policy.ts, and it is not negotiable)
  * ---------------------------------------------------------------------------
  *
@@ -193,7 +228,7 @@ import {
   squareSafety,
   viewAfter,
 } from '../lookahead.js'
-import type { RankProbs, Lookahead, ReplyAttacker, ReplyRisk } from '../lookahead.js'
+import type { RankProbs, Lookahead, LiningThreat, ReplyAttacker, ReplyRisk } from '../lookahead.js'
 import { beliefFor, pBomb, pFlag, priorBelief } from '../belief.js'
 import { informedDeployment } from '../deploy.js'
 import type { BeliefOptions, RankBelief } from '../belief.js'
@@ -1256,6 +1291,19 @@ interface Ctx {
   flagParkHorizon: number
   /** may an unforced 軍旗 move be refused for failing `flagSurvivesEscalation` */
   flagEscalationCheck: boolean
+  /** may an ordinary move be refused for opening a `guardedApproachesFor` gap */
+  flagGuardCheck: boolean
+  /** §15.2: lining threats currently deterred by one of our pieces. Almost
+   *  always empty — see `guardedApproachesFor`. */
+  guardedApproaches: readonly GuardedApproach[]
+}
+
+/** §15.2: a lining threat (`Safety.lining`) whose staging square is currently
+ *  deterred by one of our pieces threatening to capture there. */
+interface GuardedApproach {
+  /** the piece of ours providing the deterrence */
+  guardianId: PieceId
+  readonly threat: LiningThreat
 }
 
 function chebyshev(a: Square, b: Square): number {
@@ -1333,7 +1381,7 @@ function wantedSquares(view: ViewerState, color: Color, posture: Posture): Squar
   return unheld
 }
 
-function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolicyOptions): Ctx {
+export function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolicyOptions): Ctx {
   const econ = economyOf(view, color)
   const posture = postureOf(econ)
   const belief = beliefLookup(view, color, rng)
@@ -1389,7 +1437,12 @@ function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolic
     ? NO_THREAT
     : reportOf(flag.square, look.squareSafety(flag.square, 1).attackers)
 
-  return {
+  // §15.2 needs a `Ctx` to read (`color`, `belief`, `flagSquare`) before one
+  // fully exists — built in two steps for exactly that reason, the same shape
+  // `flagSurvivesEscalation`'s own caller already relies on: nothing else here
+  // depends on `guardedApproaches`, so a placeholder empty list is correct
+  // until the real one replaces it below.
+  const base: Ctx = {
     view,
     color,
     econ,
@@ -1414,6 +1467,12 @@ function contextFor(view: ViewerState, color: Color, rng: Rng, opts: BeliefPolic
     flagStep: opts.flagStepCost ?? FLAG_STEP_COST,
     flagParkHorizon: opts.flagParkHorizon ?? FLAG_PARK_HORIZON,
     flagEscalationCheck: defending && opts.flagEscalationCheck !== false,
+    flagGuardCheck: defending && opts.flagGuardCheck !== false,
+    guardedApproaches: [],
+  }
+  return {
+    ...base,
+    guardedApproaches: base.flagGuardCheck ? guardedApproachesFor(base) : [],
   }
 }
 
@@ -1858,6 +1917,104 @@ function flagSurvivesEscalation(ctx: Ctx, post: ViewerState, flagSquare: Square)
   })
 }
 
+// ---------------------------------------------------------------------------
+// §15.2 — a guard by deterrence, not by blocking
+//
+// `flagSurvivesEscalation` asks whether the 軍旗 itself has a QUIET save —
+// deliberately not crediting a capture, because a capture's survival depends
+// on a hidden 兵種 that function has no business pricing. This section asks a
+// different question about a different mover: is some OTHER piece of ours,
+// right now, deterring an enemy's setup move by THREATENING to capture
+// whatever lands there — and is the move on the table about to give that up?
+//
+// Game archive #025 (games/README.md) is why this exists. A queen sitting on
+// c7 kept an enemy knight off c6 — not by blocking anything, c6 was empty and
+// reachable, but landing there walked into the queen. Nothing here modelled
+// that as defence at all: c6 being "guarded" was never asked about, so
+// leaving it for a 結算格 five plies before the knight actually took the
+// route was free. `flagSurvivesEscalation` would not have caught this either
+// — it is scoped to the 軍旗's OWN moves, and this was a queen move on an
+// ordinary developing square, nowhere near the 軍旗.
+//
+// Bounded like everything else in this file: computed once a ply, off the
+// SAME `lining` list `flagSurvivesEscalation` reads, and `lining` is empty on
+// almost every ply — the expensive part, one engine move-generation per
+// enemy legal move, only runs when something is already two plies from the
+// 軍旗. This is the mirror image of that function's existence check, not
+// notebook §14.2's continuous term reborn: it prices nothing, it only asks
+// whether a specific, already-identified deterrence is still standing.
+// ---------------------------------------------------------------------------
+
+/**
+ * Is one of our pieces currently threatening to capture on `square`? A
+ * deterrence check, not a price — we do not know the arriving piece's 兵種
+ * any more than `flagSurvivesEscalation` does, so this asks only whether a
+ * capture is LEGAL, never whether it would be won. Returns the piece that
+ * provides it, since `opensGuardedApproach` needs to know if THIS move is
+ * the one relocating it.
+ */
+function guardianOf(ctx: Ctx, afterSetup: ViewerState, square: Square): PieceId | null {
+  for (const m of carrierMoves(afterSetup, ctx.color)) {
+    if (m.kind !== 'move' || m.to !== square) continue
+    const shape = shapeOfMove(afterSetup, ctx.color, m)
+    if (!shape || shape.contact === undefined) continue
+    const moverId = shape.relocations.size === 1 ? [...shape.relocations.keys()][0] : undefined
+    if (moverId !== undefined) return moverId
+  }
+  return null
+}
+
+/**
+ * Every lining threat against our 軍旗 whose staging square is currently
+ * deterred by one of our pieces. See the section header for what this is and
+ * is not. Empty whenever `flagSurvivesEscalation` would return early — no
+ * lining, nothing to check — which is the common case on every ply.
+ */
+function guardedApproachesFor(ctx: Ctx): readonly GuardedApproach[] {
+  if (ctx.flagSquare === null) return []
+  const safety = squareSafety(ctx.view, ctx.color, ctx.belief, ctx.flagSquare, SAFETY_HORIZON)
+  if (!safety.liningSearched || safety.lining.length === 0) return []
+
+  const enemy = opposite(ctx.color)
+  const out: GuardedApproach[] = []
+  for (const threat of safety.lining) {
+    const afterSetup = viewAfter(ctx.view, enemy, threat.setup)
+    if (afterSetup === null) continue
+    const guardianId = guardianOf(ctx, afterSetup, threat.after)
+    if (guardianId !== null) out.push({ guardianId, threat })
+  }
+  return out
+}
+
+/** Cheap pre-filter for `evaluate`: does this move even touch a piece that is
+ *  currently providing a guard? True on almost no plies, and false-for-free
+ *  (no engine call) whenever it is. */
+function movesAGuardian(ctx: Ctx, shape: MoveShape): boolean {
+  return ctx.guardedApproaches.some((g) => shape.relocations.has(g.guardianId))
+}
+
+/**
+ * For a move that DOES relocate a guardian (`movesAGuardian` already true):
+ * does it actually give the guard up, with nothing else standing in for it?
+ *
+ * Re-derived fresh from `post` rather than assumed, so a piece that slides to
+ * a different square along the same line — still covering the staging
+ * square — is correctly NOT flagged, and so is a case where a second piece
+ * already covers it too.
+ */
+function opensGuardedApproach(ctx: Ctx, shape: MoveShape, post: ViewerState): boolean {
+  const enemy = opposite(ctx.color)
+  for (const { guardianId, threat } of ctx.guardedApproaches) {
+    if (!shape.relocations.has(guardianId)) continue
+    const afterSetup = viewAfter(post, enemy, threat.setup)
+    // Our move made the enemy's own setup move illegal (e.g. we just captured
+    // the piece that would have made it) — nothing was opened.
+    if (afterSetup === null) continue
+    if (guardianOf(ctx, afterSetup, threat.after) === null) return true
+  }
+  return false
+}
+
 /**
  * The 軍旗 branch. Returns null when the move is refused outright.
  *
@@ -1945,7 +2102,7 @@ function flagMoveValue(
 // ---------------------------------------------------------------------------
 
 /** null = the move is refused outright, not merely scored low. */
-function evaluate(ctx: Ctx, move: Move): number | null {
+export function evaluate(ctx: Ctx, move: Move): number | null {
   const shape = shapeOfMove(ctx.view, ctx.color, move)
   if (!shape) return null
   if (shape.relocations.size === 0) return 0 // pass — the baseline every EV is measured against
@@ -1959,6 +2116,16 @@ function evaluate(ctx: Ctx, move: Move): number | null {
   // was running from, and it stays absolute when the square pays: 攻略 §9 outranks
   // §7.1 every time they meet.
   if (flagMove && shape.contact !== undefined) return null
+
+  // §15.2 — refused outright, same as `flagSurvivesEscalation`: this prices
+  // nothing, it only asks whether a deterrence that was standing is still
+  // standing after this move. `movesAGuardian` is the cheap gate (false on
+  // almost every ply, no engine call) that keeps `opensGuardedApproach`'s
+  // fresh `viewAfter` off the common case.
+  if (ctx.flagGuardCheck && !flagMove && movesAGuardian(ctx, shape)) {
+    const guardPost = viewAfter(ctx.view, ctx.color, move)
+    if (guardPost !== null && opensGuardedApproach(ctx, shape, guardPost)) return null
+  }
 
   // One ply of lookahead, memoised per candidate by `lookahead.ts`'s own cache.
   const risk = ctx.look.replyRisk(move)
@@ -2325,6 +2492,17 @@ export interface BeliefPolicyOptions {
    */
   readonly flagEscalationCheck?: boolean
   /**
+   * Refuse an ordinary move that gives up a `guardedApproachesFor` deterrence
+   * — some OTHER piece of ours was threatening to capture on an enemy's
+   * staging square toward our 軍旗, and this move stops threatening it, with
+   * nothing else standing in for it. Default on.
+   *
+   * §15.2, not §14.2's rejected term reborn — see that section's header. New
+   * enough to want its own off switch for the same reason every flag knob
+   * here has one.
+   */
+  readonly flagGuardCheck?: boolean
+  /**
    * How much of the move list `lookahead.ts` analyses. For the sweep.
    *
    * NOT a free performance knob, which is why it is documented rather than
@@ -2351,4 +2529,9 @@ export const beliefNoFlagDefencePolicy: Policy = makeBeliefPolicy('belief-nodef'
 /** `belief` with `flagSurvivesEscalation` off, kept nameable for its own A/B. */
 export const beliefNoEscalationCheckPolicy: Policy = makeBeliefPolicy('belief-noescalation', {
   flagEscalationCheck: false,
+})
+
+/** `belief` with the §15.2 guard check off, kept nameable for its own A/B. */
+export const beliefNoGuardCheckPolicy: Policy = makeBeliefPolicy('belief-noguard', {
+  flagGuardCheck: false,
 })

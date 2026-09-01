@@ -28,7 +28,7 @@ import {
 } from '../constants.js'
 import { formatClock, other, squareName } from '../format.js'
 import { localizeUrl } from '../url.js'
-import { useLang, fill, type Strings } from '../i18n.js'
+import { useLang, fill, type Lang, type Strings } from '../i18n.js'
 
 /**
  * Create screen (techspec §7). A handful of settings, one POST /api/game, then
@@ -86,9 +86,13 @@ interface CreateOptions {
 const SETUP_MINUTES_TIMED = Math.round(DEFAULT_CONFIG.setupTimeoutMs / 60_000)
 const SETUP_MINUTES_UNTIMED = 60
 
-const CLOCK_SUMMARY = `${formatClock(DEFAULT_CONFIG.clockInitialMs)} + ${Math.round(
-  DEFAULT_CONFIG.clockIncrementMs / 1000,
-)} 秒`
+const CLOCK_INCREMENT_SECONDS = Math.round(DEFAULT_CONFIG.clockIncrementMs / 1000)
+
+/** "15:00 + 10 秒" / "15:00 + 10s" — the default clock, for the hint and summary lines. */
+function clockSummary(lang: Lang): string {
+  const suffix = lang === 'zh' ? ' 秒' : 's'
+  return `${formatClock(DEFAULT_CONFIG.clockInitialMs)} + ${CLOCK_INCREMENT_SECONDS}${suffix}`
+}
 
 /** "d4 e4 d5 e5" — a plain listing of the chosen squares, for the hint line. */
 function squareList(squares: readonly Square[]): string {
@@ -358,18 +362,18 @@ const STR = {
   },
   en: {
     pageTitle: 'Marching Chess',
-    pitch: 'Chess carriers, 行軍棋 ranks. Carriers are public, ranks are hidden, and it’s always big-beats-small. Centre 4 settles every ply, only the side that just moved scores, and losing your flag loses the game outright.',
+    pitch: 'Chess carriers, Stratego-style hidden ranks. Carriers are public, ranks are hidden, and it\'s always big-beats-small. Centre 4 settles every ply, only the side that just moved scores, and losing your flag loses the game outright.',
     settingsTitle: 'Game settings',
     opponentLabel: 'Opponent',
     opponentTypeAria: 'Opponent type',
     opponentHuman: 'Human (invite link)',
     opponentBot: 'Bot',
-    opponentHintHuman: 'You’ll get an invite link after creating — hand it to your opponent, they open it in a browser and take their seat.',
+    opponentHintHuman: 'You\'ll get an invite link after creating — hand it to your opponent, they open it in a browser and take their seat.',
     opponentHintBot: 'The server seats a bot in the other chair. The game starts immediately once created — no invite link.',
     botLabel: 'Bot',
     botDefaultSuffix: ' (default)',
     botOnlyOpponentHint: 'Only {{name}} is an opponent — the other three are measuring instruments, built to measure the board, weak, and each permanently refusing to do one thing (never captures, never estimates odds, never plans). If you actually want a game, use the default one.',
-    botIsPlayerHint: 'The bot is a {{playerWord}}, not a spectator: it receives exactly its own redacted view, same as you (gamebook §10), secretly deploys its own sixteen ranks, and can’t see yours — you won’t get to see its either. This game issues no second-seat link.',
+    botIsPlayerHint: 'The bot is a {{playerWord}}, not a spectator: it receives exactly its own redacted view, same as you (gamebook §10), secretly deploys its own sixteen ranks, and can\'t see yours — you won\'t get to see its either. This game issues no second-seat link.',
     playerWord: 'player',
     clockLabel: 'Clock',
     clockAria: 'Timed or not',
@@ -384,7 +388,7 @@ const STR = {
     areaDefaultSuffix: ' (default)',
     areaHint1: 'Settlement runs at the end of every ply, but {{onlyMover}} scores: 1 point per square that side currently occupies. Currently selected: {{squares}}.',
     onlyMoverWord: 'only the side that just moved',
-    areaHint2: 'The 8-square board turns the a/h rook files and both flanks into contested ground too, so there’s something to fight over off-centre as well.',
+    areaHint2: 'The 8-square board turns the a/h rook files and both flanks into contested ground too, so there\'s something to fight over off-centre as well.',
     distLabel: 'Rank distribution',
     distDefaultSuffix: ' (default)',
     distTotalPrefix: 'Same table for both sides, public to both — this is a setting, not a hidden card. Each side totals',
@@ -398,22 +402,22 @@ const STR = {
     currentSquaresBold: 'the squares it currently holds',
     autoFillBold: 'X auto-fills from the scoring area',
     undecidedWord: 'undecided',
-    xHintWide: 'A settlement on the 8-square board is worth about 4 points versus about 2 on the 4-square board: at the same X, the 8-square game is much shorter ({《對局筆記》§9.3}), so its default X is set to roughly double the 4-square board’s.',
+    xHintWide: 'A settlement on the 8-square board is worth about 4 points versus about 2 on the 4-square board: at the same X, the 8-square game is much shorter (notebook §9.3), so its default X is set to roughly double the 4-square board\'s.',
     xHintCentre: 'Lower this for quick practice games.',
     kLabel: 'Capture-score coefficient (k)',
-    kHint1: 'The second source of points (gamebook §7.3): on a decisive fight, the {{winner}} gets k × (the {{winner}}’s own rank number). Rank numbers run Commander 1 … Flag 10 — higher means weaker, so beating a stronger piece with a weaker one pays more. Only the winner’s rank counts — it’s already forced face-up in the same announcement — never the loser’s.',
+    kHint1: 'The second source of points (gamebook §7.3): on a decisive fight, the {{winner}} gets k × (the {{winner}}\'s own rank number). Rank numbers run Commander 1 … Flag 10 — higher means weaker, so beating a stronger piece with a weaker one pays more. Only the winner\'s rank counts — it\'s already forced face-up in the same announcement — never the loser\'s.',
     winnerWord: 'winner',
-    kHint2: '{{zeroMeans}}: points come only from holding scoring squares. Appendix B itself is still undecided, at {{engineDefault}}; this form separately pre-fills {{formDefault}}, the number real games have actually used — switch back to 0 any time. This is paid immediately in the action phase, so the very move that captures the flag still pays it (§7.6). {{mustBeInt}} — komi has to stay the only non-integer source of points, or §7.4’s "the score can never tie" stops holding.',
+    kHint2: '{{zeroMeans}}: points come only from holding scoring squares. Appendix B itself is still undecided, at {{engineDefault}}; this form separately pre-fills {{formDefault}}, the number real games have actually used — switch back to 0 any time. This is paid immediately in the action phase, so the very move that captures the flag still pays it (§7.6). {{mustBeInt}} — komi has to stay the only non-integer source of points, or §7.4\'s "the score can never tie" stops holding.',
     kZeroMeans: '0 turns capture-scoring off',
     kMustBeInt: 'Must be a whole number',
     fizzleLabel: 'Fizzle bonus',
-    fizzleHint: 'When an Engineer or the Flag meets a bomb (fizzle, §5.4), the {{survivor}} gets this flat amount. Flat, and independent of who survived: if Engineer and Flag paid different amounts, that payment alone would out the piece’s rank. A mutual destruction pays both sides zero and has no knob here — that’s exactly why a bomb can’t be counted off the score column. {{zeroMeans}}. Appendix B itself is still {{engineDefault}}; this form separately pre-fills {{formDefault}}.',
+    fizzleHint: 'When an Engineer or the Flag meets a bomb (fizzle, §5.4), the {{survivor}} gets this flat amount. Flat, and independent of who survived: if Engineer and Flag paid different amounts, that payment alone would out the piece\'s rank. A mutual destruction pays both sides zero and has no knob here — that\'s exactly why a bomb can\'t be counted off the score column. {{zeroMeans}}. Appendix B itself is still {{engineDefault}}; this form separately pre-fills {{formDefault}}.',
     survivorWord: 'survivor',
     fizzleZeroMeans: '0 means disarming a bomb pays nothing extra',
     noProgressLabel: 'No-progress limit (N)',
     noProgressHint: 'N consecutive full turns with no capture and no score change ends the game; the higher score wins (default {{n}}).',
     setupLabel: 'Setup time limit (min)',
-    setupHint: 'Anyone who hasn’t deployed in time gets a {{random}} assignment from the server, and the game starts anyway. Playing an LLM means pasting URLs back and forth, so leave plenty of time — a timed-out random army looks exactly like a chosen one, with no indication either way.',
+    setupHint: 'Anyone who hasn\'t deployed in time gets a {{random}} assignment from the server, and the game starts anyway. Playing an LLM means pasting URLs back and forth, so leave plenty of time — a timed-out random army looks exactly like a chosen one, with no indication either way.',
     randomWord: 'random',
     createBusy: 'Creating…',
     createBot: 'Start game',
@@ -441,9 +445,9 @@ const STR = {
     botCreatedHeadline: 'Opponent {{name}}　it has taken its seat and will secretly deploy its own sixteen ranks',
     botCreatedSeat: 'Coin flip: you are {{seat}}{{firstMoveNote}}',
     botFirstMoveNote: ', the bot moves first',
-    botNextStep: 'Next is your deployment: assign your sixteen ranks to your sixteen pieces. The bot is doing the same thing at the same time, independently — it can’t see yours, you can’t see its.',
+    botNextStep: 'Next is your deployment: assign your sixteen ranks to your sixteen pieces. The bot is doing the same thing at the same time, independently — it can\'t see yours, you can\'t see its.',
     botEnter: 'Enter game →',
-    botEntering: 'Entering… if it doesn’t redirect automatically, use the button above.',
+    botEntering: 'Entering… if it doesn\'t redirect automatically, use the button above.',
     inviteLabel: 'Invite your opponent (share this) — {{seat}}',
     linkFormAria: 'Opponent link format',
     linkFormHuman: 'Human',
@@ -457,12 +461,12 @@ const STR = {
     hostLabel: 'Your entrance (host) — {{seat}}',
     publicLabel: 'Public spectator — no side, no seat',
     publicSafe: 'Safe to forward while the game is in progress',
-    publicHint1: 'Whoever holds this link sees exactly what both players already know: the board and carriers, the public event log, revealed ranks, score, and clock. Neither side’s un-revealed ranks are in it — not received-but-hidden, the server simply never sends them (gamebook §10). They can’t move or resign either. Once the game ends, every rank opens to everyone (§10), and this link sees that too.',
-    publicCareful: 'Don’t confuse this with a bound spectator link:',
-    publicHint2: 'that one is bound to one side’s view (gamebook §10.2 ①) — equivalent to handing over that side’s entire army, and must never go to a third party mid-game. Forward the link above instead.',
+    publicHint1: 'Whoever holds this link sees exactly what both players already know: the board and carriers, the public event log, revealed ranks, score, and clock. Neither side\'s un-revealed ranks are in it — not received-but-hidden, the server simply never sends them (gamebook §10). They can\'t move or resign either. Once the game ends, every rank opens to everyone (§10), and this link sees that too.',
+    publicCareful: 'Don\'t confuse this with a bound spectator link:',
+    publicHint2: 'that one is bound to one side\'s view (gamebook §10.2 ①) — equivalent to handing over that side\'s entire army, and must never go to a third party mid-game. Forward the link above instead.',
     hostEnter: 'Enter as host →',
-    domainNote: 'If the shared link’s domain differs from this page (common in dev mode), your opponent should still use the link the server issued.',
-    copyFailed: 'Couldn’t copy — please select the URL manually.',
+    domainNote: 'If the shared link\'s domain differs from this page (common in dev mode), your opponent should still use the link the server issued.',
+    copyFailed: 'Couldn\'t copy — please select the URL manually.',
   },
 } satisfies Strings<string>
 
@@ -754,7 +758,7 @@ export function Create() {
               </div>
               <p className="muted small c-hint">
                 {clockEnabled
-                  ? fill(s.clockHintTimed, { summary: CLOCK_SUMMARY }) +
+                  ? fill(s.clockHintTimed, { summary: clockSummary(lang) }) +
                     (opponentKind === 'bot' ? s.clockHintTimedBot : s.clockHintTimedHuman)
                   : s.clockHintUntimed}
               </p>
@@ -972,7 +976,7 @@ export function Create() {
           <p className="muted small">
             {s.summaryGameId} {created.game.gameId} ·{' '}
             {created.bot !== null ? `${s.summaryOpponentBot} ${botPolicyLabel(created.bot.policy, lang)} · ` : ''}
-            {created.options.clockEnabled ? `${s.summaryClock} ${CLOCK_SUMMARY}` : s.summaryUntimed} · {s.summaryArea}{' '}
+            {created.options.clockEnabled ? `${s.summaryClock} ${clockSummary(lang)}` : s.summaryUntimed} · {s.summaryArea}{' '}
             {created.options.scoringSquares.length} {s.summaryAreaUnit} · {s.summaryDist}{' '}
             {distributionName(created.options.distribution, lang)} · {s.summaryTarget} {created.options.scoreTarget} {s.summaryTargetUnit}
             {/* §7.3 is off unless it was switched on, and a line reading

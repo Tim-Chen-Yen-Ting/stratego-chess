@@ -188,14 +188,14 @@ const STR = {
     botColorSuffix: ' ({{color}})',
     publicTitle: 'Public spectator view — you have no side',
     publicOverPre:
-      'The game has ended. Under gamebook §10 ("every rank is revealed at game end"), both sides’ ranks are now public to everyone, and this view sees them too. While the game was in progress, it held only what ',
+      'The game has ended. Under gamebook §10 ("every rank is revealed at game end"), both sides\' ranks are now public to everyone, and this view sees them too. While the game was in progress, it held only what ',
     publicOverStrong: 'both sides already knew in common',
     publicOverPost:
-      '— the board and carriers, the public event log, revealed ranks, the score, and the clocks — so forwarding this link at the time would not have leaked either side’s army.',
+      '— the board and carriers, the public event log, revealed ranks, the score, and the clocks — so forwarding this link at the time would not have leaked either side\'s army.',
     publicLivePre: 'This screen holds only what ',
     publicLiveStrong: 'both sides already know in common',
     publicLivePost:
-      ': the board and carriers, the public event log, revealed ranks, captured pieces, the score, and the clocks. Not one unrevealed rank is here, for either side — not withheld from display, simply never sent by the server at all (gamebook §10). So there’s no moving, no passing, no resigning here, and no "your pieces" to look at; the link in your hand carries neither side’s army, and forwarding it leaks nothing about who is what. When the game ends, both sides’ ranks become fully public, and this view will see them too.',
+      ': the board and carriers, the public event log, revealed ranks, captured pieces, the score, and the clocks. Not one unrevealed rank is here, for either side — not withheld from display, simply never sent by the server at all (gamebook §10). So there\'s no moving, no passing, no resigning here, and no "your pieces" to look at; the link in your hand carries neither side\'s army, and forwarding it leaks nothing about who is what. When the game ends, both sides\' ranks become fully public, and this view will see them too.',
     overReplayNote: 'The board has switched to replay — see the replay bar below',
     promoteLabel: 'Promote to:',
     cancelLabel: 'Cancel',

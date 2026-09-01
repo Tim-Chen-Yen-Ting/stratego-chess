@@ -118,7 +118,7 @@ const STR = {
     pickerFoot: 'Your own guess — the system does not verify or infer',
     markEmpty: 'Unmarked',
     chipRemoveTitle: 'Remove “{{rank}}”',
-    chipRemoveAria: 'Remove {{label}}’s mark {{rank}}',
+    chipRemoveAria: 'Remove {{label}}\'s mark {{rank}}',
   },
 } satisfies Strings<
   | 'heading'

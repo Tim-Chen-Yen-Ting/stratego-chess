@@ -7,6 +7,7 @@ import {
   COLOR_LABEL,
   RANKS_IN_ORDER,
   RANK_LABEL,
+  RANK_NUMBER_LABEL,
   scoringSquaresOf,
 } from '../constants.js'
 import { isDarkSquare, squareName } from '../format.js'
@@ -230,11 +231,27 @@ function tagWidth(text: string): number {
   return w
 }
 
+/**
+ * The compact form for an on-board tag, where the tile's width — sized for a
+ * 2-character 兵種 word — is the whole constraint. Chinese labels already fit;
+ * English ones mostly don't ("Battalion", "Commander", "Engineer" all spill
+ * out of the tile at any font size that still fits 司令/營長/工兵), so English
+ * uses the rank NUMBER instead (RANK_NUMBER_LABEL — already taught by
+ * RankTable, and unlike an abbreviation it needs no separate legend). 軍旗 and
+ * 爆裂物 are exempted: their English words are already short, and bomb's
+ * number-column entry is a fullwidth symbol that would be its own version of
+ * this bug.
+ */
+function boardRankTag(rank: Rank, lang: Lang): string {
+  if (lang === 'zh' || rank === 'flag' || rank === 'bomb') return RANK_LABEL[lang][rank]
+  return RANK_NUMBER_LABEL[rank]
+}
+
 function pencilTagText(marks: readonly Rank[], lang: Lang): string {
   if (marks.length === 0) return ''
-  if (marks.length === 1) return `〔${RANK_LABEL[lang][marks[0]]}〕`
+  if (marks.length === 1) return `〔${boardRankTag(marks[0], lang)}〕`
   if (marks.length <= 3) {
-    const text = `〔${marks.map((r) => RANK_LABEL[lang][r]).join(PENCIL_SEPARATOR[lang])}〕`
+    const text = `〔${marks.map((r) => boardRankTag(r, lang)).join(PENCIL_SEPARATOR[lang])}〕`
     if (tagWidth(text) <= PENCIL_TAG_BUDGET) return text
   }
   return `〔?${marks.length}〕`
@@ -560,7 +577,7 @@ export function Board(props: BoardProps) {
                         }
                       >
                         {fact
-                          ? RANK_LABEL[lang][fact]
+                          ? boardRankTag(fact, lang)
                           : pencil
                             ? pencilTagText(marks, lang)
                             : pendingIds?.has(piece.id)

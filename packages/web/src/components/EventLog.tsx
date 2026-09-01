@@ -53,7 +53,7 @@ const STR = {
     openingWord: 'the opening',
     plyWord: 'move {{ply}}',
     footer:
-      'The board is showing {{position}}; dimmed rows are moves that haven’t happened yet. The record itself is public to both players at all times (gamebook §10.3) — it’s the board that shows ranks according to viewpoint.',
+      'The board is showing {{position}}; dimmed rows are moves that haven\'t happened yet. The record itself is public to both players at all times (gamebook §10.3) — it\'s the board that shows ranks according to viewpoint.',
   },
 } satisfies Strings<'title' | 'hint' | 'empty' | 'ariaJump' | 'openingWord' | 'plyWord' | 'footer'>
 

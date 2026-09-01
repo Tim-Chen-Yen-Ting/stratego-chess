@@ -102,16 +102,16 @@ const STR = {
     noteBefore: 'Each line is the ',
     noteBold: 'public announcement',
     noteAfter:
-      ' from the moment it happened, just moved next to the piece. “？” means that piece’s rank has not been disclosed; this panel never guesses, lists a candidate range, or counts down what remains (gamebook §10). 〔 〕 marks are your own guesses — click one to erase it.',
-    ownerColor: '{{color}}’s',
+      ' from the moment it happened, just moved next to the piece. “？” means that piece\'s rank has not been disclosed; this panel never guesses, lists a candidate range, or counts down what remains (gamebook §10). 〔 〕 marks are your own guesses — click one to erase it.',
+    ownerColor: '{{color}}\'s',
     ownerMine: 'your',
-    ownerOpponent: 'the opponent’s',
+    ownerOpponent: 'the opponent\'s',
     plainRemoved: 'Left the board',
     attackerWinsLine: 'Captured at {{here}} by {{owner}} {{rank}}',
     defenderWinsLine:
       'Attacked from {{here}} into {{contact}} and lost — {{owner}} {{rank}} held its ground and was revealed',
     mutualLine:
-      'Contact at {{contact}}, both removed simultaneously — an equal-rank tie or a bomb; the public record does not distinguish (neither side’s rank is disclosed)',
+      'Contact at {{contact}}, both removed simultaneously — an equal-rank tie or a bomb; the public record does not distinguish (neither side\'s rank is disclosed)',
     fizzleLine: 'Contact at {{contact}}, fizzle — {{owner}} {{bomb}} was removed in the loss (not revealed)',
     rankUndisclosed: 'Rank undisclosed',
     logLine: 'Move {{ply}} public record: {{record}}',

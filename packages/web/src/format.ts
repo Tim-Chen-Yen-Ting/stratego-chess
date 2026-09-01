@@ -90,8 +90,8 @@ const COMBAT_TEXT = {
       `Attacker (${attacker}) wins, permanently revealed as ${rank}; defender removed, its rank stays secret`,
     defenderWins: (defender: string, rank: string) =>
       `Defender (${defender}) wins, permanently revealed as ${rank}; attacker removed from its own square, its rank stays secret`,
-    mutual: 'Both pieces removed simultaneously — could be an equal-rank tie or a bomb; the two announcements are identical and can’t be told apart. Neither rank is disclosed.',
-    fizzle: (survivor: string) => `Fizzle (no harm, no foul) — ${survivor}’s piece was an Engineer or the Flag; the bomb is gone`,
+    mutual: 'Both pieces removed simultaneously — could be an equal-rank tie or a bomb; the two announcements are identical and can\'t be told apart. Neither rank is disclosed.',
+    fizzle: (survivor: string) => `Fizzle (no harm, no foul) — ${survivor}\'s piece was an Engineer or the Flag; the bomb is gone`,
   },
 } as const
 
