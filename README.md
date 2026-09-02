@@ -1,5 +1,7 @@
 # 行軍西洋棋
 
+Stratego Chess is a hidden-information strategy game built on chess movement rules and Stratego-style ranks. It includes a belief-state bot, structural hidden-state redaction, multiplayer WebSocket gameplay, and a GET-only HTTP interface designed for LLM opponents.
+
 **▶ [Play now](https://stratego-chess.onrender.com)** — free-tier hosting, so if it's been idle the
 first load can take 30–60s to wake up. Fast once it's warm.
 
