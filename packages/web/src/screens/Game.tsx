@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DragEvent } from 'react'
-import { castlePlan, replayGame } from '@xiyang/rules'
+import { castlePlan, replayGame, visionOf } from '@xiyang/rules'
 import type { Carrier, Color, Move, Rank, Square, Viewer, ViewerState } from '@xiyang/rules'
 import { Board, type BoardProps, type MoveMarks } from '../components/Board.js'
 import { CapturedTray } from '../components/CapturedTray.js'
@@ -610,6 +610,35 @@ export function Game({ view }: GameProps) {
    * `revealed` is the frame's own flag, so during a replay this is what had
    * been announced BY THAT PLY — not what the finished game knows.
    */
+  /**
+   * 戰爭迷霧模式 (fogofwar.md §1) — the squares THIS viewer's own current
+   * vision reaches, for the fog-shading overlay (Board's `fogVisible`). Pure
+   * client-side rendering aid: the server has already omitted any piece
+   * outside it, this only recomputes what the viewer's own (always fully
+   * disclosed) pieces already reveal, via the same `visionOf` the redactor
+   * itself uses. `undefined` means "draw with no fog at all" — a non-fog
+   * game, or the omniscient perspective (live via the omniscient link, or the
+   * 回放 全知 toggle), which fog never restricts.
+   */
+  const fogVisible = useMemo(() => {
+    if (!shownView.config.fogOfWar) return undefined
+    const omniscient = replaying ? replayViewer.kind === 'omniscient' : view.viewer.kind === 'omniscient'
+    if (omniscient) return undefined
+
+    const visible = new Set(shownView.config.scoringSquares)
+    if (shownMe !== null) {
+      for (const sq of visionOf(shownView.pieces, shownMe)) visible.add(sq)
+      // §1's vision formula never names a piece's OWN square (it is built from
+      // the squares AROUND and REACHABLE FROM it); a player always sees their
+      // own army regardless (redact.ts's `positionVisible`), so that has to be
+      // unioned in separately or a lone piece would render fogged over itself.
+      for (const p of shownView.pieces) {
+        if (p.color === shownMe && p.square !== null) visible.add(p.square)
+      }
+    }
+    return visible
+  }, [shownView, shownMe, replaying, replayViewer, view.viewer.kind])
+
   const revealedRanks = shownView.pieces.filter(
     (p) => p.color !== shownMe && p.revealed && p.rank !== null && p.square !== null,
   )
@@ -964,6 +993,7 @@ export function Game({ view }: GameProps) {
                to a side. */
             orientation={me ?? 'white'}
             lastMove={boardMarks}
+            fogVisible={fogVisible}
             {...seatedBoardProps}
           />
 

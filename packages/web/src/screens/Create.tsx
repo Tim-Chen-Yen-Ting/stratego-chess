@@ -73,6 +73,13 @@ interface CreateOptions {
   scoringSquares: readonly Square[]
   /** 兵種數量配置 (gamebook §2, 附錄 B) — the table dealt to BOTH sides. */
   distribution: RankDistribution
+  /**
+   * 戰爭迷霧模式 (fogofwar.md §1) — hides enemy piece POSITION, not just rank,
+   * outside your own pieces' current vision. v1 is human-vs-human only: the
+   * server refuses this combined with a bot opponent, so this screen keeps
+   * the two mutually exclusive rather than letting the request 400.
+   */
+  fogOfWar: boolean
 }
 
 /**
@@ -256,6 +263,13 @@ const STR = {
     pageTitle: '行軍西洋棋',
     pitch: '西洋棋的載體，行軍棋的兵種。載體公開、兵種隱藏，一律大吃小；中央四格每手結算，只有剛行動的一方計分，軍旗離場即判負。',
     settingsTitle: '對局設定',
+    modeLabel: '模式',
+    modeAria: '對局模式',
+    modeClassical: '古典（預設）',
+    modeFog: '戰爭迷霧',
+    modeHintClassical: '規則書的原版：棋盤與載體對雙方公開，只有兵種隱藏。',
+    modeHintFog: '連敵方棋子在哪都看不到，除非你自己的棋子看得到那一格（視野＝周圍八格 ∪ 能合法移動到的格子）。計分格與已離場的棋子永遠可見。目前僅支援人對人——選這個模式會自動把對手切回人類。',
+    modeFogBotDisabled: '此模式尚不支援機器人對手（見設計稿 §4.1）',
     opponentLabel: '對手',
     opponentTypeAria: '對手類型',
     opponentHuman: '人類（邀請連結）',
@@ -361,9 +375,16 @@ const STR = {
     copyFailed: '無法複製，請手動選取網址。',
   },
   en: {
-    pageTitle: 'Marching Chess',
+    pageTitle: 'Stratego Chess',
     pitch: 'Chess carriers, Stratego-style hidden ranks. Carriers are public, ranks are hidden, and it\'s always big-beats-small. Centre 4 settles every ply, only the side that just moved scores, and losing your flag loses the game outright.',
     settingsTitle: 'Game settings',
+    modeLabel: 'Mode',
+    modeAria: 'Game mode',
+    modeClassical: 'Classical (default)',
+    modeFog: 'Fog of War',
+    modeHintClassical: 'The base ruleset: board and carriers are public to both sides, ranks alone are hidden.',
+    modeHintFog: "You can't even see where an enemy piece is unless one of your own pieces currently sees that square (vision = the 8 adjacent squares ∪ everywhere it could legally move to). Scoring squares and pieces that have left the board are always visible. Human vs. human only for now — picking this mode switches the opponent back to human automatically.",
+    modeFogBotDisabled: "This mode doesn't support a bot opponent yet (see the design doc §4.1)",
     opponentLabel: 'Opponent',
     opponentTypeAria: 'Opponent type',
     opponentHuman: 'Human (invite link)',
@@ -479,6 +500,7 @@ export function Create() {
   const [copied, setCopied] = useState<string | null>(null)
 
   const [clockEnabled, setClockEnabled] = useState(true)
+  const [fogOfWar, setFogOfWar] = useState(false)
   const [noProgressTurns, setNoProgressTurns] = useState(String(DEFAULT_CONFIG.noProgressTurns))
   const [opponentKind, setOpponentKind] = useState<OpponentKind>('human')
   const [botPolicy, setBotPolicy] = useState<string>(DEFAULT_BOT_POLICY)
@@ -565,6 +587,9 @@ export function Create() {
         60_000,
       scoringSquares: scoringArea.squares,
       distribution: distributionPreset.counts,
+      // Belt and braces alongside the disabled control below: a bot opponent
+      // and fog of war never travel together (server refuses it, §4.1).
+      fogOfWar: opponentKind === 'bot' ? false : fogOfWar,
     }
     const requestedBot = opponentKind === 'bot' ? botPolicy : null
     setBusy(true)
@@ -650,9 +675,40 @@ export function Create() {
           <section className="panel">
             <h2>{s.settingsTitle}</h2>
 
-            {/* WHO first, then how long and how much — the rest of this panel
-                only makes sense once it is known whether a second person is
-                coming. */}
+            {/* MODE first — it decides whether "opponent" even offers a bot
+                (fogofwar.md §4.1: fog games are human-vs-human only for now),
+                then WHO, then how long and how much. */}
+            <div className="c-field c-mode">
+              <div className="c-field-head">
+                <span className="c-field-label">{s.modeLabel}</span>
+                <span className="c-seg c-seg-big" role="group" aria-label={s.modeAria}>
+                  <button
+                    type="button"
+                    aria-pressed={!fogOfWar}
+                    onClick={() => setFogOfWar(false)}
+                  >
+                    {s.modeClassical}
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={fogOfWar}
+                    onClick={() => {
+                      setFogOfWar(true)
+                      // fog games can't be played against a bot yet — switching
+                      // INTO this mode takes the opponent picker with it, rather
+                      // than leaving a combination the server will 400 on.
+                      if (opponentKind === 'bot') setOpponentKind('human')
+                    }}
+                  >
+                    {s.modeFog}
+                  </button>
+                </span>
+              </div>
+              <p className="muted small c-hint">
+                {fogOfWar ? s.modeHintFog : s.modeHintClassical}
+              </p>
+            </div>
+
             <div className="c-field c-opponent">
               <div className="c-field-head">
                 <span className="c-field-label">{s.opponentLabel}</span>
@@ -667,6 +723,7 @@ export function Create() {
                   <button
                     type="button"
                     aria-pressed={opponentKind === 'bot'}
+                    disabled={fogOfWar}
                     onClick={() => setOpponentKind('bot')}
                   >
                     {s.opponentBot}
@@ -676,6 +733,7 @@ export function Create() {
               <p className="muted small c-hint">
                 {opponentKind === 'human' ? s.opponentHintHuman : s.opponentHintBot}
               </p>
+              {fogOfWar && <p className="muted small c-hint">{s.modeFogBotDisabled}</p>}
 
               {opponentKind === 'bot' && (
                 <>
@@ -986,6 +1044,7 @@ export function Create() {
             {created.options.fizzleBonus > 0 && <> · {s.summaryFizzle}{created.options.fizzleBonus}</>}
             {' '}· {s.summaryNoProgress} {created.options.noProgressTurns} {s.summaryNoProgressUnit} · {s.summarySetup}{' '}
             {Math.round(created.options.setupTimeoutMs / 60_000)} {s.summarySetupUnit}
+            {created.options.fogOfWar && <> · {s.modeFog}</>}
           </p>
 
           {/*
@@ -1239,8 +1298,10 @@ const CREATE_CSS = `
   font-size: 0.78rem;
   line-height: 1.5;
 }
-/* 對手: the first question on the screen, so it gets a rule under it rather
-   than sitting flush against the clock row */
+/* 模式 is now the first question on the screen (it decides whether 對手 may
+   even offer a bot), and 對手 the second — each gets a rule under it rather
+   than sitting flush against the row below. */
+.screen-create .c-mode,
 .screen-create .c-opponent {
   margin-bottom: 14px;
   padding-bottom: 12px;

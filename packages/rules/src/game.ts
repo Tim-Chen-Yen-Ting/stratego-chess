@@ -431,10 +431,14 @@ export function applyMove(s: GameState, move: Move): GameState {
     result = { kind: 'no-progress', winner: leader(score) }
   }
 
-  // §8 增秒: granted on a completed move, or on a forced pass. Never on a
-  // voluntary pass.
+  // §8 增秒: granted on a completed move, or on a forced pass — EXCEPT under
+  // 戰爭迷霧模式, where a forced pass gets none either (fogofwar.md §4.2). §8's
+  // reasoning for granting it ("both sides can verify a forced pass from the
+  // fully-public board, so it leaks nothing") stops holding under fog: the
+  // opponent cannot see the board that forced it, so the increment would tell
+  // them "you have no legal move" with no way to check it themselves.
   const clockMs = { ...s.clockMs }
-  if (s.config.clockEnabled && (resolved !== null || forcedPass)) {
+  if (s.config.clockEnabled && (resolved !== null || (forcedPass && !s.config.fogOfWar))) {
     clockMs[mover] += s.config.clockIncrementMs
   }
 

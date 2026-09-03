@@ -124,6 +124,15 @@ export interface BoardProps {
    * module constant.
    */
   scoringSquares?: readonly Square[]
+  /**
+   * 戰爭迷霧模式 (fogofwar.md §1) — the set of squares the viewer's OWN vision
+   * currently reaches, computed client-side (see Game.tsx) from the viewer's
+   * own always-visible pieces via the shared `visionOf` export — this is a
+   * rendering aid, not a security boundary; the server has already omitted
+   * any piece outside it. `undefined` (a non-fog game, or the omniscient
+   * replay perspective) draws the board with no fog shading at all.
+   */
+  fogVisible?: ReadonlySet<Square>
   selected?: Square | null
   /** legal destination squares for the selected piece */
   targets?: readonly Square[]
@@ -314,6 +323,7 @@ export function Board(props: BoardProps) {
     pieces,
     orientation,
     scoringSquares,
+    fogVisible,
     selected = null,
     targets = [],
     origins = [],
@@ -417,6 +427,7 @@ export function Board(props: BoardProps) {
               const droppable = onSquareDrop !== undefined && (dropTargets?.has(sq) ?? false)
               const pencilable = canPencil && (pencilTargets?.has(sq) ?? false)
               const classes = ['sq', isDarkSquare(sq) ? 'sq-dark' : 'sq-light']
+              if (fogVisible !== undefined && !fogVisible.has(sq)) classes.push('sq-fog')
               if (centerSet.has(sq)) classes.push('sq-center')
               if (moveMarks.squares.has(sq)) classes.push('sq-last')
               // roles on top of the trail — see `MoveMarks`. Only the structured
@@ -771,6 +782,17 @@ const STYLE = `
 .sq-move-to,
 .sq-move-contact {
   box-shadow: inset 0 0 0 100px rgba(255, 232, 140, 0.2);
+}
+
+/* 戰爭迷霧模式 (fogofwar.md §1): squares outside the viewer's own current
+   vision. A fogged square never actually holds an enemy piece (the server
+   omitted it) or is a legal destination (§1.2's invariant: 可移動範圍 ⊆ 可見範圍,
+   so every reachable square is by construction already in vision) — this is
+   purely "I cannot currently see this square" shading, layered the same way
+   .sq-move-from etc. override the light/dark fill below, via box-shadow so
+   it always wins the cascade regardless of specificity ties. */
+.sq-fog {
+  box-shadow: inset 0 0 0 100px rgba(6, 8, 10, 0.6);
 }
 
 .sq-pencilable {

@@ -302,6 +302,19 @@ export function createRoom(options: CreateRoomOptions = {}): Room {
   sweep()
 
   const { config, bot: opponent } = options
+
+  // fogofwar.md §4.1: a policy is handed a redacted ViewerState and nothing
+  // else, and under fog that view no longer carries a full public board —
+  // `belief`'s particle filter assumes full position visibility, and
+  // `carrierMoves`/`publicmoves.ts` (which every policy's lookahead leans on)
+  // derives the opponent's moves from that same full board. Both silently
+  // produce nonsense rather than failing loudly, so this is refused loudly
+  // at creation instead, exactly as the design doc's own v1 plan says:
+  // "bot 對局拒絕此設定，明確報錯".
+  if (config?.fogOfWar === true && opponent !== undefined) {
+    throw new RoomError('戰爭迷霧模式 is not supported against a bot yet (fogofwar.md §4.1)')
+  }
+
   const id = mintGameId()
   // gamebook §9: 擲幣決定執白. The seat labels are about the invite, not the colour.
   // The flip runs for a bot game too: the human is the host seat and may be Black.

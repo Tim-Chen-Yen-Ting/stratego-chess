@@ -37,6 +37,10 @@ export type {
 export { carrierMoves, reachableSquares } from './publicmoves.js'
 export { replayGame } from './replay.js'
 
+// ---------- vision (戰爭迷霧模式, fogofwar.md §1) ----------
+export { pieceVisibleSquares, visionOf } from './vision.js'
+export type { VisionPiece } from './vision.js'
+
 export {
   ALL_COLORS,
   ALL_RANKS,
@@ -155,7 +159,7 @@ export {
 } from './game.js'
 
 // ---------- redaction (§10) — THE security boundary ----------
-export { entitledToRank, stateForViewer, viewerColor } from './redact.js'
+export { entitledToRank, positionVisible, stateForViewer, viewerColor } from './redact.js'
 
 // ---------- rendering (§6) ----------
 export { renderForLLM, renderRulesForLLM } from './render/text.js'

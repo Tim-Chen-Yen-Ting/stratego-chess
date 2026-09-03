@@ -242,6 +242,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   distribution: DISTRIBUTION_STANDARD,
   clockInitialMs: 900_000, clockIncrementMs: 10_000,
   setupTimeoutMs: 180_000, clockEnabled: true,
+  fogOfWar: false,
 }
 
 // ---------------------------------------------------------------------------

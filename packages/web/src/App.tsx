@@ -18,7 +18,7 @@ const STR = {
   en: {
     close: 'Close',
     reconnecting: 'Connection lost, reconnecting… (the clock keeps running)',
-    title: 'Marching Chess',
+    title: 'Stratego Chess',
     connecting: 'Connecting…',
     waiting: 'Waiting for server state…',
   },

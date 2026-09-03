@@ -41,6 +41,7 @@ import type { Policy } from '@xiyang/bot'
 import { archiveFinishedGame } from './archive.js'
 import { registerLlmRoutes } from './llm.js'
 import {
+  RoomError,
   createRoom,
   disposeAll,
   isBotSeatViewer,
@@ -168,6 +169,10 @@ function readConfig(input: unknown): Partial<GameConfig> | undefined {
   if (setupTimeoutMs !== undefined) config.setupTimeoutMs = setupTimeoutMs
 
   if (typeof raw['clockEnabled'] === 'boolean') config.clockEnabled = raw['clockEnabled']
+
+  // 戰爭迷霧模式 (fogofwar.md §1) — v1 is human-vs-human only; `createRoom`
+  // refuses this combined with a bot opponent (rooms.ts).
+  if (typeof raw['fogOfWar'] === 'boolean') config.fogOfWar = raw['fogOfWar']
 
   // The engine trusts this list, so it is sanitised here rather than there:
   // integers only, on the board, deduped, and never empty — a game with no
@@ -344,10 +349,18 @@ export function buildApp(): ReturnType<typeof Fastify> {
         return { error: opponent.error }
       }
       const config = readConfig(request.body?.config)
-      const room = createRoom(
-        opponent.ok === undefined ? { config } : { config, bot: opponent.ok },
-      )
-      return describeNewRoom(room)
+      try {
+        const room = createRoom(
+          opponent.ok === undefined ? { config } : { config, bot: opponent.ok },
+        )
+        return describeNewRoom(room)
+      } catch (error) {
+        if (error instanceof RoomError) {
+          void reply.status(error.status)
+          return { error: error.message }
+        }
+        throw error
+      }
     },
   )
 
@@ -522,6 +535,7 @@ function describeNewRoom(room: Room): Record<string, unknown> {
     clockEnabled: config.clockEnabled,
     scoringSquares: config.scoringSquares,
     distribution: config.distribution,
+    fogOfWar: config.fogOfWar,
   }
 
   // THE INVITE, AND ONLY WHEN THERE IS SOMEONE TO INVITE.

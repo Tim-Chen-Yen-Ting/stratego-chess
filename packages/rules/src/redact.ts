@@ -15,6 +15,7 @@
  */
 
 import { legalMoves } from './moves.js'
+import { visionOf } from './vision.js'
 import type {
   Color,
   GameEvent,
@@ -76,6 +77,39 @@ export function entitledToRank(s: GameState, v: Viewer, piece: Piece): boolean {
   // asking each renderer to remember to guard.
   if (s.status.kind === 'setup' && !s.status.submitted[piece.color]) return false
   return true
+}
+
+/**
+ * 戰爭迷霧模式 (fogofwar.md §1) — is this piece's very EXISTENCE/POSITION
+ * something `v` is entitled to know right now? Independent of `entitledToRank`:
+ * that function decides whether a DISCLOSED piece's 兵種 is readable; this one
+ * decides whether the piece is disclosed at all. When fog is off (the default)
+ * this is always true, so a non-fog game is byte-for-byte unaffected.
+ *
+ * Mirrors `entitledToRank`'s shape of always-true cases, for the same reasons:
+ *   · fog is off, or the game is not `playing` (setup has no fog concept —
+ *     nothing has moved yet; over — §10.5 already opens everything), or
+ *   · the piece is already off the board (§2.1: every contact involves your
+ *     own piece, so a capture is always known — never hide one), or
+ *   · the piece is the viewer's own colour, or the viewer is omniscient, or
+ *   · the square is one of the game's 結算格 (§1.3: scoring squares, and
+ *     whatever stands on them, are always visible to both sides).
+ * Otherwise: visible iff it is in `viewerColor(v)`'s current vision — and for
+ * `spectator-public`, which owns no colour, that is never true (§4.3: "幾乎什麼
+ * 都看不到"), so only the always-true cases above ever disclose one to it.
+ */
+export function positionVisible(s: GameState, v: Viewer, piece: Piece): boolean {
+  if (!s.config.fogOfWar) return true
+  if (s.status.kind !== 'playing') return true
+  if (piece.square === null) return true
+  if (v.kind === 'omniscient') return true
+  if (s.config.scoringSquares.includes(piece.square)) return true
+
+  const owner = viewerColor(v)
+  if (owner !== null && piece.color === owner) return true
+  if (owner === null) return false // spectator-public: no vision of its own
+
+  return visionOf(s.pieces, owner).has(piece.square)
 }
 
 function copyMove(m: Move): Move {
@@ -140,19 +174,25 @@ function copyViewer(v: Viewer): Viewer {
 
 /** THE security boundary. The ONLY legal way to serialise state for transport. */
 export function stateForViewer(s: GameState, v: Viewer): ViewerState {
-  const pieces: ViewerPiece[] = s.pieces.map((p) => {
-    // Built explicitly, never spread. Default: no rank.
-    const out: ViewerPiece = {
-      id: p.id,
-      color: p.color,
-      carrier: p.carrier,
-      square: p.square,
-      revealed: p.revealed,
-      rank: null,
-    }
-    if (entitledToRank(s, v, p)) out.rank = p.rank
-    return out
-  })
+  const pieces: ViewerPiece[] = s.pieces
+    // 戰爭迷霧模式: a piece this viewer cannot currently see is OMITTED
+    // entirely, not merely stripped of its rank — the same "omission is the
+    // default" posture as the rank boundary below, applied to the piece's
+    // existence rather than its 兵種. See `positionVisible`.
+    .filter((p) => positionVisible(s, v, p))
+    .map((p) => {
+      // Built explicitly, never spread. Default: no rank.
+      const out: ViewerPiece = {
+        id: p.id,
+        color: p.color,
+        carrier: p.carrier,
+        square: p.square,
+        revealed: p.revealed,
+        rank: null,
+      }
+      if (entitledToRank(s, v, p)) out.rank = p.rank
+      return out
+    })
 
   const vs: ViewerState = {
     id: s.id,

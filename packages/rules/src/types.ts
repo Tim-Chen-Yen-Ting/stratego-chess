@@ -203,6 +203,19 @@ export interface GameConfig {
   setupTimeoutMs: number     // default 180_000
   /** when false the clock is disabled entirely (LLM games) */
   clockEnabled: boolean
+  /**
+   * 戰爭迷霧模式 (fogofwar.md §1), default false. When true, `stateForViewer`
+   * additionally hides an enemy piece's very EXISTENCE/POSITION — not just its
+   * 兵種 — from a viewer whose own army cannot currently see that square. See
+   * `visionOf` in vision.ts for the visibility rule and `redact.ts` for how it
+   * is applied. Everything else about the game is unchanged: carriers, ranks,
+   * capture and scoring rules are identical to a non-fog game.
+   *
+   * v1 scope only: no direction hints (fogofwar.md §2.4) and no bot support
+   * (§4.1) — a room configured with both `fogOfWar` and a bot opponent is
+   * refused at creation (packages/server/src/rooms.ts).
+   */
+  fogOfWar: boolean
 }
 
 export type Result =
