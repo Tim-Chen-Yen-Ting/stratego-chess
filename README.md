@@ -305,3 +305,7 @@ client from a single origin (`npm ci && npm run build`, `npm start`, health chec
 [`render.yaml`](render.yaml) checked into this repo is still a **placeholder** — every value in it
 is a `TODO(render)` stand-in, not real service configuration. The actual deployment isn't wired
 through that file.
+
+---
+
+Built by [Yen-Ting (Tim) Chen](https://tim-chen-yen-ting.github.io/) · [Portfolio](https://tim-chen-yen-ting.github.io/)
