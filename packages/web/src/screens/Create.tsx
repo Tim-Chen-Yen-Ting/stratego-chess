@@ -331,6 +331,8 @@ const STR = {
     footerMemory: '對局存於記憶體，伺服器重啟即消失。無帳號、無配對',
     footerBotSuffix: '；機器人對局不發邀請連結。',
     footerHumanSuffix: '，僅邀請連結。',
+    bylinePrefix: '作者：',
+    bylineName: '陳彥廷 (Tim)',
     createdTitle: '對局已建立',
     summaryGameId: '對局編號',
     summaryOpponentBot: '對手 機器人',
@@ -446,6 +448,8 @@ const STR = {
     footerMemory: 'Games live in memory; a server restart drops them. No accounts, no matchmaking',
     footerBotSuffix: '; bot games issue no invite link.',
     footerHumanSuffix: ', invite links only.',
+    bylinePrefix: 'Built by ',
+    bylineName: 'Yen-Ting (Tim) Chen',
     createdTitle: 'Game created',
     summaryGameId: 'Game',
     summaryOpponentBot: 'Opponent bot',
@@ -1022,6 +1026,9 @@ export function Create() {
           <p className="muted small">
             {s.footerMemory}
             {opponentKind === 'bot' ? s.footerBotSuffix : s.footerHumanSuffix}
+          </p>
+          <p className="muted small">
+            {s.bylinePrefix}<a href="https://tim-chen-yen-ting.github.io/" target="_blank" rel="noopener noreferrer">{s.bylineName}</a>
           </p>
         </>
       )}
